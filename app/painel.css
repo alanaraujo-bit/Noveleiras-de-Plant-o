@@ -1,0 +1,211 @@
+/* ==========================================================================
+   Noveleiras de Plantão — superfície do painel
+
+   O aplicativo é uma peça de leitura: sem seleção de texto, sem barra de
+   rolagem à vista, com um grão de impressão por cima de tudo. Nada disso
+   serve a quem opera — aqui se copia um ID, se rola uma tabela de mil linhas
+   e se lê número pequeno. Este arquivo desfaz aquelas escolhas dentro de
+   `[data-superficie="painel"]` e só ali; o aplicativo continua intacto.
+
+   A identidade não muda: mesma tinta vinho, mesmo carmim, mesmo ouro. O que
+   muda é a densidade e a temperatura — o painel é um pouco mais frio e mais
+   escuro, como uma sala de controle ao lado de um teatro.
+   ========================================================================== */
+
+[data-superficie="painel"] {
+  /* Camada neutra própria: o painel não usa as mesmas superfícies do app.
+     Um pouco mais frio (azul na mistura) para separar operação de conteúdo. */
+  --p-fundo: #0f0a10;
+  --p-superficie: #17111a;
+  --p-elevado: #1e1722;
+  --p-alto: #261d2b;
+  --p-lateral: #130e16;
+
+  --p-linha: rgb(255 255 255 / 0.07);
+  --p-linha-forte: rgb(255 255 255 / 0.14);
+
+  --p-texto: #f4ecef;
+  --p-suave: #b9a7b1;
+  --p-fraco: #8a7883;
+
+  --p-acento: var(--color-rose-500);
+  --p-acento-suave: color-mix(in oklab, var(--color-rose-500) 16%, transparent);
+
+  /* Vocabulário semântico. `perigo` é deliberadamente mais quente que o
+     carmim: acento e erro precisam ser distinguíveis, senão "selecionado" e
+     "quebrado" viram a mesma cor. */
+  --p-bom: #4fc48f;
+  --p-atencao: #e9bd78;
+  --p-perigo: #f5624d;
+  --p-info: #6aa9e8;
+
+  --p-bom-fundo: color-mix(in oklab, var(--p-bom) 14%, transparent);
+  --p-atencao-fundo: color-mix(in oklab, var(--p-atencao) 14%, transparent);
+  --p-perigo-fundo: color-mix(in oklab, var(--p-perigo) 15%, transparent);
+  --p-info-fundo: color-mix(in oklab, var(--p-info) 14%, transparent);
+
+  --p-raio: 0.75rem;
+  --p-raio-g: 1rem;
+
+  --p-lateral-l: 15rem;
+  --p-topo-h: 3.5rem;
+
+  background: var(--p-fundo);
+  color: var(--p-texto);
+  font-family: var(--font-sans);
+
+  /* Quem opera copia identificadores, e-mails, mensagens de erro. */
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+
+/* O grão do app fica sobre a tela inteira em z-index 90 — em cima de tabela e
+   de menu suspenso. Some no painel. */
+body:has([data-superficie="painel"])::after {
+  display: none;
+}
+
+/* -------------------------------------------------- barras de rolagem
+
+   O app esconde todas. Numa tabela longa, a barra é informação: diz que há
+   mais coisa e onde você está. Voltam, pintadas com a paleta em vez do
+   cinza do sistema. */
+
+[data-superficie="painel"] * {
+  scrollbar-width: thin;
+  scrollbar-color: var(--p-alto) transparent;
+}
+
+[data-superficie="painel"] *::-webkit-scrollbar {
+  display: block;
+  width: 0.625rem;
+  height: 0.625rem;
+}
+
+[data-superficie="painel"] *::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+[data-superficie="painel"] *::-webkit-scrollbar-thumb {
+  background: var(--p-alto);
+  border: 2px solid transparent;
+  background-clip: content-box;
+  border-radius: 0.5rem;
+}
+
+[data-superficie="painel"] *::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--p-acento) 55%, var(--p-alto));
+  background-clip: content-box;
+}
+
+[data-superficie="painel"] *::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ------------------------------------------------------- superfícies do texto */
+
+[data-superficie="painel"] ::selection {
+  background: color-mix(in oklab, var(--p-acento) 45%, transparent);
+  color: #fff;
+}
+
+[data-superficie="painel"] :focus-visible {
+  outline: 2px solid var(--p-acento);
+  outline-offset: 2px;
+  border-radius: 0.375rem;
+}
+
+[data-superficie="painel"] {
+  caret-color: var(--p-acento);
+}
+
+/* -------------------------------------------------------------- tipografia
+
+   Uma família só. Fraunces é a voz editorial do produto e continua no título
+   da página; rótulo, número e dado são Manrope — fonte de display em célula
+   de tabela é ruído com aparência de estilo. */
+
+[data-superficie="painel"] h1,
+[data-superficie="painel"] h2,
+[data-superficie="painel"] h3,
+[data-superficie="painel"] h4 {
+  font-family: var(--font-sans);
+  font-weight: 650;
+  letter-spacing: -0.011em;
+  font-variation-settings: normal;
+}
+
+[data-superficie="painel"] .titulo-editorial {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.018em;
+  font-variation-settings: "SOFT" 30, "WONK" 1;
+}
+
+/* Número em coluna precisa alinhar. Sem isto, "1.204" e "998" dançam. */
+[data-superficie="painel"] .numero,
+[data-superficie="painel"] table,
+[data-superficie="painel"] time,
+[data-superficie="painel"] .tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* ------------------------------------------------------------- utilitários */
+
+@utility painel-cartao {
+  background: var(--p-superficie);
+  border: 1px solid var(--p-linha);
+  border-radius: var(--p-raio-g);
+}
+
+@utility painel-rotulo {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--p-fraco);
+  text-transform: none;
+}
+
+/* Linha de tabela: alvo de clique inteiro, realce contido. */
+@utility painel-linha {
+  transition: background-color 0.14s ease;
+  &:hover {
+    background: color-mix(in oklab, var(--p-elevado) 70%, transparent);
+  }
+}
+
+/* Cabeçalho de tabela que gruda ao rolar — sem ele, mil linhas viram um mar
+   de números sem nome. */
+@utility painel-cabecalho-fixo {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--p-superficie);
+  box-shadow: inset 0 -1px 0 var(--p-linha);
+}
+
+@keyframes p-pulsar {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.82);
+  }
+}
+
+/* Ponto de "ao vivo". Único elemento animado em repouso do painel, e ele
+   comunica estado: os dados estão sendo atualizados. */
+@utility painel-pulso {
+  animation: p-pulsar 2.4s var(--ease-out-soft) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-superficie="painel"] .painel-pulso {
+    animation: none;
+  }
+}

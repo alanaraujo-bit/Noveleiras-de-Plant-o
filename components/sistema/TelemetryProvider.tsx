@@ -150,6 +150,12 @@ export function TelemetryProvider({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  // O painel administrativo não é uso do produto.
+  //
+  // Sem esta linha, cada tela do painel viraria um SCREEN_VIEW e cada operador
+  // olhando a operação viraria um usuário ativo — o painel inflaria justamente
+  // os números que ele existe para mostrar. Quem opera não é audiência.
+  const noPainel = pathname?.startsWith("/painel") ?? false;
   const sessionRef = useRef<string | null>(null);
   const queueRef = useRef<QueuedEvent[]>([]);
   const activeMsRef = useRef(0);
@@ -200,6 +206,7 @@ export function TelemetryProvider({
 
   // Abertura de sessão + descrição do dispositivo.
   useEffect(() => {
+    if (noPainel) return;
     let cancelled = false;
     const cached = readStorage(window.sessionStorage, SESSION_STORAGE_KEY);
     if (cached) sessionRef.current = cached;
@@ -220,10 +227,11 @@ export function TelemetryProvider({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [noPainel]);
 
   // Tempo dentro da plataforma: só conta enquanto a aba está visível.
   useEffect(() => {
+    if (noPainel) return;
     const tick = () => {
       const now = Date.now();
       if (document.visibilityState === "visible") {
@@ -271,14 +279,14 @@ export function TelemetryProvider({
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("pagehide", onVisibility);
     };
-  }, [flush]);
+  }, [flush, noPainel]);
 
   // Uma tela vista por navegação.
   useEffect(() => {
-    if (!pathname) return;
+    if (!pathname || noPainel) return;
     screenViewsRef.current += 1;
     track("SCREEN_VIEW", { entityType: "rota", entityId: pathname });
-  }, [pathname, track]);
+  }, [noPainel, pathname, track]);
 
   // Instalação do PWA.
   useEffect(() => {

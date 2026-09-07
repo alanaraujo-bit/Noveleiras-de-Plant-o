@@ -1,12 +1,18 @@
 import { redirect } from "next/navigation";
 
 import { getViewer } from "@/lib/auth/session";
+import { destinoSeguro } from "@/lib/auth/destino";
 import { FormEntrar } from "./FormEntrar";
 
 export const metadata = { title: "Entrar" };
 
-export default async function EntrarPage() {
+export default async function EntrarPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ destino?: string }>;
+}) {
   const viewer = await getViewer();
-  if (viewer) redirect(viewer.onboardedAt ? "/inicio" : "/bem-vindo");
-  return <FormEntrar />;
+  const { destino } = await searchParams;
+  if (viewer) redirect(destinoSeguro(destino) ?? (viewer.onboardedAt ? "/inicio" : "/bem-vindo"));
+  return <FormEntrar destino={destinoSeguro(destino) ?? undefined} />;
 }

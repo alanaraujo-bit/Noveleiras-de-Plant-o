@@ -10,7 +10,7 @@ import {
   MolduraConta,
 } from "@/components/conta/campos";
 
-export function FormEntrar() {
+export function FormEntrar({ destino }: { destino?: string }) {
   const [estado, acao, pendente] = useActionState(entrar, null);
 
   return (
@@ -27,6 +27,9 @@ export function FormEntrar() {
       }
     >
       <form action={acao} className="space-y-4">
+        {/* Para onde voltar depois de entrar. Validado no servidor: so caminho
+            interno passa, nunca uma URL de fora. */}
+        {destino ? <input type="hidden" name="destino" value={destino} /> : null}
         <Campo
           rotulo="E-mail"
           name="email"

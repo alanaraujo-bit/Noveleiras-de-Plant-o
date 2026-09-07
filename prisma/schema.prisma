@@ -36,6 +36,17 @@ model User {
   role         Role       @default(USER)
   status       UserStatus @default(ACTIVE)
 
+  // Permissoes granulares do painel. `Role` decide quem entra; esta lista
+  // decide o que a pessoa alcanca la dentro. Lista de strings em vez de tabela
+  // de RBAC: no volume desta operacao a tabela seria complexidade sem retorno,
+  // e migrar para ela depois nao quebra nenhuma tela.
+  // Catalogo tipado em `lib/painel/permissoes.ts`.
+  permissions String[] @default([])
+
+  // Conta criada pelo seed de demonstracao. O painel usa isto para separar
+  // dado de vitrine de dado real, em vez de misturar os dois.
+  isDemo Boolean @default(false)
+
   onboardedAt DateTime?
   lastSeenAt  DateTime?
   createdAt   DateTime  @default(now())
@@ -475,5 +486,405 @@ model Event {
   @@index([type, createdAt])
   @@index([userId, createdAt])
   @@index([novelaId, createdAt])
+  // O drill-down novela -> temporada -> episodio consulta por episodio.
+  @@index([episodeId, createdAt])
   @@index([createdAt])
+}
+
+// ==========================================================================
+// FASE 02 — o que o painel administrativo precisa e a Fase 01 nao modelou.
+//
+// Separacao proposital: `Event` e telemetria de produto (o que a pessoa fez);
+// `AppLog` e log de aplicacao (o que o sistema fez); `AdminAudit` e prova de
+// autoria (o que um administrador fez). Conflatar os tres tornaria qualquer
+// investigacao um garimpo.
+// ==========================================================================
+
+// -------------------------------------------------------------- auditoria
+
+enum AuditSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+model AdminAudit {
+  id String @id @default(cuid())
+
+  actorId    String
+  actorEmail String
+  actorName  String
+
+  action      String // ex.: "catalogo.novela.atualizar"
+  targetType  String // ex.: "Novela"
+  targetId    String?
+  targetLabel String?
+
+  // Estado antes e depois, para reconstruir o que aconteceu.
+  before Json?
+  after  Json?
+
+  // Acoes destrutivas ficam marcadas para filtro rapido.
+  severity  AuditSeverity @default(INFO)
+  ip        String?
+  userAgent String?
+  context   Json          @default("{}")
+
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId, createdAt])
+  @@index([targetType, targetId])
+  @@index([action, createdAt])
+}
+
+// ------------------------------------------------------------------- logs
+
+enum LogLevel {
+  DEBUG
+  INFO
+  WARN
+  ERROR
+  FATAL
+}
+
+enum LogChannel {
+  APP
+  SERVER
+  STREAMING
+  MEDIA
+  AUTH
+  PAYMENTS
+  JOBS
+  INTEGRATIONS
+  ADMIN
+}
+
+model AppLog {
+  id      String     @id @default(cuid())
+  level   LogLevel   @default(INFO)
+  channel LogChannel @default(APP)
+
+  message String
+  // Correlaciona linhas de canais diferentes que pertencem ao mesmo problema.
+  correlationId String?
+
+  userId     String?
+  entityType String?
+  entityId   String?
+  path       String?
+  stack      String?
+  context    Json    @default("{}")
+
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([level, createdAt])
+  @@index([channel, createdAt])
+  @@index([correlationId])
+}
+
+// ---------------------------------------------------------------- alertas
+
+enum AlertSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum AlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+model Alert {
+  id   String @id @default(cuid())
+  kind String // ex.: "servidor.offline", "disco.baixo"
+
+  severity AlertSeverity @default(WARNING)
+  status   AlertStatus   @default(OPEN)
+
+  title  String
+  detail String?
+  // Chave de deduplicacao: o mesmo problema reabrindo nao vira ruido novo.
+  dedupeKey String @unique
+
+  entityType String?
+  entityId   String?
+  context    Json    @default("{}")
+
+  occurrences Int      @default(1)
+  openedAt    DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+
+  acknowledgedAt DateTime?
+  acknowledgedBy String?
+  resolvedAt     DateTime?
+  resolvedBy     String?
+  resolvedNote   String?
+
+  @@index([status, severity, lastSeenAt])
+  @@index([openedAt])
+}
+
+// ------------------------------------------------------- servidor de midia
+
+enum MediaServerStatus {
+  UNKNOWN
+  ONLINE
+  DEGRADED
+  OFFLINE
+}
+
+/**
+ * Um servidor de midia registrado. Plural desde o comeco: hoje e o computador
+ * de casa, amanha podem ser varios nos ou uma origem em nuvem, e a tela ja
+ * lista em vez de assumir um.
+ */
+model MediaServer {
+  id   String @id @default(cuid())
+  slug String @unique
+  name String
+  kind String @default("LOCAL") // LOCAL | REMOTE | CLOUD
+
+  // Endereco de controle (opcional: um servidor pode so enviar batimentos).
+  baseUrl String?
+  // Hash do segredo compartilhado que autentica os batimentos do agente.
+  tokenHash String?
+
+  status       MediaServerStatus @default(UNKNOWN)
+  lastBeatAt   DateTime?
+  uptimeSec    Int?
+  agentVersion String?
+  notes        String?
+
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  beats  MediaServerBeat[]
+  assets MediaAsset[]
+
+  @@index([status])
+}
+
+/**
+ * Serie temporal de saude. Uma linha por batimento; o painel le a ultima para
+ * o estado e a janela para os graficos.
+ */
+model MediaServerBeat {
+  id       String      @id @default(cuid())
+  serverId String
+  server   MediaServer @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  cpuPercent  Float?
+  ramUsedMb   Int?
+  ramTotalMb  Int?
+  gpuPercent  Float?
+  vramUsedMb  Int?
+  vramTotalMb Int?
+
+  diskUsedGb  Float?
+  diskTotalGb Float?
+
+  netUpKbps   Float?
+  netDownKbps Float?
+
+  activeStreams Int   @default(0)
+  transcodes    Int   @default(0)
+  queueDepth    Int   @default(0)
+  uptimeSec     Int?
+  loadAvg       Float?
+
+  payload   Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  @@index([serverId, createdAt])
+}
+
+// ---------------------------------------------------------------- midia
+
+enum MediaAssetState {
+  DISCOVERED
+  READY
+  PROCESSING
+  MISSING
+  BROKEN
+  DUPLICATE
+}
+
+/**
+ * Um arquivo fisico. Fica ao lado de `Episode`, nunca dentro: um episodio pode
+ * ter varias versoes (1080p, 720p, HLS) e um arquivo pode existir sem episodio
+ * associado — que e exatamente o problema que a tela de midia serve para ver.
+ */
+model MediaAsset {
+  id String @id @default(cuid())
+
+  serverId String?
+  server   MediaServer? @relation(fields: [serverId], references: [id], onDelete: SetNull)
+
+  // Mesma chave opaca do resolvedor: o painel nunca guarda URL.
+  mediaKey String
+  provider MediaProvider @default(LOCAL)
+  path     String?
+
+  episodeId String?
+  // Rotulo da versao: "original", "1080p", "720p", "hls".
+  variant   String  @default("original")
+  isPrimary Boolean @default(true)
+
+  sizeBytes   BigInt?
+  durationSec Float?
+  width       Int?
+  height      Int?
+  codecVideo  String?
+  codecAudio  String?
+  bitrateKbps Int?
+  frameRate   Float?
+  container   String?
+  checksum    String?
+
+  state        MediaAssetState @default(DISCOVERED)
+  stateNote    String?
+  lastProbedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  jobs TranscodeJob[]
+
+  @@unique([mediaKey, variant])
+  @@index([episodeId])
+  @@index([state])
+  @@index([checksum])
+}
+
+// ------------------------------------------------------- transcodificacao
+
+enum TranscodeState {
+  QUEUED
+  RUNNING
+  DONE
+  FAILED
+  CANCELED
+}
+
+model TranscodeJob {
+  id String @id @default(cuid())
+
+  assetId String?
+  asset   MediaAsset? @relation(fields: [assetId], references: [id], onDelete: SetNull)
+
+  serverId  String?
+  episodeId String?
+
+  // Perfil de saida pedido: "1080p", "720p", "hls".
+  profile String
+  state   TranscodeState @default(QUEUED)
+
+  progress Float   @default(0) // 0..100
+  speed    Float? // multiplicador de tempo real (ex.: 3.2x)
+  etaSec   Int?
+  fps      Float?
+  gpuUsed  Boolean @default(false)
+
+  inputKey  String?
+  outputKey String?
+  outputs   Json    @default("[]")
+
+  error    String?
+  attempts Int     @default(0)
+  priority Int     @default(0)
+
+  requestedBy String?
+  queuedAt    DateTime  @default(now())
+  startedAt   DateTime?
+  finishedAt  DateTime?
+
+  @@index([state, priority, queuedAt])
+  @@index([episodeId])
+}
+
+// ------------------------------------------------------------- financeiro
+
+enum PaymentStatus {
+  PENDING
+  APPROVED
+  FAILED
+  REFUNDED
+  CHARGEBACK
+}
+
+/**
+ * Um movimento financeiro. Existe separado de `Subscription` porque receita e
+ * um fato datado — sem isto, "receita do mes" so poderia ser estimada a partir
+ * do estado atual da assinatura, que e justamente o tipo de metrica inventada
+ * que esta fase se recusa a mostrar.
+ */
+model Payment {
+  id     String @id @default(cuid())
+  userId String
+
+  subscriptionId String?
+  plan           SubscriptionPlan @default(PREMIUM)
+
+  amountCents Int
+  currency    String        @default("BRL")
+  status      PaymentStatus @default(APPROVED)
+
+  provider       String? // "demo" enquanto nao ha gateway real
+  externalId     String?
+  method         String?
+  failureCode    String?
+  failureMessage String?
+
+  refundedCents Int       @default(0)
+  periodStart   DateTime?
+  periodEnd     DateTime?
+
+  // Marca dado de demonstracao: o painel separa receita real de receita fake.
+  isDemo    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@index([createdAt])
+}
+
+// -------------------------------------------------------------- moderacao
+
+enum ReportTargetType {
+  POST
+  COMMENT
+  USER
+}
+
+enum ReportState {
+  OPEN
+  REVIEWING
+  RESOLVED
+  DISMISSED
+}
+
+model Report {
+  id String @id @default(cuid())
+
+  targetType ReportTargetType
+  targetId   String
+
+  reporterId String?
+  reason     String
+  detail     String?
+
+  state      ReportState @default(OPEN)
+  resolvedBy String?
+  resolvedAt DateTime?
+  resolution String?
+
+  createdAt DateTime @default(now())
+
+  @@index([state, createdAt])
+  @@index([targetType, targetId])
 }

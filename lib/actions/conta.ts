@@ -13,6 +13,8 @@ import {
   issueSessionCookie,
 } from "@/lib/auth/session";
 import { track } from "@/lib/analytics/track";
+import { lerDispositivo } from "@/lib/analytics/dispositivo";
+import { destinoSeguro } from "@/lib/auth/destino";
 
 export type FormState = { erro?: string; campo?: string } | null;
 
@@ -31,10 +33,18 @@ const senhaSchema = z
 async function openAppSession(userId: string) {
   const headerList = await headers();
   const userAgent = headerList.get("user-agent") ?? undefined;
+  // Sistema e navegador saem do User-Agent aqui mesmo: o cliente refina isso
+  // logo depois (tela, fuso, se está instalado), mas se ele nunca chegar a
+  // rodar, a sessão continua sabendo de onde veio em vez de virar um buraco
+  // na análise de dispositivos.
+  const dispositivo = lerDispositivo(userAgent);
   const session = await db.appSession.create({
     data: {
       userId,
       deviceId: "pendente",
+      osName: dispositivo.osName,
+      browser: dispositivo.browser,
+      platform: dispositivo.platform,
       userAgent: userAgent?.slice(0, 400),
       referrer: headerList.get("referer")?.slice(0, 300) ?? null,
     },
@@ -148,7 +158,8 @@ export async function entrar(
   });
   await track({ type: "SIGN_IN", userId: user.id, sessionId });
 
-  redirect(user.onboardedAt ? "/inicio" : "/bem-vindo");
+  const destino = destinoSeguro(formData.get("destino"));
+  redirect(destino ?? (user.onboardedAt ? "/inicio" : "/bem-vindo"));
 }
 
 export async function sair() {

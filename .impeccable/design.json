@@ -1,0 +1,272 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-07T03:15:54.4374565-03:00",
+  "title": "Design System: Noveleiras de Plantão — Painel",
+  "extensions": {
+    "colorMeta": {
+      "control-room-bg": {
+        "role": "neutral",
+        "displayName": "Fundo da Sala de Controle",
+        "canonical": "#0f0a10",
+        "tonalRamp": ["oklch(15% 0.018 325)", "oklch(26% 0.018 325)", "oklch(38% 0.018 325)", "oklch(50% 0.018 325)", "oklch(62% 0.018 325)", "oklch(74% 0.018 325)", "oklch(86% 0.018 325)", "oklch(95% 0.018 325)"]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Superfície Ameixa Fria",
+        "canonical": "#17111a",
+        "tonalRamp": ["oklch(15% 0.023 320)", "oklch(26% 0.023 320)", "oklch(38% 0.023 320)", "oklch(50% 0.023 320)", "oklch(62% 0.023 320)", "oklch(74% 0.023 320)", "oklch(86% 0.023 320)", "oklch(95% 0.023 320)"]
+      },
+      "elevated": {
+        "role": "neutral",
+        "displayName": "Ameixa Elevada",
+        "canonical": "#1e1722",
+        "tonalRamp": ["oklch(15% 0.026 318)", "oklch(26% 0.026 318)", "oklch(38% 0.026 318)", "oklch(50% 0.026 318)", "oklch(62% 0.026 318)", "oklch(74% 0.026 318)", "oklch(86% 0.026 318)", "oklch(95% 0.026 318)"]
+      },
+      "high-surface": {
+        "role": "neutral",
+        "displayName": "Ameixa Alta",
+        "canonical": "#261d2b",
+        "tonalRamp": ["oklch(15% 0.032 318)", "oklch(26% 0.032 318)", "oklch(38% 0.032 318)", "oklch(50% 0.032 318)", "oklch(62% 0.032 318)", "oklch(74% 0.032 318)", "oklch(86% 0.032 318)", "oklch(95% 0.032 318)"]
+      },
+      "sidebar": {
+        "role": "neutral",
+        "displayName": "Lateral de Bastidor",
+        "canonical": "#130e16",
+        "tonalRamp": ["oklch(15% 0.024 318)", "oklch(26% 0.024 318)", "oklch(38% 0.024 318)", "oklch(50% 0.024 318)", "oklch(62% 0.024 318)", "oklch(74% 0.024 318)", "oklch(86% 0.024 318)", "oklch(95% 0.024 318)"]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Linha Recessiva",
+        "canonical": "rgb(255 255 255 / 0.07)",
+        "tonalRamp": ["oklch(15% 0 0 / 0.07)", "oklch(26% 0 0 / 0.07)", "oklch(38% 0 0 / 0.07)", "oklch(50% 0 0 / 0.07)", "oklch(62% 0 0 / 0.07)", "oklch(74% 0 0 / 0.07)", "oklch(86% 0 0 / 0.07)", "oklch(95% 0 0 / 0.07)"]
+      },
+      "line-strong": {
+        "role": "neutral",
+        "displayName": "Linha de Controle",
+        "canonical": "rgb(255 255 255 / 0.14)",
+        "tonalRamp": ["oklch(15% 0 0 / 0.14)", "oklch(26% 0 0 / 0.14)", "oklch(38% 0 0 / 0.14)", "oklch(50% 0 0 / 0.14)", "oklch(62% 0 0 / 0.14)", "oklch(74% 0 0 / 0.14)", "oklch(86% 0 0 / 0.14)", "oklch(95% 0 0 / 0.14)"]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Texto Creme-Frio",
+        "canonical": "#f4ecef",
+        "tonalRamp": ["oklch(15% 0.014 345)", "oklch(26% 0.014 345)", "oklch(38% 0.014 345)", "oklch(50% 0.014 345)", "oklch(62% 0.014 345)", "oklch(74% 0.014 345)", "oklch(86% 0.014 345)", "oklch(95% 0.014 345)"]
+      },
+      "text-muted": {
+        "role": "neutral",
+        "displayName": "Texto Suave",
+        "canonical": "#b9a7b1",
+        "tonalRamp": ["oklch(15% 0.025 336)", "oklch(26% 0.025 336)", "oklch(38% 0.025 336)", "oklch(50% 0.025 336)", "oklch(62% 0.025 336)", "oklch(74% 0.025 336)", "oklch(86% 0.025 336)", "oklch(95% 0.025 336)"]
+      },
+      "text-faint": {
+        "role": "neutral",
+        "displayName": "Texto Fraco",
+        "canonical": "#8a7883",
+        "tonalRamp": ["oklch(15% 0.026 337)", "oklch(26% 0.026 337)", "oklch(38% 0.026 337)", "oklch(50% 0.026 337)", "oklch(62% 0.026 337)", "oklch(74% 0.026 337)", "oklch(86% 0.026 337)", "oklch(95% 0.026 337)"]
+      },
+      "carmine": {
+        "role": "primary",
+        "displayName": "Carmim de Operação",
+        "canonical": "#e03a69",
+        "tonalRamp": ["oklch(15% 0.21 357)", "oklch(26% 0.21 357)", "oklch(38% 0.21 357)", "oklch(50% 0.21 357)", "oklch(62% 0.21 357)", "oklch(74% 0.21 357)", "oklch(86% 0.21 357)", "oklch(95% 0.21 357)"]
+      },
+      "carmine-button": {
+        "role": "primary",
+        "displayName": "Carmim Profundo",
+        "canonical": "#c42a55",
+        "tonalRamp": ["oklch(15% 0.19 359)", "oklch(26% 0.19 359)", "oklch(38% 0.19 359)", "oklch(50% 0.19 359)", "oklch(62% 0.19 359)", "oklch(74% 0.19 359)", "oklch(86% 0.19 359)", "oklch(95% 0.19 359)"]
+      },
+      "carmine-active": {
+        "role": "primary",
+        "displayName": "Carmim Ativo",
+        "canonical": "#a01f45",
+        "tonalRamp": ["oklch(15% 0.16 357)", "oklch(26% 0.16 357)", "oklch(38% 0.16 357)", "oklch(50% 0.16 357)", "oklch(62% 0.16 357)", "oklch(74% 0.16 357)", "oklch(86% 0.16 357)", "oklch(95% 0.16 357)"]
+      },
+      "rose-highlight": {
+        "role": "primary",
+        "displayName": "Rosa de Realce",
+        "canonical": "#f2648c",
+        "tonalRamp": ["oklch(15% 0.18 356)", "oklch(26% 0.18 356)", "oklch(38% 0.18 356)", "oklch(50% 0.18 356)", "oklch(62% 0.18 356)", "oklch(74% 0.18 356)", "oklch(86% 0.18 356)", "oklch(95% 0.18 356)"]
+      },
+      "rose-link": {
+        "role": "primary",
+        "displayName": "Rosa de Link",
+        "canonical": "#ff9ab3",
+        "tonalRamp": ["oklch(15% 0.14 357)", "oklch(26% 0.14 357)", "oklch(38% 0.14 357)", "oklch(50% 0.14 357)", "oklch(62% 0.14 357)", "oklch(74% 0.14 357)", "oklch(86% 0.14 357)", "oklch(95% 0.14 357)"]
+      },
+      "success": {
+        "role": "tertiary",
+        "displayName": "Verde Factual",
+        "canonical": "#4fc48f",
+        "tonalRamp": ["oklch(15% 0.13 161)", "oklch(26% 0.13 161)", "oklch(38% 0.13 161)", "oklch(50% 0.13 161)", "oklch(62% 0.13 161)", "oklch(74% 0.13 161)", "oklch(86% 0.13 161)", "oklch(95% 0.13 161)"]
+      },
+      "attention-gold": {
+        "role": "secondary",
+        "displayName": "Ouro de Atenção",
+        "canonical": "#e9bd78",
+        "tonalRamp": ["oklch(15% 0.10 78)", "oklch(26% 0.10 78)", "oklch(38% 0.10 78)", "oklch(50% 0.10 78)", "oklch(62% 0.10 78)", "oklch(74% 0.10 78)", "oklch(86% 0.10 78)", "oklch(95% 0.10 78)"]
+      },
+      "danger": {
+        "role": "tertiary",
+        "displayName": "Coral de Perigo",
+        "canonical": "#f5624d",
+        "tonalRamp": ["oklch(15% 0.19 29)", "oklch(26% 0.19 29)", "oklch(38% 0.19 29)", "oklch(50% 0.19 29)", "oklch(62% 0.19 29)", "oklch(74% 0.19 29)", "oklch(86% 0.19 29)", "oklch(95% 0.19 29)"]
+      },
+      "info": {
+        "role": "tertiary",
+        "displayName": "Azul de Informação",
+        "canonical": "#6aa9e8",
+        "tonalRamp": ["oklch(15% 0.11 246)", "oklch(26% 0.11 246)", "oklch(38% 0.11 246)", "oklch(50% 0.11 246)", "oklch(62% 0.11 246)", "oklch(74% 0.11 246)", "oklch(86% 0.11 246)", "oklch(95% 0.11 246)"]
+      },
+      "chart-carmine": {
+        "role": "primary",
+        "displayName": "Carmim Analítico",
+        "canonical": "#e8517a",
+        "tonalRamp": ["oklch(15% 0.19 357)", "oklch(26% 0.19 357)", "oklch(38% 0.19 357)", "oklch(50% 0.19 357)", "oklch(62% 0.19 357)", "oklch(74% 0.19 357)", "oklch(86% 0.19 357)", "oklch(95% 0.19 357)"]
+      },
+      "chart-neutral": {
+        "role": "neutral",
+        "displayName": "Neutro de Comparação",
+        "canonical": "#6f5f6a",
+        "tonalRamp": ["oklch(15% 0.025 333)", "oklch(26% 0.025 333)", "oklch(38% 0.025 333)", "oklch(50% 0.025 333)", "oklch(62% 0.025 333)", "oklch(74% 0.025 333)", "oklch(86% 0.025 333)", "oklch(95% 0.025 333)"]
+      },
+      "chart-blue": {
+        "role": "secondary",
+        "displayName": "Azul Analítico",
+        "canonical": "#4a90d9",
+        "tonalRamp": ["oklch(15% 0.13 250)", "oklch(26% 0.13 250)", "oklch(38% 0.13 250)", "oklch(50% 0.13 250)", "oklch(62% 0.13 250)", "oklch(74% 0.13 250)", "oklch(86% 0.13 250)", "oklch(95% 0.13 250)"]
+      },
+      "chart-orange": {
+        "role": "secondary",
+        "displayName": "Laranja Analítico",
+        "canonical": "#dd6f3d",
+        "tonalRamp": ["oklch(15% 0.17 48)", "oklch(26% 0.17 48)", "oklch(38% 0.17 48)", "oklch(50% 0.17 48)", "oklch(62% 0.17 48)", "oklch(74% 0.17 48)", "oklch(86% 0.17 48)", "oklch(95% 0.17 48)"]
+      },
+      "chart-jade": {
+        "role": "secondary",
+        "displayName": "Jade Analítico",
+        "canonical": "#2fa877",
+        "tonalRamp": ["oklch(15% 0.13 160)", "oklch(26% 0.13 160)", "oklch(38% 0.13 160)", "oklch(50% 0.13 160)", "oklch(62% 0.13 160)", "oklch(74% 0.13 160)", "oklch(86% 0.13 160)", "oklch(95% 0.13 160)"]
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Assinatura Editorial", "purpose": "Título da página administrativa, e somente ele." },
+      "title": { "displayName": "Título Operacional", "purpose": "Cabeçalhos de bloco e tabela." },
+      "body": { "displayName": "Corpo Operacional", "purpose": "Navegação, células, controles e explicações." },
+      "label": { "displayName": "Rótulo de Leitura", "purpose": "Colunas, legendas, notas e metadados." },
+      "number": { "displayName": "Número Tabular", "purpose": "Valores alinhados em livro-razão, tabela, tempo e variação." }
+    },
+    "shadows": [
+      { "name": "chart-tooltip", "value": "0 0.75rem 1.5rem -0.5rem rgb(0 0 0 / 0.6)", "purpose": "Balão de leitura exata sobre o gráfico." },
+      { "name": "period-popover", "value": "0 1rem 2rem -0.75rem rgb(0 0 0 / 0.7)", "purpose": "Formulário de intervalo personalizado que cruza o plano do cabeçalho." },
+      { "name": "sticky-table-divider", "value": "inset 0 -1px 0 rgb(255 255 255 / 0.07)", "purpose": "Mantém o cabeçalho da tabela separado durante a rolagem." }
+    ],
+    "motion": [
+      { "name": "row-hover", "value": "background-color 0.14s ease", "purpose": "Realce curto e contido de linhas investigativas." },
+      { "name": "live-pulse", "value": "2.4s cubic-bezier(0.22, 1, 0.36, 1) infinite", "purpose": "Único movimento contínuo em repouso; comunica presença recente e é removido com redução de movimento." }
+    ],
+    "breakpoints": [
+      { "name": "compact-chart", "value": "480px" },
+      { "name": "sm", "value": "40rem" },
+      { "name": "lg", "value": "64rem" },
+      { "name": "xl", "value": "80rem" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Botão Principal",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Ação confirmatória compacta; carmim é reservado para a decisão principal do contexto.",
+      "html": "<button class=\"ds-btn-primary\">Aplicar</button>",
+      "css": ".ds-btn-primary { display:inline-flex; align-items:center; justify-content:center; gap:.375rem; height:2rem; padding:0 .75rem; border:0; border-radius:.5rem; background:var(--color-rose-600); color:#fff; font:500 .8125rem var(--font-sans); transition:background-color .14s ease; } .ds-btn-primary:hover { background:var(--color-rose-500); } .ds-btn-primary:active { background:var(--color-rose-700); } .ds-btn-primary:focus-visible { outline:2px solid var(--p-acento); outline-offset:2px; } .ds-btn-primary:disabled { opacity:.45; pointer-events:none; }"
+    },
+    {
+      "name": "Botão Sutil",
+      "kind": "button",
+      "refersTo": "button-subtle",
+      "description": "Ação secundária visível sem competir com o conteúdo ou com o botão principal.",
+      "html": "<button class=\"ds-btn-subtle\">Exportar</button>",
+      "css": ".ds-btn-subtle { display:inline-flex; align-items:center; justify-content:center; gap:.375rem; height:2rem; padding:0 .75rem; border:1px solid var(--p-linha-forte); border-radius:.5rem; background:rgb(255 255 255 / .06); color:var(--p-texto); font:500 .8125rem var(--font-sans); transition:background-color .14s ease; } .ds-btn-subtle:hover { background:rgb(255 255 255 / .10); } .ds-btn-subtle:active { background:rgb(255 255 255 / .13); } .ds-btn-subtle:focus-visible { outline:2px solid var(--p-acento); outline-offset:2px; }"
+    },
+    {
+      "name": "Seletor de Período",
+      "kind": "chip",
+      "refersTo": "period-chip-selected",
+      "description": "Controle segmentado de largura intrínseca; o recorte ativo recebe o banho carmim suave.",
+      "html": "<div class=\"ds-period\" role=\"group\" aria-label=\"Período\"><button>7 dias</button><button class=\"is-active\" aria-pressed=\"true\">30 dias</button><button>90 dias</button></div>",
+      "css": ".ds-period { display:flex; width:max-content; align-items:center; gap:.25rem; padding:.125rem; border:1px solid var(--p-linha); border-radius:.5rem; background:var(--p-superficie); } .ds-period button { padding:.25rem .625rem; border:0; border-radius:.375rem; background:transparent; color:var(--p-fraco); font:500 .75rem var(--font-sans); white-space:nowrap; transition:background-color .14s ease,color .14s ease; } .ds-period button:hover { background:rgb(255 255 255 / .05); color:var(--p-suave); } .ds-period button.is-active { background:var(--p-acento-suave); color:var(--p-texto); } .ds-period button:focus-visible { outline:2px solid var(--p-acento); outline-offset:2px; }"
+    },
+    {
+      "name": "Bloco Investigativo",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Superfície reservada a uma unidade real: gráfico, tabela ou bloco de investigação.",
+      "html": "<section class=\"ds-block\"><header><div><h2>Qualidade do consumo</h2><p>Últimos 30 dias</p></div></header><div class=\"ds-block-body\">Conteúdo operacional</div></section>",
+      "css": ".ds-block { overflow:hidden; border:1px solid var(--p-linha); border-radius:1rem; background:var(--p-superficie); color:var(--p-texto); font-family:var(--font-sans); } .ds-block header { display:flex; justify-content:space-between; gap:.75rem; padding:1rem 1.25rem; border-bottom:1px solid var(--p-linha); } .ds-block h2 { margin:0; color:var(--p-texto); font-size:.9375rem; font-weight:600; letter-spacing:-.011em; } .ds-block p { margin:.125rem 0 0; color:var(--p-fraco); font-size:.75rem; } .ds-block-body { padding:1.25rem; color:var(--p-suave); font-size:.8125rem; }"
+    },
+    {
+      "name": "Livro-razão",
+      "kind": "custom",
+      "description": "Extrato de indicadores que mantém rótulos à esquerda e valores tabulares comparáveis à direita.",
+      "html": "<ul class=\"ds-ledger\"><li><div><span>Reproduções</span><small>contra o período anterior</small></div><strong>12.480</strong><em>+8,4%</em></li><li><div><span>Taxa de conclusão</span><small>conclusões ÷ plays</small></div><strong>68%</strong><em class=\"is-neutral\">—</em></li></ul>",
+      "css": ".ds-ledger { margin:0; padding:0; list-style:none; color:var(--p-texto); font-family:var(--font-sans); } .ds-ledger li { display:flex; align-items:baseline; gap:.75rem; padding:.625rem 0; border-bottom:1px solid var(--p-linha); } .ds-ledger li:last-child { border-bottom:0; } .ds-ledger div { min-width:0; flex:1; } .ds-ledger span { display:block; overflow:hidden; color:var(--p-suave); font-size:.8125rem; text-overflow:ellipsis; white-space:nowrap; } .ds-ledger small { display:block; margin-top:.125rem; color:var(--p-fraco); font-size:.6875rem; } .ds-ledger strong { color:var(--p-texto); font-size:1rem; font-variant-numeric:tabular-nums; } .ds-ledger em { width:4rem; color:var(--p-bom); font-size:.75rem; font-style:normal; font-weight:500; text-align:right; font-variant-numeric:tabular-nums; } .ds-ledger em.is-neutral { color:var(--p-fraco); }"
+    },
+    {
+      "name": "Tabela Investigativa",
+      "kind": "custom",
+      "description": "Tabela densa e rolável que transforma a primeira coluna em caminho de investigação.",
+      "html": "<div class=\"ds-table-wrap\"><table class=\"ds-table\"><thead><tr><th>Novela</th><th>Plays</th><th>Conclusão</th></tr></thead><tbody><tr tabindex=\"0\"><td><strong>Segredos da Mansão</strong><small>2 temporadas</small></td><td>12.480</td><td><span class=\"ds-status\">68%</span></td></tr></tbody></table></div>",
+      "css": ".ds-table-wrap { overflow-x:auto; border:1px solid var(--p-linha); border-radius:1rem; background:var(--p-superficie); } .ds-table { width:100%; min-width:32rem; border-collapse:collapse; color:var(--p-texto); font-family:var(--font-sans); font-variant-numeric:tabular-nums; } .ds-table thead { background:var(--p-superficie); box-shadow:inset 0 -1px 0 var(--p-linha); } .ds-table th { padding:.625rem .75rem; color:var(--p-fraco); font-size:.6875rem; font-weight:600; text-align:left; white-space:nowrap; } .ds-table th:not(:first-child), .ds-table td:not(:first-child) { text-align:right; } .ds-table td { padding:.625rem .75rem; border-top:1px solid var(--p-linha); color:var(--p-texto); font-size:.8125rem; transition:background-color .14s ease; } .ds-table tr:hover td { background:color-mix(in oklab,var(--p-elevado) 70%,transparent); } .ds-table tr:focus-visible { outline:2px solid var(--p-acento); outline-offset:-2px; } .ds-table strong { display:block; font-weight:500; } .ds-table small { display:block; color:var(--p-fraco); font-size:.6875rem; } .ds-status { display:inline-flex; padding:.125rem .375rem; border:1px solid color-mix(in oklab,var(--p-atencao) 25%,transparent); border-radius:.375rem; background:var(--p-atencao-fundo); color:var(--p-atencao); font-size:.6875rem; font-weight:500; }"
+    },
+    {
+      "name": "Item Ativo da Navegação",
+      "kind": "nav",
+      "description": "Destino atual com banho carmim suave, ícone rosado e marca vertical fina.",
+      "html": "<nav class=\"ds-nav\"><a class=\"is-active\" href=\"#\" aria-current=\"page\"><span class=\"ds-nav-mark\"></span><svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M4 7h16M4 12h16M4 17h10\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\"/></svg><span>Streaming</span></a></nav>",
+      "css": ".ds-nav { padding:.75rem; background:var(--p-lateral); font-family:var(--font-sans); } .ds-nav a { position:relative; display:flex; align-items:center; gap:.625rem; padding:.5rem .625rem; border-radius:.5rem; color:var(--p-suave); font-size:.8125rem; text-decoration:none; transition:background-color .14s ease,color .14s ease; } .ds-nav a:hover { background:rgb(255 255 255 / .05); color:var(--p-texto); } .ds-nav a.is-active { background:var(--p-acento-suave); color:var(--p-texto); font-weight:500; } .ds-nav svg { width:1.0625rem; color:var(--color-rose-400); } .ds-nav-mark { position:absolute; top:.375rem; bottom:.375rem; left:-.75rem; width:.125rem; border-radius:0 999px 999px 0; background:var(--p-acento); } .ds-nav a:focus-visible { outline:2px solid var(--p-acento); outline-offset:2px; }"
+    },
+    {
+      "name": "Curva Temporal",
+      "kind": "custom",
+      "description": "Gráfico de área honesto com grade recessiva, série anterior tracejada e legenda textual.",
+      "html": "<div class=\"ds-chart\"><div class=\"ds-chart-legend\"><span><i></i>Últimos 30 dias</span><span class=\"is-previous\"><i></i>Período anterior</span></div><svg viewBox=\"0 0 420 150\" role=\"img\" aria-label=\"Reproduções por período\"><line x1=\"30\" y1=\"120\" x2=\"410\" y2=\"120\"/><line x1=\"30\" y1=\"72\" x2=\"410\" y2=\"72\"/><path class=\"ds-chart-fill\" d=\"M30 112 L120 84 L220 96 L310 42 L410 54 L410 120 L30 120 Z\"/><path class=\"ds-chart-main\" d=\"M30 112 L120 84 L220 96 L310 42 L410 54\"/><path class=\"ds-chart-prev\" d=\"M30 104 L120 98 L220 70 L310 78 L410 65\"/></svg></div>",
+      "css": ".ds-chart { color:var(--p-texto); font-family:var(--font-sans); } .ds-chart-legend { display:flex; flex-wrap:wrap; gap:1rem; margin-bottom:.75rem; color:var(--p-suave); font-size:.6875rem; } .ds-chart-legend span { display:flex; align-items:center; gap:.375rem; } .ds-chart-legend i { width:.875rem; height:.125rem; border-radius:999px; background:#e8517a; } .ds-chart-legend .is-previous i { background:repeating-linear-gradient(90deg,#6f5f6a 0 3px,transparent 3px 6px); } .ds-chart svg { display:block; width:100%; } .ds-chart line { stroke:currentColor; stroke-opacity:.07; stroke-width:1; } .ds-chart-fill { fill:#e8517a; fill-opacity:.08; } .ds-chart-main,.ds-chart-prev { fill:none; stroke-linecap:round; stroke-linejoin:round; stroke-width:2; } .ds-chart-main { stroke:#e8517a; } .ds-chart-prev { stroke:#6f5f6a; stroke-dasharray:4 4; stroke-opacity:.7; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "A Sala de Controle ao Lado do Teatro",
+    "overview": "Este documento governa a superfície administrativa marcada por `[data-superficie=\"painel\"]`. O painel vive no mesmo mundo de Noveleiras de Plantão, mas muda a temperatura: a noite vinho fica mais fria e escura, o carmim vira sinal operacional e o ouro aparece como atenção, não ornamento. A sensação é de bastidor técnico ao lado do palco — sóbrio, preciso e inequivocamente parte do mesmo produto.\n\nO modo é **Operate**. Densidade, comparação e rastreabilidade vêm antes da exibição; o ritmo visual nasce de cabeçalhos persistentes, superfícies tonais, gráficos SVG com leitura exata, livros-razão e tabelas que conduzem ao próximo nível. A hierarquia impede que cada número finja ter a mesma importância.",
+    "keyCharacteristics": [
+      "Superfície fria e escura, com identidade vinho/carmim/ouro preservada por detalhes raros.",
+      "Alta densidade legível, números tabulares e texto operacional selecionável.",
+      "Livro-razão para indicadores; cartões apenas para unidades reais de investigação.",
+      "Gráficos SVG honestos, com grade recessiva, um eixo e leitura exata sob interação.",
+      "Cabeçalho, período e caminho investigativo persistem enquanto a operação desce no detalhe."
+    ],
+    "rules": [
+      { "name": "The Cor Is Evidence Rule", "body": "Cor identifica série, estado ou ação; ela nunca preenche a tela para criar “energia”.", "section": "colors" },
+      { "name": "The Error Is Not Carmine Rule", "body": "Perigo permanece mais quente que o acento para que “selecionado” e “quebrado” não pareçam o mesmo estado.", "section": "colors" },
+      { "name": "The Editorial Signature Rule", "body": "Fraunces assina a página; Manrope executa todo o trabalho.", "section": "typography" },
+      { "name": "The Numbers Must Not Dance Rule", "body": "Valores comparáveis usam algarismos tabulares e alinhamento à direita.", "section": "typography" },
+      { "name": "The Continuous Investigation Rule", "body": "Período, breadcrumb e identidade do alvo sobrevivem a cada passo novela → temporada → episódio.", "section": "layout" },
+      { "name": "The Flat Until Floating Rule", "body": "Superfícies em repouso usam tom e borda; sombra só aparece quando um elemento cruza planos.", "section": "elevation" }
+    ],
+    "dos": [
+      "**Do** preserve o período na URL e em todos os links de drill-down.",
+      "**Do** use livro-razão quando vários números formam uma leitura comparativa.",
+      "**Do** mantenha texto, IDs, e-mails e mensagens selecionáveis dentro do painel.",
+      "**Do** deixe barras de rolagem visíveis em tabelas e controles horizontais.",
+      "**Do** associe cor semântica a rótulo, ícone ou explicação e respeite redução de movimento.",
+      "**Do** declare cobertura parcial, inferência e ausência de base comparável no mesmo lugar do dado."
+    ],
+    "donts": [
+      "**Don't** transforme o painel em uma grade uniforme de cartões de KPI.",
+      "**Don't** use Fraunces em células, rótulos, controles ou números.",
+      "**Don't** use preto puro, branco puro como superfície, gradiente decorativo ou arco-íris analítico.",
+      "**Don't** use dois eixos, cortar o zero ou exibir mais de três séries cromáticas no mesmo gráfico.",
+      "**Don't** esconda overflow de tabela ou reduza o seletor de período a estado local descartável.",
+      "**Don't** confunda carmim de seleção com coral de erro, nem use só cor para comunicar estado."
+    ]
+  }
+}

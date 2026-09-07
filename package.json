@@ -17,7 +17,10 @@
     "icones": "node scripts/gerar-icones.mjs",
     "fluxo": "node scripts/fluxo.mjs",
     "auditar": "node scripts/auditar.mjs",
-    "painel:previa": "node --env-file=.env scripts/painel-previa.ts"
+    "painel:previa": "node --env-file=.env scripts/painel-previa.ts",
+    "admin": "node --env-file=.env scripts/admin.ts",
+    "painel:reconciliar": "node --env-file=.env scripts/reconciliar-contadores.ts",
+    "painel:inspecionar": "node --env-file=.env scripts/inspecionar-painel.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

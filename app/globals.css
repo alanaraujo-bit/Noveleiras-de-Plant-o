@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+/* Superficie do painel administrativo: contra-reset escopado.
+   Precisa vir pelo arquivo de entrada para que o Tailwind processe os
+   @utility declarados la dentro. */
+@import "./painel.css";
+
 /* ==========================================================================
    Noveleiras de Plantão — sistema visual
    Noite quente de novela: base vinho-tinta, carmim de folhetim, ouro editorial.

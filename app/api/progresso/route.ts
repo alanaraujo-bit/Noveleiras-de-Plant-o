@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { getViewer } from "@/lib/auth/session";
 import { saveProgress } from "@/lib/repositories/progresso";
+import { track } from "@/lib/analytics/track";
 import { db } from "@/lib/db";
 
 /** Recebe o progresso do player. Chamado periodicamente e ao sair da tela. */
@@ -39,6 +40,36 @@ export async function POST(request: Request) {
         data: { watchedMs: { increment: input.deltaMs } },
       })
       .catch(() => {});
+  }
+
+  // Tempo assistido como fato datado.
+  //
+  // `WatchProgress.watchedMs` é cumulativo: responde "quanto esta pessoa já
+  // assistiu deste episódio", mas não "quanto foi assistido na terça". Sem o
+  // evento abaixo, qualquer gráfico de tempo assistido por período seria
+  // estimativa. Emitido no servidor, onde `deltaMs` já passou pela validação —
+  // o cliente não escolhe quanto tempo diz ter assistido.
+  //
+  // Volume: um evento a cada 10s de reprodução ativa. Se um dia isso pesar, o
+  // caminho é somar em tabela de rollup diária lendo daqui; nenhuma tela muda,
+  // porque todas leem `lib/painel/metricas`.
+  if (input.deltaMs > 0 && saved) {
+    const episodio = await db.episode.findUnique({
+      where: { id: input.episodeId },
+      select: { novelaId: true },
+    });
+    await track({
+      type: "PLAY_PROGRESS",
+      userId: viewer.id,
+      sessionId: sessionId || viewer.appSessionId,
+      episodeId: input.episodeId,
+      novelaId: episodio?.novelaId ?? null,
+      valueMs: input.deltaMs,
+      payload: {
+        positionSec: Math.round(input.positionSec),
+        percent: saved.percent,
+      },
+    });
   }
 
   return NextResponse.json({ ok: true, progresso: saved });
