@@ -83,7 +83,9 @@ export function PainelNovela({
     <article>
       {/* Capa ------------------------------------------------------------ */}
       <div className="relative">
-        <div className="relative" style={{ aspectRatio: "4 / 5" }}>
+        {/* 3:4 em vez de um cartaz inteiro: sobra menos vazio acima do título
+            e o primeiro episódio já aparece com uma rolagem curta. */}
+        <div className="relative" style={{ aspectRatio: "3 / 4" }}>
           <img
             src={novela.heroUrl}
             alt=""

@@ -63,7 +63,9 @@
   /* alturas de cromo do app — usadas para padding de conteúdo */
   --tabbar-h: 4.125rem;
   --safe-b: env(safe-area-inset-bottom, 0px);
-  --safe-t: env(safe-area-inset-top, 0px);
+  /* Um respiro mínimo no topo: em celular com entalhe vale a área segura,
+     em janela de navegador o conteúdo não encosta na borda. */
+  --safe-t: max(env(safe-area-inset-top, 0px), 0.625rem);
 }
 
 /* --------------------------------------------------- comportamento nativo */

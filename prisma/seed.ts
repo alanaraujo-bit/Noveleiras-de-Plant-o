@@ -283,9 +283,21 @@ async function seedDemoViewer() {
     const watchedMs = positionSec * 1000;
     const updatedAt = hoursAgo(item.hoursAgo);
 
-    // Episódios anteriores marcados como concluídos: histórico coerente.
+    // Episódios anteriores marcados como concluídos, para o histórico ficar
+    // coerente. "Anterior" respeita a ordem temporada → número: sem isso,
+    // episódios de temporadas seguintes entrariam como já vistos.
     const earlier = await db.episode.findMany({
-      where: { novelaId: episode.novelaId, number: { lt: item.episode } },
+      where: {
+        novelaId: episode.novelaId,
+        OR: [
+          { season: { number: { lt: item.season } } },
+          {
+            season: { number: item.season },
+            number: { lt: item.episode },
+          },
+        ],
+      },
+      orderBy: [{ season: { number: "asc" } }, { number: "asc" }],
     });
     for (const [i, previous] of earlier.entries()) {
       await db.watchProgress.upsert({

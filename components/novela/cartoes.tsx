@@ -28,6 +28,11 @@ export function Capa({
     cheia: "w-full",
   } as const;
 
+  // Em grade de três colunas a capa é estreita; o título precisa de um corpo
+  // menor para caber em duas linhas sem cortar palavra.
+  const corpoTitulo =
+    largura === "cheia" ? "text-[0.8125rem]" : "text-[0.9375rem]";
+
   return (
     <Link
       href={`/novela/${novela.slug}`}
@@ -50,7 +55,9 @@ export function Capa({
             className="mb-1.5 block h-px w-7 rounded-full"
             style={{ background: "var(--color-gold-400)" }}
           />
-          <h3 className="line-clamp-2 font-display text-[0.9375rem] font-semibold leading-[1.15] text-cream-50 drop-shadow-[0_1px_6px_rgba(0,0,0,0.7)]">
+          <h3
+            className={`line-clamp-2 font-display ${corpoTitulo} font-semibold leading-[1.15] text-cream-50 drop-shadow-[0_1px_6px_rgba(0,0,0,0.7)]`}
+          >
             {novela.title}
           </h3>
         </div>

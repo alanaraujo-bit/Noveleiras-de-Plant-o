@@ -51,9 +51,11 @@ export function Destaques({ novelas }: { novelas: NovelaCard[] }) {
             data-index={index}
             className="w-full shrink-0 snap-center px-5"
           >
+            {/* 3:4 mantém o cartaz imponente sem empurrar "continuar
+                assistindo" para fora da primeira dobra. */}
             <div
               className="relative overflow-hidden rounded-panel border border-white/8"
-              style={{ aspectRatio: "4 / 5" }}
+              style={{ aspectRatio: "3 / 4" }}
             >
               <img
                 src={novela.heroUrl}
