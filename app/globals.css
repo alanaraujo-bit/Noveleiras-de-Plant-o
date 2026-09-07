@@ -308,6 +308,9 @@ h4 {
   }
 }
 
+/* Respeita tanto a configuração do sistema quanto a preferência que a pessoa
+   marcou dentro do app — as duas valem, e a do app é aplicada em
+   AplicarPreferencias. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -317,4 +320,13 @@ h4 {
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+:root[data-movimento="reduzido"] *,
+:root[data-movimento="reduzido"] *::before,
+:root[data-movimento="reduzido"] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
 }

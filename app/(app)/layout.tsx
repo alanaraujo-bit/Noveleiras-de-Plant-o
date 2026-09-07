@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 
 import { getViewer } from "@/lib/auth/session";
 import { BarraAbas } from "@/components/shell/BarraAbas";
+import { AplicarPreferencias } from "@/components/sistema/AplicarPreferencias";
 
 /**
  * Casca do aplicativo: barra de abas fixa e espaço reservado para ela.
@@ -18,6 +19,10 @@ export default async function AppLayout({
 
   return (
     <div className="min-h-[100dvh]">
+      <AplicarPreferencias
+        reduzirMovimento={viewer.preferences.reduceMotion}
+        economiaDeDados={viewer.preferences.dataSaver}
+      />
       <main
         className="mx-auto max-w-lg"
         style={{

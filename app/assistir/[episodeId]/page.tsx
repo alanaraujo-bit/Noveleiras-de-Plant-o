@@ -98,6 +98,7 @@ export default async function AssistirPage({ params }: Params) {
           : null
       }
       autoplay={viewer.preferences.autoplayNext}
+      economiaDeDados={viewer.preferences.dataSaver}
     />
   );
 }

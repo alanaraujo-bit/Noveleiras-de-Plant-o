@@ -28,12 +28,6 @@ type Preferencias = {
   favoriteGenreIds: string[];
 };
 
-const QUALIDADES = [
-  { valor: "auto", rotulo: "Automática" },
-  { valor: "alta", rotulo: "Alta" },
-  { valor: "economia", rotulo: "Economia" },
-] as const;
-
 const INTERRUPTORES = [
   {
     chave: "autoplayNext",
@@ -48,7 +42,7 @@ const INTERRUPTORES = [
   {
     chave: "dataSaver",
     titulo: "Economia de dados",
-    descricao: "Prioriza qualidade menor fora do Wi-Fi.",
+    descricao: "O episódio só é baixado quando você manda tocar.",
   },
   {
     chave: "reduceMotion",
@@ -106,12 +100,6 @@ export function PainelPreferencias({
 
   const alternar = (chave: keyof Preferencias) => {
     const proximos = { ...valores, [chave]: !valores[chave] } as Preferencias;
-    setValores(proximos);
-    persistir(proximos);
-  };
-
-  const trocarQualidade = (valor: string) => {
-    const proximos = { ...valores, preferredQuality: valor };
     setValores(proximos);
     persistir(proximos);
   };
@@ -235,22 +223,13 @@ export function PainelPreferencias({
         </ul>
       </section>
 
-      {/* Qualidade --------------------------------------------------------- */}
-      <section className="px-5">
-        <p className="eyebrow mb-2.5">Qualidade do vídeo</p>
-        <div className="flex gap-1.5">
-          {QUALIDADES.map((item) => (
-            <Chip
-              key={item.valor}
-              ativo={valores.preferredQuality === item.valor}
-              onClick={() => trocarQualidade(item.valor)}
-              className="flex-1"
-            >
-              {item.rotulo}
-            </Chip>
-          ))}
-        </div>
-      </section>
+      {/* Aviso honesto: as duas últimas chaves guardam a escolha, mas ainda não
+          existe envio de notificação. Melhor dizer do que deixar a pessoa
+          esperando um aviso que não vem. */}
+      <p className="-mt-5 px-6 text-[0.75rem] leading-relaxed text-cream-600">
+        Os avisos ficam guardados na sua conta e passam a valer assim que as
+        notificações forem ligadas no aplicativo.
+      </p>
 
       {/* Gêneros ----------------------------------------------------------- */}
       <section className="px-5">

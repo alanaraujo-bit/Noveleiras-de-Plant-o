@@ -72,6 +72,7 @@ export function Player({
   retomarEm,
   proximo,
   autoplay,
+  economiaDeDados,
 }: {
   episodio: EpisodioPlayer;
   fonte: Fonte | null;
@@ -79,6 +80,7 @@ export function Player({
   retomarEm: number;
   proximo: Proximo | null;
   autoplay: boolean;
+  economiaDeDados: boolean;
 }) {
   const router = useRouter();
   const { track, sessionId } = useTelemetry();
@@ -399,7 +401,10 @@ export function Player({
           poster={estado.fonte.poster ?? episodio.capaUrl}
           playsInline
           muted={mudo}
-          preload="metadata"
+          // Em economia de dados o vídeo só é buscado quando a pessoa manda
+          // tocar; fora dela, os metadados vêm na frente para o player abrir
+          // já sabendo a duração.
+          preload={economiaDeDados ? "none" : "metadata"}
           className="size-full object-contain"
           onLoadedMetadata={prepararVideo}
           onTimeUpdate={aoAtualizarTempo}

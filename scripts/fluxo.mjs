@@ -17,6 +17,9 @@ const arg = (nome, padrao) => {
 };
 
 const BASE = arg("base", "http://localhost:3100");
+// Produção pode ter partida a frio: um limite curto acusaria falha onde só
+// houve a primeira requisição da função.
+const ESPERA = Number(arg("espera", 45000));
 const SAIDA = arg("saida", "capturas/fluxo");
 
 const problemas = [];
@@ -54,11 +57,11 @@ async function main() {
   await pagina.fill('input[name="email"]', "demo@noveleiras.app");
   await pagina.fill('input[name="senha"]', "plantao123");
   await pagina.click('button[type="submit"]');
-  await pagina.waitForURL("**/inicio", { timeout: 20000 }).catch(() => {});
+  await pagina.waitForURL("**/inicio", { timeout: ESPERA }).catch(() => {});
   passo("entrar na conta", new URL(pagina.url()).pathname === "/inicio");
 
   // 2. Home carrega com conteúdo -------------------------------------------
-  await pagina.waitForSelector("text=Continuar assistindo", { timeout: 15000 });
+  await pagina.waitForSelector("text=Continuar assistindo", { timeout: ESPERA });
   const capas = await pagina.locator('a[href^="/novela/"]').count();
   passo("home lista novelas", capas > 4, `${capas} atalhos`);
   await captura("1-home");
@@ -67,7 +70,7 @@ async function main() {
   await pagina.goto(`${BASE}/novela/coracao-em-plantao`, {
     waitUntil: "domcontentloaded",
   });
-  await pagina.waitForSelector("h1", { timeout: 15000 });
+  await pagina.waitForSelector("h1", { timeout: ESPERA });
   const titulo = await pagina.locator("h1").first().innerText();
   passo("abrir novela", titulo.includes("Coração"), titulo);
   await captura("2-novela");
@@ -75,11 +78,11 @@ async function main() {
   // 4. Botão principal leva ao player ---------------------------------------
   const principal = pagina.locator('a[href^="/assistir/"]').first();
   await principal.click();
-  await pagina.waitForURL("**/assistir/**", { timeout: 15000 });
+  await pagina.waitForURL("**/assistir/**", { timeout: ESPERA });
   passo("abrir o player", pagina.url().includes("/assistir/"));
 
   // 5. Vídeo carrega e toca -------------------------------------------------
-  await pagina.waitForSelector("video", { timeout: 15000 });
+  await pagina.waitForSelector("video", { timeout: ESPERA });
   const video = pagina.locator("video");
   await pagina
     .waitForFunction(
@@ -87,7 +90,7 @@ async function main() {
         const v = document.querySelector("video");
         return v && v.readyState >= 2;
       },
-      { timeout: 20000 },
+      { timeout: ESPERA },
     )
     .catch(() => {});
 
@@ -137,14 +140,14 @@ async function main() {
   await pagina.goto(`${BASE}/assistir/${episodeId}`, {
     waitUntil: "domcontentloaded",
   });
-  await pagina.waitForSelector("video", { timeout: 15000 });
+  await pagina.waitForSelector("video", { timeout: ESPERA });
   await pagina
     .waitForFunction(
       () => {
         const v = document.querySelector("video");
         return v && v.currentTime > 30;
       },
-      { timeout: 20000 },
+      { timeout: ESPERA },
     )
     .catch(() => {});
   const retomou = await pagina.locator("video").evaluate((v) => v.currentTime);
