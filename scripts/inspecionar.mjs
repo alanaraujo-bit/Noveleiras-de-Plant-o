@@ -12,6 +12,8 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { chromium, devices } from "playwright";
+import { PrismaClient } from "@prisma/client";
+import { SignJWT } from "jose";
 
 const arg = (nome, padrao) => {
   const encontrado = process.argv.find((item) => item.startsWith(`--${nome}=`));
@@ -70,20 +72,32 @@ async function main() {
     );
   }
 
-  // Entra com a conta de demonstração no contexto autenticado.
-  const entrada = await logado.newPage();
-  entrada.on("console", (msg) => {
-    if (msg.type() === "error") problemas.push(`[console] ${msg.text()}`);
+  // Assina um cookie de sessão para uma conta existente, em vez de digitar
+  // credenciais. A conta de demonstração deixou de existir quando o catálogo
+  // ficou real, e prender a inspeção a uma senha publicada seria um convite a
+  // mantê-la viva por conveniência.
+  const db = new PrismaClient();
+  const pessoa = await db.user.findFirst({
+    where: { status: "ACTIVE" },
+    orderBy: { createdAt: "asc" },
+    select: { id: true, email: true },
   });
-  await entrada.goto(`${BASE}/entrar`, { waitUntil: "domcontentloaded" });
-  await entrada.fill('input[name="email"]', "demo@noveleiras.app");
-  await entrada.fill('input[name="senha"]', "plantao123");
-  await entrada.click('button[type="submit"]');
-  await entrada
-    .waitForURL((url) => !url.pathname.startsWith("/entrar"), { timeout: 20000 })
-    .catch(() => problemas.push("[login] não saiu de /entrar"));
-  console.log(`login → ${new URL(entrada.url()).pathname}`);
-  await entrada.close();
+  await db.$disconnect();
+
+  if (!pessoa) {
+    problemas.push("[login] nenhuma conta ativa para inspecionar as telas internas");
+  } else {
+    const token = await new SignJWT({ sid: "" })
+      .setProtectedHeader({ alg: "HS256" })
+      .setSubject(pessoa.id)
+      .setIssuedAt()
+      .setExpirationTime("1h")
+      .sign(new TextEncoder().encode(process.env.SESSION_SECRET ?? ""));
+    await logado.addCookies([
+      { name: "nvl_sessao", value: token, url: BASE, httpOnly: true, sameSite: "Lax" },
+    ]);
+    console.log(`sessão assinada para ${pessoa.email}`);
+  }
 
   for (const rota of rotas) {
     const contexto = PUBLICAS.has(rota) ? anonimo : logado;

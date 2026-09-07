@@ -281,10 +281,6 @@ export default async function InicioPage() {
           </section>
         ) : null}
 
-        <p className="px-8 pt-2 text-center text-[0.75rem] leading-relaxed text-cream-600">
-          Catálogo de demonstração. Histórias, elenco e capas são fictícios,
-          criados para esta versão do Noveleiras de Plantão.
-        </p>
       </div>
     </>
   );

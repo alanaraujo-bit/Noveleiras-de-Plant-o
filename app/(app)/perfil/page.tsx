@@ -174,9 +174,7 @@ export default async function PerfilPage() {
       </div>
 
       <p className="mt-6 px-8 text-center text-[0.75rem] leading-relaxed text-cream-600">
-        Noveleiras de Plantão · versão de demonstração.
-        <br />
-        Conteúdo fictício criado para esta fase do produto.
+        Noveleiras de Plantão
       </p>
     </div>
   );

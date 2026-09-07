@@ -149,7 +149,7 @@ export function PainelAssinatura({
       </section>
 
       <p className="px-2 text-center text-[0.75rem] leading-relaxed text-cream-600">
-        Nesta fase de demonstração a troca de plano é imediata e não há cobrança.
+        A troca de plano é imediata e ainda não há cobrança: nenhum provedor de pagamento está conectado.
         O ponto de integração com o provedor de pagamento já está preparado no
         produto.
       </p>

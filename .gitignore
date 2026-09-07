@@ -51,3 +51,6 @@ capturas/
 
 .vercel
 .env*
+
+# cópias antes de apagar dados
+/backups/

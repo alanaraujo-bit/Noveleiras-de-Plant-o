@@ -13,7 +13,7 @@
     "midia:demo": "node --env-file=.env scripts/gerar-midia-demo.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "inspecionar": "node scripts/inspecionar.mjs",
+    "inspecionar": "node --env-file=.env scripts/inspecionar.mjs",
     "icones": "node scripts/gerar-icones.mjs",
     "fluxo": "node scripts/fluxo.mjs",
     "auditar": "node scripts/auditar.mjs",
@@ -32,7 +32,8 @@
     "biblioteca:importar": "node --env-file=.env scripts/importar-biblioteca.ts",
     "servidor:midia": "node scripts/servir-midia.mjs",
     "agente:biblioteca": "node --env-file=.env.agente scripts/agente-biblioteca.mjs",
-    "painel:provar-biblioteca": "node --env-file=.env scripts/provar-biblioteca.mjs"
+    "painel:provar-biblioteca": "node --env-file=.env scripts/provar-biblioteca.mjs",
+    "limpar:ficcao": "node --env-file=.env scripts/limpar-ficcao.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

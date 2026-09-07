@@ -18,6 +18,8 @@ import {
   Th,
   Vazio,
 } from "@/components/painel/primitivos";
+import { FormularioDaNovela } from "@/components/painel/EditarNovela";
+import { db } from "@/lib/db";
 import { exigirPermissao } from "@/lib/painel/guarda";
 import { novelaNoCatalogo } from "@/lib/painel/metricas/catalogo";
 import {
@@ -47,7 +49,10 @@ export default async function PaginaDaNovelaNoCatalogo({
   const busca = await searchParams;
   const sufixo = sufixoDoPeriodo(busca);
 
-  const dados = await novelaNoCatalogo(novelaId);
+  const [dados, generos] = await Promise.all([
+    novelaNoCatalogo(novelaId),
+    db.genre.findMany({ orderBy: { sort: "asc" }, select: { id: true, name: true } }),
+  ]);
   if (!dados) notFound();
 
   const { novela, temporadas } = dados;
@@ -70,6 +75,26 @@ export default async function PaginaDaNovelaNoCatalogo({
             { rotulo: "Catálogo", href: `/painel/catalogo${sufixo}` },
             { rotulo: novela.title },
           ]}
+        />
+
+        <FormularioDaNovela
+          novela={{
+            id: novela.id,
+            titulo: novela.title,
+            tagline: novela.tagline,
+            sinopse: novela.synopsis,
+            ano: novela.year,
+            classificacao: novela.ageRating,
+            status: novela.status,
+            acesso: novela.accessTier,
+            destaque: novela.isFeatured,
+            tags: novela.tags,
+            generosSelecionados: novela.generos.map((g) => g.id),
+            episodios: dados.totalEpisodios,
+          }}
+          generos={generos.map((g) => ({ id: g.id, nome: g.name }))}
+          podeEditar={operador.pode("catalogo.editar")}
+          podePublicar={operador.pode("catalogo.publicar")}
         />
 
         <div className="grid items-start gap-5 lg:grid-cols-2 xl:grid-cols-3">

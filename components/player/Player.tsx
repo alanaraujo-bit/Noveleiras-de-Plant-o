@@ -453,7 +453,7 @@ export function Player({
               setEstado({
                 nome: "erro",
                 mensagem:
-                  "O arquivo deste episódio não respondeu. Se você está rodando a demonstração, gere a mídia com “npm run midia:demo”.",
+                  "O arquivo deste episódio não respondeu. Tente de novo em instantes.",
               });
             });
           }}

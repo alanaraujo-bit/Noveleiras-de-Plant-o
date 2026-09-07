@@ -366,6 +366,7 @@ export async function novelaNoCatalogo(novelaId: string) {
       title: true,
       slug: true,
       tagline: true,
+      synopsis: true,
       status: true,
       accessTier: true,
       ageRating: true,
@@ -385,7 +386,7 @@ export async function novelaNoCatalogo(novelaId: string) {
       releasedAt: true,
       updatedAt: true,
       tags: true,
-      genres: { select: { genre: { select: { name: true, slug: true } } } },
+      genres: { select: { genre: { select: { id: true, name: true, slug: true } } } },
       seasons: {
         orderBy: { number: "asc" },
         select: {

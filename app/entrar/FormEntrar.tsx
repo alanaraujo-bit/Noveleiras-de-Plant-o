@@ -65,18 +65,6 @@ export function FormEntrar({ destino }: { destino?: string }) {
         </BotaoEnviar>
       </form>
 
-      <div className="mt-7 rounded-card border border-white/8 bg-white/[0.03] p-4">
-        <p className="text-[0.75rem] font-bold uppercase tracking-[0.1em] text-gold-400">
-          Conta de demonstração
-        </p>
-        <p className="selectable mt-1.5 text-[0.8125rem] leading-relaxed text-cream-400">
-          Para conhecer o app com catálogo, progresso e lista já preenchidos:
-          <br />
-          <span className="font-semibold text-cream-200">demo@noveleiras.app</span>{" "}
-          · senha{" "}
-          <span className="font-semibold text-cream-200">plantao123</span>
-        </p>
-      </div>
     </MolduraConta>
   );
 }

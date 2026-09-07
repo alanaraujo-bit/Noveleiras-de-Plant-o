@@ -164,10 +164,6 @@ export function Apresentacao() {
           )}
         </div>
 
-        <p className="mt-4 text-center text-[0.75rem] leading-relaxed text-cream-600">
-          Catálogo de demonstração, com histórias fictícias criadas para esta
-          versão.
-        </p>
       </div>
     </div>
   );
