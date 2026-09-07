@@ -52,11 +52,26 @@ export function PainelFeed({ posts, novelas, viewer, esconderSpoiler }: Props) {
   const [compondo, setCompondo] = useState(false);
   const [revelados, setRevelados] = useState<Set<string>>(new Set());
   const [filtro, setFiltro] = useState<"todos" | FeedPost["kind"]>("todos");
+  const [compacto, setCompacto] = useState(false);
 
   useEffect(() => setLista(posts), [posts]);
   useEffect(() => {
     track("FEED_VIEW");
   }, [track]);
+
+  useEffect(() => {
+    let ocioso: number | undefined;
+    const aoRolar = () => {
+      setCompacto(true);
+      window.clearTimeout(ocioso);
+      ocioso = window.setTimeout(() => setCompacto(false), 700);
+    };
+    window.addEventListener("scroll", aoRolar, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", aoRolar);
+      window.clearTimeout(ocioso);
+    };
+  }, []);
 
   const visiveis =
     filtro === "todos" ? lista : lista.filter((post) => post.kind === filtro);
@@ -135,15 +150,25 @@ export function PainelFeed({ posts, novelas, viewer, esconderSpoiler }: Props) {
         </ul>
       )}
 
+      {/* Enquanto a pessoa lê, o botão encolhe para o ícone e sai da frente do
+          texto; parada a rolagem, ele volta a se apresentar por extenso. */}
       <button
         type="button"
         onClick={() => setCompondo(true)}
         aria-label="Escrever no plantão"
-        className="tap fixed right-5 z-40 flex h-13 items-center gap-2 rounded-full bg-rose-600 px-5 text-[0.9375rem] font-bold text-cream-50 shadow-[0_0.75rem_2rem_-0.5rem_var(--color-rose-700)]"
+        className={`tap fixed right-5 z-40 flex h-13 items-center gap-2 overflow-hidden rounded-full bg-rose-600 font-bold text-cream-50 shadow-[0_0.75rem_2rem_-0.5rem_var(--color-rose-700)] transition-all duration-300 ${
+          compacto ? "w-13 justify-center px-0" : "px-5"
+        }`}
         style={{ bottom: "calc(var(--tabbar-h) + var(--safe-b) + 1rem)" }}
       >
-        <IconeMais tamanho={19} />
-        Escrever
+        <IconeMais tamanho={19} className="shrink-0" />
+        <span
+          className={`whitespace-nowrap text-[0.9375rem] transition-all duration-300 ${
+            compacto ? "w-0 opacity-0" : "w-auto opacity-100"
+          }`}
+        >
+          Escrever
+        </span>
       </button>
 
       <Compositor
