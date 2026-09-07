@@ -12,7 +12,6 @@ npm install
 cp .env.example .env      # preencha DATABASE_URL e SESSION_SECRET
 npm run db:push           # cria o schema no Postgres
 npm run db:seed           # catálogo de demonstração
-npm run midia:demo        # clipes de demonstração (opcional, ~10 min)
 npm run dev               # http://localhost:3100
 ```
 
@@ -103,6 +102,12 @@ Todo o catálogo — novelas, episódios, elenco, comentários — é **ficção
 para esta fase**, e o app diz isso em tela. As capas são desenhadas pelo próprio
 produto (`lib/art.ts`) a partir do slug e da cor de cada obra; quando houver arte
 real, basta a chave deixar de começar com `gen:`.
+
+Os clipes em `public/media` (84 arquivos, ~11 MB) são cenas de demonstração
+geradas por `npm run midia:demo`: a arte da novela, o título do episódio e um
+relógio, o bastante para exercitar o player, a retomada e o tempo assistido de
+verdade. Ficam versionados só para o app publicado ser assistível — no dia em
+que `MEDIA_BASE_URL` apontar para a origem real, a pasta pode ser apagada.
 
 ## Infraestrutura
 

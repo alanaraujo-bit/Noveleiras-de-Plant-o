@@ -7,8 +7,9 @@
  * sobrepõe título, episódio e um relógio. Com isso dá para exercitar de
  * verdade o player, o progresso, a retomada e o tempo assistido.
  *
- * Nada disto entra no repositório (`public/media` é ignorado). Quando houver
- * vídeo real, aponte MEDIA_BASE_URL para a origem e ignore este script.
+ * Os clipes ficam versionados para que o app publicado seja assistível, mas
+ * são descartáveis: quando houver vídeo real, aponte MEDIA_BASE_URL para a
+ * origem definitiva e esta pasta deixa de ser consultada.
  *
  * Uso: npm run midia:demo [-- --limite=12]
  */
@@ -28,9 +29,9 @@ const db = new PrismaClient();
 
 const RAIZ = join(process.cwd(), "public", "media");
 const TEMPORARIOS = join(RAIZ, ".fundos");
-const LARGURA = 720;
-const ALTURA = 1280;
-const QUADROS = 12;
+const LARGURA = 540;
+const ALTURA = 960;
+const QUADROS = 8;
 
 // Fontes do sistema: serifa para o título, sem serifa para os apoios.
 const FONTE_TITULO = "C\\:/Windows/Fonts/georgia.ttf";
@@ -55,9 +56,8 @@ async function existe(caminho: string): Promise<boolean> {
 }
 
 /**
- * Rasteriza a arte da novela no formato vertical do vídeo. É o mesmo desenho
- * das capas, só que em 720x1280 e sem o véu escuro do rodapé (o texto do vídeo
- * tem sombra própria).
+ * Rasteriza a arte da novela no formato vertical do vídeo: o mesmo desenho das
+ * capas, redimensionado para o quadro do clipe.
  */
 async function gerarFundo(
   navegador: Browser,
@@ -98,16 +98,16 @@ async function gerarClipe(opcoes: {
   const filtro = [
     // Escurece um pouco a arte para o texto branco ficar legível.
     `[0:v]scale=${LARGURA}:${ALTURA},format=yuv420p,eq=brightness=-0.04[fundo]`,
-    `[fundo]drawtext=fontfile='${FONTE_APOIO}':text='NOVELEIRAS DE PLANTAO':fontcolor=0xffffff@0.55:fontsize=22:x=(w-text_w)/2:y=96:shadowcolor=0x000000@0.6:shadowx=0:shadowy=1[marca]`,
+    `[fundo]drawtext=fontfile='${FONTE_APOIO}':text='NOVELEIRAS DE PLANTAO':fontcolor=0xffffff@0.55:fontsize=17:x=(w-text_w)/2:y=74:shadowcolor=0x000000@0.6:shadowx=0:shadowy=1[marca]`,
     // Aviso honesto de que é demonstração.
-    `[marca]drawtext=fontfile='${FONTE_APOIO}':text='cena de demonstracao':fontcolor=0xffffff@0.4:fontsize=20:x=(w-text_w)/2:y=136[aviso]`,
+    `[marca]drawtext=fontfile='${FONTE_APOIO}':text='cena de demonstracao':fontcolor=0xffffff@0.4:fontsize=15:x=(w-text_w)/2:y=104[aviso]`,
     // Relógio em minutos:segundos — dá para conferir a olho o progresso, a
     // retomada e a busca no tempo.
-    `[aviso]drawtext=fontfile='${FONTE_APOIO}':text='%{eif\\:floor(t/60)\\:d}\\:%{eif\\:mod(floor(t)\\,60)\\:d\\:2}':fontcolor=0xffffff@0.92:fontsize=78:x=(w-text_w)/2:y=(h-text_h)/2-40:shadowcolor=0x000000@0.55:shadowx=0:shadowy=2[relogio]`,
+    `[aviso]drawtext=fontfile='${FONTE_APOIO}':text='%{eif\\:floor(t/60)\\:d}\\:%{eif\\:mod(floor(t)\\,60)\\:d\\:2}':fontcolor=0xffffff@0.92:fontsize=58:x=(w-text_w)/2:y=(h-text_h)/2-30:shadowcolor=0x000000@0.55:shadowx=0:shadowy=2[relogio]`,
     // Rodapé editorial: temporada/episódio, título e novela.
-    `[relogio]drawtext=fontfile='${FONTE_APOIO}':text='${escaparTexto(opcoes.rotulo)}':fontcolor=0xe9bd78:fontsize=24:x=64:y=h-268[rotulo]`,
-    `[rotulo]drawtext=fontfile='${FONTE_TITULO}':text='${escaparTexto(opcoes.episodio)}':fontcolor=0xfcf3ee:fontsize=46:x=64:y=h-222:shadowcolor=0x000000@0.7:shadowx=0:shadowy=2[titulo]`,
-    `[titulo]drawtext=fontfile='${FONTE_APOIO}':text='${escaparTexto(opcoes.novela)}':fontcolor=0xffffff@0.62:fontsize=26:x=64:y=h-152[saida]`,
+    `[relogio]drawtext=fontfile='${FONTE_APOIO}':text='${escaparTexto(opcoes.rotulo)}':fontcolor=0xe9bd78:fontsize=18:x=48:y=h-201[rotulo]`,
+    `[rotulo]drawtext=fontfile='${FONTE_TITULO}':text='${escaparTexto(opcoes.episodio)}':fontcolor=0xfcf3ee:fontsize=34:x=48:y=h-166:shadowcolor=0x000000@0.7:shadowx=0:shadowy=2[titulo]`,
+    `[titulo]drawtext=fontfile='${FONTE_APOIO}':text='${escaparTexto(opcoes.novela)}':fontcolor=0xffffff@0.62:fontsize=19:x=48:y=h-114[saida]`,
   ].join(";");
 
   await mkdir(dirname(destino), { recursive: true });
@@ -127,7 +127,7 @@ async function gerarClipe(opcoes: {
       "-c:v", "libx264",
       "-preset", "veryfast",
       "-tune", "stillimage",
-      "-crf", "30",
+      "-crf", "34",
       "-pix_fmt", "yuv420p",
       // faststart: o player começa a tocar sem baixar o arquivo inteiro.
       "-movflags", "+faststart",
