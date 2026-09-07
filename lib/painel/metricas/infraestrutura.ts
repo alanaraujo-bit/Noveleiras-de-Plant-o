@@ -4,18 +4,20 @@ import { Prisma } from "@prisma/client";
 
 import { db } from "@/lib/db";
 import type { Periodo } from "@/lib/painel/tempo";
+import { situacaoPorBatimento } from "@/lib/painel/servidor";
 
 /**
  * Infraestrutura: alertas, mídia, servidores e transcodificação.
  *
- * Quatro telas cujas tabelas ainda não têm quem escreva nelas. As consultas
- * são reais e ficam prontas para o dia em que o agente de mídia começar a
- * enviar batimentos — nada aqui devolve número inventado quando está vazio.
+ * Mídia e Servidor são alimentadas: `scripts/inventariar-midia.ts` varre os
+ * arquivos e `scripts/agente-midia.mjs` envia batimentos. Alertas e
+ * Transcodificação ainda esperam quem escreva nelas — e as telas dizem isso
+ * em vez de fingirem número.
  *
- * A exceção útil é a mídia: mesmo sem nenhum `MediaAsset` catalogado, dá para
- * medir a distância entre o que o catálogo *declara* (`Episode.mediaKey`) e o
- * que a camada de mídia *conhece*. Essa distância é o próprio trabalho que
- * falta, e é um fato — não uma projeção.
+ * A medida que atravessa as duas primeiras é a distância entre o que o
+ * catálogo *declara* (`Episode.mediaKey`) e o que a camada de mídia
+ * *conhece* (`MediaAsset`). Continua valendo depois do inventário: ela é o
+ * que denuncia arquivo prometido e ausente.
  */
 
 // ------------------------------------------------------------- alertas
@@ -268,6 +270,8 @@ export type LinhaDeServidor = {
   nome: string;
   tipo: string;
   situacao: string;
+  /** O que o agente afirmou no último batimento. */
+  situacaoRelatada: string;
   habilitado: boolean;
   ultimoBatimento: Date | null;
   versaoDoAgente: string | null;
@@ -300,7 +304,10 @@ export async function listarServidores(): Promise<LinhaDeServidor[]> {
       slug: servidor.slug,
       nome: servidor.name,
       tipo: servidor.kind,
-      situacao: servidor.status,
+      // Derivada do silêncio, não da coluna: um servidor que parou de bater
+      // não continua "no ar" porque o último batimento dizia isso.
+      situacao: situacaoPorBatimento(servidor.lastBeatAt),
+      situacaoRelatada: servidor.status,
       habilitado: servidor.enabled,
       ultimoBatimento: servidor.lastBeatAt,
       versaoDoAgente: servidor.agentVersion,

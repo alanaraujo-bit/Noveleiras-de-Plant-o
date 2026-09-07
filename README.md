@@ -102,6 +102,13 @@ scripts/            inspeção visual, fluxo ponta a ponta, mídia, ícones
 | `npm run db:push` / `db:seed` / `db:studio` | Banco |
 | `npm run midia:demo` | Gera os clipes de demonstração |
 | `npm run icones` | Regera os PNGs do ícone a partir do SVG |
+| `npm run painel:inspecionar` | Captura as 14 telas do painel em três larguras |
+| `npm run painel:reconciliar` | Mostra (e com `--aplicar` corrige) contadores divergentes do catálogo |
+| `npm run admin` | Concede e revoga acesso ao painel pela linha de comando |
+| `npm run servidor` | Registra servidores de mídia e emite o segredo do agente |
+| `npm run agente` | Roda o agente na máquina que serve a mídia |
+| `npm run midia:inventariar` | Varre os arquivos e escreve o inventário de mídia |
+| `npm run painel:provar-moderacao` / `provar-acesso` / `provar-agente` | Exercitam ações e travas de ponta a ponta contra o banco |
 
 ## Conteúdo
 
@@ -116,9 +123,53 @@ relógio, o bastante para exercitar o player, a retomada e o tempo assistido de
 verdade. Ficam versionados só para o app publicado ser assistível — no dia em
 que `MEDIA_BASE_URL` apontar para a origem real, a pasta pode ser apagada.
 
+## Servidor de mídia
+
+O painel observa a máquina que guarda e serve os vídeos. Ela não precisa ser a
+mesma que roda a aplicação — hoje pode ser um computador em casa, amanhã vários
+nós, e a tela lista em vez de assumir um.
+
+Registrar o servidor e receber o segredo (aparece **uma vez**; o banco guarda só
+o hash):
+
+```bash
+npm run servidor -- registrar casa "PC da sala"
+```
+
+Na máquina que serve a mídia, guarde o que o comando imprimiu em `.env.agente`
+e rode o agente:
+
+```bash
+node --env-file=.env.agente scripts/agente-midia.mjs
+```
+
+Ele manda um batimento por minuto — CPU, memória, disco, streams — e depende só
+do Node: uma máquina que serve vídeo não deve precisar de ambiente de compilação
+para ser observada. O que o Node não expõe (GPU) não é enviado, porque campo
+ausente é mais honesto que zero inventado.
+
+**Silêncio é informação.** A situação na tela vem de *quando* o último batimento
+chegou, não do que ele afirmou: um agente que parou não deixa o servidor "no ar"
+para sempre. Passados 90 segundos ele fica degradado; passados três minutos,
+fora do ar.
+
+O inventário de arquivos é separado do batimento e roda sob demanda:
+
+```bash
+npm run midia:inventariar             # mostra o que faria
+npm run midia:inventariar -- --aplicar
+```
+
+Ele varre a origem, lê duração, resolução e codec com o `ffmpeg`, calcula
+checksum e escreve uma linha por arquivo. Três coisas que só a varredura revela:
+arquivo prometido pelo catálogo e ausente do disco (`MISSING` — não some do
+inventário, porque sumir esconderia o problema), arquivo órfão que ninguém usa,
+e duplicata detectada por conteúdo em vez de por nome.
+
 ## Infraestrutura
 
-- **Vercel** — aplicação, deploy automático a cada push na `main`
+- **Vercel** — aplicação. O deploy é **manual**: `npx vercel --prod`. Não há
+  integração de Git ligada, então um push sozinho não publica nada.
 - **Railway** — PostgreSQL
 - Variáveis necessárias em produção: `DATABASE_URL`, `SESSION_SECRET`,
   `MEDIA_PROVIDER`, `MEDIA_BASE_URL`

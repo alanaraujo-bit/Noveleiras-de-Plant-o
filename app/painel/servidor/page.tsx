@@ -89,7 +89,7 @@ export default async function PaginaDeServidor() {
             ]}
           />
         ) : (
-          <div className="grid items-start gap-5 lg:grid-cols-2">
+          <div className={`grid items-start gap-5 ${servidores.length > 1 ? "lg:grid-cols-2" : ""}`}>
             {servidores.map((servidor) => {
               const ram = barra(servidor.ultimo?.ramUsada ?? null, servidor.ultimo?.ramTotal ?? null);
               const disco = barra(
@@ -102,9 +102,14 @@ export default async function PaginaDeServidor() {
                   titulo={servidor.nome}
                   descricao={`${servidor.slug} · ${servidor.tipo.toLowerCase()}`}
                   acao={
-                    <Selo tom={tomDaSituacao(servidor.situacao)}>
-                      {ROTULO_DE_SITUACAO[servidor.situacao] ?? servidor.situacao}
-                    </Selo>
+                    <span className="flex items-center gap-1.5">
+                      {!servidor.habilitado ? (
+                        <Selo tom="neutro">desabilitado</Selo>
+                      ) : null}
+                      <Selo tom={tomDaSituacao(servidor.situacao)}>
+                        {ROTULO_DE_SITUACAO[servidor.situacao] ?? servidor.situacao}
+                      </Selo>
+                    </span>
                   }
                 >
                   {servidor.ultimo === null ? (
@@ -162,12 +167,22 @@ export default async function PaginaDeServidor() {
                         }
                         nota={
                           servidor.uptimeSec
-                            ? `no ar há ${fmtDuracao(servidor.uptimeSec * 1000)}`
+                            ? `máquina ligada há ${fmtDuracao(servidor.uptimeSec * 1000)}`
                             : undefined
                         }
                       />
                     </Razao>
                   )}
+                  {/* Silêncio é informação: a situação vem de quando o último
+                      batimento chegou, não do que ele afirmou. Quando as duas
+                      leituras divergem, quem manda é o relógio. */}
+                  {servidor.situacao === "OFFLINE" && servidor.ultimoBatimento ? (
+                    <p className="mt-3 border-t border-[var(--p-linha)] pt-3 text-[0.75rem] leading-relaxed text-[var(--p-atencao)]">
+                      Nenhum batimento nos últimos minutos. Os números acima são
+                      a última leitura recebida, não o estado de agora — o agente
+                      pode ter parado, ou a máquina.
+                    </p>
+                  ) : null}
                   {servidor.notas ? (
                     <p className="mt-3 border-t border-[var(--p-linha)] pt-3 text-[0.75rem] leading-relaxed text-[var(--p-suave)]">
                       {servidor.notas}

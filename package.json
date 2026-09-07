@@ -22,7 +22,11 @@
     "painel:reconciliar": "node --env-file=.env scripts/reconciliar-contadores.ts",
     "painel:inspecionar": "node --env-file=.env scripts/inspecionar-painel.mjs",
     "painel:provar-moderacao": "node --env-file=.env scripts/provar-moderacao.mjs",
-    "painel:provar-acesso": "node --env-file=.env scripts/provar-acesso.mjs"
+    "painel:provar-acesso": "node --env-file=.env scripts/provar-acesso.mjs",
+    "midia:inventariar": "node --env-file=.env scripts/inventariar-midia.ts",
+    "servidor": "node --env-file=.env scripts/servidor-midia.ts",
+    "agente": "node --env-file=.env.agente scripts/agente-midia.mjs",
+    "painel:provar-agente": "node --env-file=.env scripts/provar-agente.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
