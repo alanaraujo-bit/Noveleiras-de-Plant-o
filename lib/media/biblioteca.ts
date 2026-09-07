@@ -34,7 +34,22 @@ export type EpisodioNoDisco = {
   largura: number | null;
   altura: number | null;
   codec: string | null;
+  /**
+   * Miniatura própria do episódio, relativa à raiz — é a `thumbKey`.
+   *
+   * `null` quando não há arquivo: o catálogo cai na arte gerada. Só é
+   * preenchida depois de confirmar que a imagem existe no disco, porque um
+   * manifesto pode prometer o que o download não trouxe.
+   */
+  thumbChave: string | null;
+  /** Estreia na origem, ISO. `null` = desconhecida; ninguém a inventa. */
+  estreadoEm: string | null;
+  /** Prévia ou introdução gratuita na plataforma de origem. */
+  previa: boolean;
 };
+
+/** Um tema declarado pela origem. Cru, em inglês, como veio. */
+export type TemaDaOrigem = { chave: string; valor: string };
 
 export type NovelaNoDisco = {
   titulo: string;
@@ -47,6 +62,24 @@ export type NovelaNoDisco = {
   /** O manifesto declarou mais episódios do que há no disco. */
   totalDeclarado: number | null;
   origem: string | null;
+  /**
+   * Sinopse da origem. `null` quando não há — e continua `null`, porque
+   * inventar resumo engana quem lê o catálogo.
+   */
+  sinopse: string | null;
+  /** Capa real, relativa à raiz. `null` = arte gerada. */
+  capaChave: string | null;
+  /**
+   * Temas da origem, sem tradução.
+   *
+   * Viram gênero por decisão de quem edita, no painel — nunca sozinhos: o
+   * vocabulário da plataforma é em inglês e não é o do produto.
+   */
+  temas: TemaDaOrigem[];
+  /** "tiktok", "reelshort"… `null` quando o manifesto não diz. */
+  fonte: string | null;
+  /** Duração total declarada pela origem, em segundos. */
+  totalDuracaoSeg: number | null;
 };
 
 /**
@@ -108,10 +141,26 @@ export function numeroDoEpisodio(nome: string): number | null {
   return null;
 }
 
+/**
+ * O `manifest.json` que o baixador escreve na pasta da novela.
+ *
+ * O contrato vive em `CONTRATO-NOVELEIRAS.md`, no repositório da ferramenta
+ * de download. Tudo aqui é opcional de propósito: o manifesto é conveniência,
+ * nunca requisito, e uma biblioteca sem nenhum continua importando.
+ *
+ * As URLs de capa da origem são assinadas e expiram, então o manifesto aponta
+ * para **arquivos** baixados ao lado dos vídeos — nunca para endereços.
+ */
 type Manifesto = {
   dramaID?: string;
   dramaName?: string;
   totalEpisodes?: number;
+  source?: string;
+  description?: string;
+  /** Caminho relativo à pasta da novela. */
+  poster?: string;
+  totalDurationSec?: number;
+  themes?: { key?: string; value?: string }[];
   episodes?: Record<
     string,
     {
@@ -120,9 +169,63 @@ type Manifesto = {
       width?: number;
       height?: number;
       codec?: string;
+      /** Caminho relativo à pasta da novela. */
+      thumb?: string;
+      createdAt?: string;
+      isPreview?: boolean;
+      isFreeIntro?: boolean;
     }
   >;
 };
+
+/**
+ * Nome sem extensão, em minúsculas.
+ *
+ * O casamento entre manifesto e disco é feito por aqui, e não pelo nome
+ * completo, porque a extensão muda depois de gravada: um `.ts` do HLS vira
+ * `.mp4` na conversão, e o manifesto foi escrito antes disso. Comparar o nome
+ * inteiro perderia os metadados de toda série convertida.
+ */
+function semExtensao(nome: string): string {
+  return nome.replace(/\.[^.]+$/, "").toLowerCase();
+}
+
+const IMAGEM = /\.(jpe?g|png|webp|avif)$/i;
+
+/**
+ * As imagens que a pasta realmente tem, em minúsculas.
+ *
+ * Existe para que uma capa só seja publicada depois de provada: o manifesto
+ * pode apontar para um arquivo que o download não trouxe, e uma `posterKey`
+ * apontando para o vazio quebraria a capa em vez de cair na arte gerada.
+ *
+ * Cobre a raiz da pasta e `thumbs/`, que é onde a convenção põe as
+ * miniaturas. Uma varredura recursiva completa custaria caro para achar o que
+ * sabidamente mora em dois lugares.
+ */
+async function lerArtes(pasta: string): Promise<Set<string>> {
+  const achadas = new Set<string>();
+
+  const listar = async (dir: string, prefixo: string) => {
+    let entradas;
+    try {
+      entradas = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const item of entradas) {
+      if (item.isFile() && IMAGEM.test(item.name)) {
+        achadas.add(`${prefixo}${item.name}`.toLowerCase());
+      }
+    }
+  };
+
+  await Promise.all([
+    listar(pasta, ""),
+    listar(join(pasta, "thumbs"), "thumbs/"),
+  ]);
+  return achadas;
+}
 
 async function lerManifesto(pasta: string): Promise<Manifesto | null> {
   try {
@@ -142,20 +245,37 @@ export async function lerBiblioteca(raiz: string): Promise<NovelaNoDisco[]> {
     if (!entrada.isDirectory() || entrada.name.startsWith(".")) continue;
 
     const pasta = join(raiz, entrada.name);
-    const [arquivos, manifesto] = await Promise.all([
+    const [arquivos, manifesto, imagens] = await Promise.all([
       readdir(pasta, { withFileTypes: true }),
       lerManifesto(pasta),
+      lerArtes(pasta),
     ]);
 
-    // O manifesto indexa por número; o disco, por nome. Casar pelo nome do
-    // arquivo é mais seguro que confiar na ordem das chaves.
-    const porArquivo = new Map<
-      string,
-      NonNullable<Manifesto["episodes"]>[string]
-    >();
-    for (const dados of Object.values(manifesto?.episodes ?? {})) {
-      if (dados?.file) porArquivo.set(dados.file, dados);
+    type DadosDoManifesto = NonNullable<Manifesto["episodes"]>[string];
+
+    // O manifesto indexa por número; o disco, por nome. Guardamos os dois
+    // caminhos: o nome (sem extensão) é o mais específico e vem primeiro; o
+    // número é o que sobrevive a um arquivo renomeado à mão.
+    const porArquivo = new Map<string, DadosDoManifesto>();
+    const porNumero = new Map<number, DadosDoManifesto>();
+    for (const [chave, dados] of Object.entries(manifesto?.episodes ?? {})) {
+      if (!dados) continue;
+      if (dados.file) porArquivo.set(semExtensao(dados.file), dados);
+      const numero = Number(chave);
+      if (Number.isInteger(numero) && numero > 0) porNumero.set(numero, dados);
     }
+
+    /** Só vira chave o que existe no disco: manifesto promete, disco prova. */
+    const arteNoDisco = (declarado: string | undefined, padrao: string) => {
+      for (const candidato of [declarado, padrao]) {
+        if (!candidato) continue;
+        const limpo = candidato.replace(/^\.?[\\/]+/, "").replace(/\\/g, "/");
+        if (imagens.has(limpo.toLowerCase())) {
+          return `${entrada.name}/${limpo}`;
+        }
+      }
+      return null;
+    };
 
     const episodios: EpisodioNoDisco[] = [];
     const ignorados: string[] = [];
@@ -174,7 +294,10 @@ export async function lerBiblioteca(raiz: string): Promise<NovelaNoDisco[]> {
 
       const caminho = join(pasta, arquivo.name);
       const info = await stat(caminho);
-      const doManifesto = porArquivo.get(arquivo.name);
+      const doManifesto =
+        porArquivo.get(semExtensao(arquivo.name)) ?? porNumero.get(numero);
+
+      const numeroPadrao = String(numero).padStart(2, "0");
 
       episodios.push({
         numero,
@@ -186,6 +309,12 @@ export async function lerBiblioteca(raiz: string): Promise<NovelaNoDisco[]> {
         largura: doManifesto?.width ?? null,
         altura: doManifesto?.height ?? null,
         codec: doManifesto?.codec ?? null,
+        thumbChave: arteNoDisco(
+          doManifesto?.thumb,
+          `thumbs/E${numeroPadrao}.jpg`,
+        ),
+        estreadoEm: doManifesto?.createdAt ?? null,
+        previa: Boolean(doManifesto?.isPreview || doManifesto?.isFreeIntro),
       });
     }
 
@@ -223,6 +352,16 @@ export async function lerBiblioteca(raiz: string): Promise<NovelaNoDisco[]> {
       ignorados,
       totalDeclarado: manifesto?.totalEpisodes ?? null,
       origem: manifesto?.dramaID ?? null,
+      sinopse: manifesto?.description?.trim() || null,
+      capaChave: arteNoDisco(manifesto?.poster, "poster.jpg"),
+      temas: (manifesto?.themes ?? [])
+        .map((tema) => ({
+          chave: tema?.key?.trim() ?? "",
+          valor: tema?.value?.trim() ?? "",
+        }))
+        .filter((tema) => tema.valor !== ""),
+      fonte: manifesto?.source?.trim() || null,
+      totalDuracaoSeg: manifesto?.totalDurationSec ?? null,
     });
   }
 
@@ -271,6 +410,21 @@ export function caminhoDentroDaRaiz(
     return null;
   }
   return alvo;
+}
+
+/**
+ * A estreia declarada pelo manifesto, quando ela é uma data de verdade.
+ *
+ * Devolve `null` para qualquer coisa que não seja uma data válida, e o
+ * chamador cai na data de hoje. Uma data inventada por um `new Date` que
+ * virou `Invalid Date` entraria no catálogo como buraco, e um episódio sem
+ * estreia plausível desordena a lista inteira.
+ */
+export function dataDaEstreia(bruto: string | null): Date | null {
+  if (!bruto) return null;
+  const data = new Date(bruto);
+  if (Number.isNaN(data.getTime())) return null;
+  return data;
 }
 
 /** Slug estável a partir do título. Mesma entrada, mesmo slug, sempre. */

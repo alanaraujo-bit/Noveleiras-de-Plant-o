@@ -55,6 +55,11 @@ const episodioSchema = z.object({
   container: z.string().max(40).nullable().default(null),
   checksum: z.string().max(128).nullable().default(null),
   erro: z.string().max(500).nullable().default(null),
+  // Vindos do manifesto que o baixador escreve. Todos com `default`, porque um
+  // agente mais antigo simplesmente não os manda — e continua funcionando.
+  thumbChave: z.string().max(1000).nullable().default(null),
+  estreadoEm: z.string().max(40).nullable().default(null),
+  previa: z.boolean().default(false),
 });
 
 const entregarSchema = z.object({
@@ -71,6 +76,19 @@ const entregarSchema = z.object({
         ignorados: z.array(z.string().max(300)).max(500).default([]),
         totalDeclarado: z.number().int().nullable().default(null),
         origem: z.string().max(120).nullable().default(null),
+        sinopse: z.string().max(4000).nullable().default(null),
+        capaChave: z.string().max(1000).nullable().default(null),
+        temas: z
+          .array(
+            z.object({
+              chave: z.string().max(120).default(""),
+              valor: z.string().max(120),
+            }),
+          )
+          .max(30)
+          .default([]),
+        fonte: z.string().max(40).nullable().default(null),
+        totalDuracaoSeg: z.number().nonnegative().nullable().default(null),
       }),
     )
     .max(500),

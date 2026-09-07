@@ -53,6 +53,14 @@ const TIPOS = {
   ".m3u8": "application/vnd.apple.mpegurl",
   ".ts": "video/mp2t",
   ".vtt": "text/vtt",
+  // Capas e miniaturas vivem na mesma pasta dos vídeos e saem pela mesma
+  // porta. Sem o tipo certo o navegador recebe `application/octet-stream` e
+  // recusa a imagem — a capa real chegaria e não apareceria.
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".avif": "image/avif",
 };
 
 /**

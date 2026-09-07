@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest";
-import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import path, { dirname, join } from "node:path";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 
 import {
   caminhoDentroDaRaiz,
   corDoTitulo,
+  dataDaEstreia,
+  lerBiblioteca,
   numeroDoEpisodio,
   precisaDeConversao,
   slugificar,
@@ -154,5 +158,182 @@ describe("arquivos que não são episódio", () => {
     expect(precisaDeConversao("Novela - E01.mkv")).toBe(true);
     expect(precisaDeConversao("Novela - E01.mp4")).toBe(false);
     expect(precisaDeConversao("Novela - E01.webm")).toBe(false);
+  });
+});
+
+/**
+ * Daqui para baixo os testes tocam o disco de verdade, numa pasta temporária.
+ *
+ * O que está em jogo é o encontro entre o manifesto que o baixador escreve e
+ * os arquivos que ele deixou — e esse encontro não se prova com objeto
+ * simulado: o que quebra na prática é extensão trocada e arquivo prometido
+ * que não chegou.
+ */
+describe("lerBiblioteca", () => {
+  let raiz: string;
+
+  beforeEach(async () => {
+    raiz = await mkdtemp(join(tmpdir(), "biblioteca-"));
+  });
+
+  afterEach(async () => {
+    await rm(raiz, { recursive: true, force: true });
+  });
+
+  async function montar(
+    pasta: string,
+    arquivos: Record<string, string>,
+    manifesto?: unknown,
+  ) {
+    await mkdir(join(raiz, pasta), { recursive: true });
+    for (const [nome, conteudo] of Object.entries(arquivos)) {
+      const destino = join(raiz, pasta, nome);
+      await mkdir(dirname(destino), { recursive: true });
+      await writeFile(destino, conteudo);
+    }
+    if (manifesto !== undefined) {
+      await writeFile(
+        join(raiz, pasta, "manifest.json"),
+        JSON.stringify(manifesto),
+      );
+    }
+  }
+
+  it("traz ficha, capa e miniatura quando o manifesto e os arquivos existem", async () => {
+    await montar(
+      "A Cura Mortal",
+      {
+        "A Cura Mortal - E01.mp4": "v",
+        "poster.jpg": "img",
+        "thumbs/E01.jpg": "img",
+      },
+      {
+        dramaID: "7677784436146164743",
+        dramaName: "A Cura Mortal do Bilionário",
+        totalEpisodes: 40,
+        source: "tiktok",
+        description: "Adeline luta para pagar as contas da mãe.",
+        poster: "poster.jpg",
+        themes: [{ key: "tag_Contractlovers", value: "Contract Lovers" }],
+        episodes: {
+          1: {
+            file: "A Cura Mortal - E01.mp4",
+            duration: 160,
+            thumb: "thumbs/E01.jpg",
+            createdAt: "2026-08-23T04:46:12Z",
+            isPreview: true,
+          },
+        },
+      },
+    );
+
+    const [novela] = await lerBiblioteca(raiz);
+
+    // O título do manifesto ganha do nome da pasta.
+    expect(novela.titulo).toBe("A Cura Mortal do Bilionário");
+    expect(novela.sinopse).toBe("Adeline luta para pagar as contas da mãe.");
+    expect(novela.fonte).toBe("tiktok");
+    expect(novela.temas).toEqual([
+      { chave: "tag_Contractlovers", valor: "Contract Lovers" },
+    ]);
+    // A chave é relativa à raiz — a mesma linguagem dos vídeos.
+    expect(novela.capaChave).toBe("A Cura Mortal/poster.jpg");
+    expect(novela.episodios[0].thumbChave).toBe("A Cura Mortal/thumbs/E01.jpg");
+    expect(novela.episodios[0].duracaoSeg).toBe(160);
+    expect(novela.episodios[0].previa).toBe(true);
+    expect(novela.episodios[0].estreadoEm).toBe("2026-08-23T04:46:12Z");
+  });
+
+  it("casa o manifesto com o arquivo já convertido de .ts para .mp4", async () => {
+    // O manifesto foi escrito quando o arquivo era MPEG-TS; a conversão
+    // trocou a extensão. Comparar o nome inteiro perderia a duração.
+    await montar(
+      "Votos Despedaçados",
+      { "Votos Despedaçados - E01.mp4": "v" },
+      {
+        dramaName: "Votos Despedaçados",
+        episodes: {
+          1: { file: "Votos Despedaçados - E01.ts", duration: 95 },
+        },
+      },
+    );
+
+    const [novela] = await lerBiblioteca(raiz);
+    expect(novela.episodios[0].duracaoSeg).toBe(95);
+  });
+
+  it("cai no número quando o arquivo foi renomeado à mão", async () => {
+    await montar(
+      "Presídio Estrela",
+      { "E01.mp4": "v" },
+      {
+        dramaName: "Presídio Estrela",
+        episodes: { 1: { file: "outro-nome-qualquer.mp4", duration: 77 } },
+      },
+    );
+
+    const [novela] = await lerBiblioteca(raiz);
+    expect(novela.episodios[0].duracaoSeg).toBe(77);
+  });
+
+  it("não publica capa que o manifesto promete mas o disco não tem", async () => {
+    await montar(
+      "Sem Arte",
+      { "Sem Arte - E01.mp4": "v" },
+      { dramaName: "Sem Arte", poster: "poster.jpg", episodes: {} },
+    );
+
+    const [novela] = await lerBiblioteca(raiz);
+    // `null` manda o catálogo para a arte gerada, que é melhor que uma
+    // imagem quebrada.
+    expect(novela.capaChave).toBeNull();
+    expect(novela.episodios[0].thumbChave).toBeNull();
+  });
+
+  it("acha capa e miniatura pela convenção, sem manifesto declarar", async () => {
+    await montar("Só Arquivos", {
+      "Só Arquivos - E01.mp4": "v",
+      "poster.jpg": "img",
+      "thumbs/E01.jpg": "img",
+    });
+
+    const [novela] = await lerBiblioteca(raiz);
+    expect(novela.capaChave).toBe("Só Arquivos/poster.jpg");
+    expect(novela.episodios[0].thumbChave).toBe("Só Arquivos/thumbs/E01.jpg");
+  });
+
+  it("uma pasta sem manifesto nem arte continua importável", async () => {
+    // É a biblioteca de hoje: só vídeo. Nada pode quebrar por isso.
+    await montar("Antiga", { "Antiga - E01.mp4": "v", "Antiga - E02.mp4": "v" });
+
+    const [novela] = await lerBiblioteca(raiz);
+    expect(novela.titulo).toBe("Antiga");
+    expect(novela.episodios).toHaveLength(2);
+    expect(novela.capaChave).toBeNull();
+    expect(novela.sinopse).toBeNull();
+    expect(novela.temas).toEqual([]);
+    expect(novela.episodios[0].previa).toBe(false);
+  });
+
+  it("uma imagem solta não vira episódio", async () => {
+    await montar("Com Capa", { "Com Capa - E01.mp4": "v", "poster.jpg": "img" });
+
+    const [novela] = await lerBiblioteca(raiz);
+    expect(novela.episodios).toHaveLength(1);
+    expect(novela.ignorados).toEqual([]);
+  });
+});
+
+describe("dataDaEstreia", () => {
+  it("aceita a data ISO do manifesto", () => {
+    expect(dataDaEstreia("2026-08-23T04:46:12Z")?.toISOString()).toBe(
+      "2026-08-23T04:46:12.000Z",
+    );
+  });
+
+  it("recusa o que não é data, em vez de gravar uma inválida", () => {
+    expect(dataDaEstreia(null)).toBeNull();
+    expect(dataDaEstreia("")).toBeNull();
+    expect(dataDaEstreia("ontem")).toBeNull();
   });
 });

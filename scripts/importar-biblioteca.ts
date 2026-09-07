@@ -26,10 +26,12 @@ import ffmpegPath from "ffmpeg-static";
 
 import {
   corDoTitulo,
+  dataDaEstreia,
   lerBiblioteca,
   slugificar,
   textoDeBusca,
 } from "../lib/media/biblioteca.ts";
+import { isGeneratedArt } from "../lib/media/resolver.ts";
 import { sondar } from "../lib/media/inventario.ts";
 
 const db = new PrismaClient();
@@ -80,7 +82,14 @@ async function main() {
     const slug = slugificar(novela.titulo);
     const existente = await db.novela.findUnique({
       where: { slug },
-      select: { id: true, title: true },
+      select: {
+        id: true,
+        title: true,
+        posterKey: true,
+        heroKey: true,
+        synopsis: true,
+        tags: true,
+      },
     });
 
     totalEpisodios += novela.episodios.length;
@@ -109,33 +118,60 @@ async function main() {
     // novela e escalonamos os episódios a partir dela, deixando claro no
     // painel que é publicação e não estreia original.
     const agora = new Date();
+    // A sinopse vem do manifesto quando o baixador a trouxe. Nada é gerado:
+    // sem manifesto ela continua vazia, e o painel mostra o que falta.
+    const sinopse = novela.sinopse ?? "";
+    const tags = novela.temas.map((tema) => tema.valor);
     const dadosDaNovela = {
       title: novela.titulo,
-      // Vazios de propósito: inventar sinopse enganaria quem lê o catálogo.
+      // Vazia de propósito: a origem não tem chamada curta, e inventá-la
+      // enganaria quem lê o catálogo.
       tagline: "",
-      synopsis: "",
+      synopsis: sinopse,
       status: "ONGOING" as const,
       accessTier: "FREE" as const,
       year: agora.getFullYear(),
-      posterKey: `gen:capa/${slug}`,
-      heroKey: `gen:hero/${slug}`,
+      // Capa real quando o arquivo existe; arte gerada quando não. É a mesma
+      // chave dos vídeos, resolvida pela camada de mídia.
+      posterKey: novela.capaChave ?? `gen:capa/${slug}`,
+      heroKey: novela.capaChave ?? `gen:hero/${slug}`,
       accent: corDoTitulo(novela.titulo),
-      searchText: textoDeBusca(novela.titulo),
+      tags,
+      searchText: textoDeBusca(novela.titulo, sinopse, tags.join(" ")),
       editorialNote: novela.origem
         ? `Importada da pasta "${novela.pasta}" (origem ${novela.origem}).`
         : `Importada da pasta "${novela.pasta}".`,
       releasedAt: agora,
     };
 
+    // Numa reimportação, arte gerada dá lugar à real — isso é ganho, não
+    // sobrescrita. Já o que uma pessoa escolheu ou escreveu fica de pé: capa
+    // trocada à mão e sinopse redigida no painel não são tocadas.
+    const capaEhGerada = !existente || isGeneratedArt(existente.posterKey);
+    const heroEhGerado = !existente || isGeneratedArt(existente.heroKey);
+    const sinopseVazia = !existente?.synopsis?.trim();
+
     const gravada = await db.novela.upsert({
       where: { slug },
       create: { slug, ...dadosDaNovela },
-      // Sinopse e tagline não são sobrescritas numa reimportação: quem
-      // escreveu à mão não perde o texto por rodar o comando de novo.
       update: {
         title: dadosDaNovela.title,
-        searchText: dadosDaNovela.searchText,
         accent: dadosDaNovela.accent,
+        // A busca indexa o texto que vai ficar gravado, não o do manifesto:
+        // onde alguém escreveu a sinopse, é a dela que a busca compara.
+        searchText: textoDeBusca(
+          novela.titulo,
+          sinopseVazia ? sinopse : (existente?.synopsis ?? ""),
+          (existente?.tags.length ? existente.tags : tags).join(" "),
+        ),
+        ...(novela.capaChave && capaEhGerada
+          ? { posterKey: novela.capaChave }
+          : {}),
+        ...(novela.capaChave && heroEhGerado
+          ? { heroKey: novela.capaChave }
+          : {}),
+        ...(sinopse && sinopseVazia ? { synopsis: sinopse } : {}),
+        ...(tags.length && !existente?.tags.length ? { tags } : {}),
       },
       select: { id: true },
     });
@@ -168,8 +204,14 @@ async function main() {
         where: {
           seasonId_number: { seasonId: temporada.id, number: episodio.numero },
         },
-        select: { id: true },
+        select: { id: true, thumbKey: true },
       });
+
+      // Miniatura própria quando o baixador a trouxe; senão a capa da novela,
+      // que já é real ou gerada conforme o caso.
+      const miniatura =
+        episodio.thumbChave ?? novela.capaChave ?? `gen:capa/${slug}`;
+      const estreia = dataDaEstreia(episodio.estreadoEm) ?? agora;
 
       await db.episode.upsert({
         where: {
@@ -179,18 +221,25 @@ async function main() {
           seasonId: temporada.id,
           novelaId: gravada.id,
           number: episodio.numero,
+          // A origem não dá título nem sinopse por episódio — o `desc` da API
+          // repete a chamada da série em todos eles. O rótulo é o número, e o
+          // texto fica para quem escreve a ficha no painel.
           title: `Episódio ${episodio.numero}`,
           synopsis: "",
           durationSec: Math.max(1, Math.round(duracao ?? 0)),
           mediaKey: episodio.chave,
           mediaProvider: "LOCAL",
           mediaFormat: "mp4",
-          thumbKey: `gen:capa/${slug}`,
-          releasedAt: agora,
+          thumbKey: miniatura,
+          releasedAt: estreia,
         },
         update: {
           mediaKey: episodio.chave,
           durationSec: Math.max(1, Math.round(duracao ?? 0)),
+          ...(episodio.thumbChave && isGeneratedArt(jaExiste?.thumbKey ?? "gen:")
+            ? { thumbKey: episodio.thumbChave }
+            : {}),
+          ...(episodio.estreadoEm ? { releasedAt: estreia } : {}),
         },
       });
 

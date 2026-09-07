@@ -5,9 +5,11 @@ import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import {
   corDoTitulo,
+  dataDaEstreia,
   slugificar,
   textoDeBusca,
 } from "@/lib/media/biblioteca";
+import { isGeneratedArt } from "@/lib/media/resolver";
 
 /**
  * Bibliotecas de conteúdo.
@@ -45,6 +47,12 @@ export type EpisodioVarrido = {
   checksum: string | null;
   /** Preenchido quando o arquivo não abriu. */
   erro: string | null;
+  /** Miniatura do episódio no disco. `null` = cai na arte gerada. */
+  thumbChave: string | null;
+  /** Estreia declarada pela origem, ISO. */
+  estreadoEm: string | null;
+  /** Prévia ou introdução gratuita na origem. */
+  previa: boolean;
 };
 
 export type NovelaVarrida = {
@@ -55,6 +63,14 @@ export type NovelaVarrida = {
   ignorados: string[];
   totalDeclarado: number | null;
   origem: string | null;
+  /** Sinopse da origem. `null` = ninguém escreveu ainda. */
+  sinopse: string | null;
+  /** Capa real no disco. `null` = arte gerada. */
+  capaChave: string | null;
+  /** Temas da origem, crus. Viram gênero por decisão de quem edita. */
+  temas: { chave: string; valor: string }[];
+  fonte: string | null;
+  totalDuracaoSeg: number | null;
 };
 
 export type ResultadoDaImportacao = {
@@ -115,8 +131,27 @@ export async function importarArvore(
     if (biblioteca.autoImport) {
       const existente = await db.novela.findUnique({
         where: { slug },
-        select: { id: true },
+        select: {
+          id: true,
+          posterKey: true,
+          heroKey: true,
+          synopsis: true,
+          tags: true,
+        },
       });
+
+      // Um agente mais antigo não manda estes campos. Ele continua varrendo
+      // e importando; só não traz arte nem sinopse — que é exatamente o
+      // estado de hoje, e não um erro.
+      const sinopse = novela.sinopse ?? "";
+      const capa = novela.capaChave ?? null;
+      const tags = (novela.temas ?? []).map((tema) => tema.valor);
+
+      // Arte gerada dá lugar à real: é ganho, não sobrescrita. O que uma
+      // pessoa escolheu ou escreveu no painel fica de pé.
+      const capaEhGerada = !existente || isGeneratedArt(existente.posterKey);
+      const heroEhGerado = !existente || isGeneratedArt(existente.heroKey);
+      const sinopseVazia = !existente?.synopsis?.trim();
 
       const gravada = await db.novela.upsert({
         where: { slug },
@@ -124,25 +159,33 @@ export async function importarArvore(
           slug,
           title: novela.titulo,
           tagline: "",
-          synopsis: "",
+          synopsis: sinopse,
           status: "ONGOING",
           accessTier: "FREE",
           year: agora.getFullYear(),
-          posterKey: `gen:capa/${slug}`,
-          heroKey: `gen:hero/${slug}`,
+          posterKey: capa ?? `gen:capa/${slug}`,
+          heroKey: capa ?? `gen:hero/${slug}`,
           accent: corDoTitulo(novela.titulo),
-          searchText: textoDeBusca(novela.titulo),
+          tags,
+          searchText: textoDeBusca(novela.titulo, sinopse, tags.join(" ")),
           editorialNote: novela.origem
             ? `Importada da pasta "${novela.pasta}" (origem ${novela.origem}).`
             : `Importada da pasta "${novela.pasta}".`,
           releasedAt: agora,
           isFeatured: false,
         },
-        // Título e busca acompanham a pasta; sinopse e tagline não são
-        // sobrescritas, para que reimportar não apague texto escrito à mão.
         update: {
           title: novela.titulo,
-          searchText: textoDeBusca(novela.titulo),
+          // A busca indexa o que fica gravado, não o que o manifesto trouxe.
+          searchText: textoDeBusca(
+            novela.titulo,
+            sinopseVazia ? sinopse : (existente?.synopsis ?? ""),
+            (existente?.tags.length ? existente.tags : tags).join(" "),
+          ),
+          ...(capa && capaEhGerada ? { posterKey: capa } : {}),
+          ...(capa && heroEhGerado ? { heroKey: capa } : {}),
+          ...(sinopse && sinopseVazia ? { synopsis: sinopse } : {}),
+          ...(tags.length && !existente?.tags.length ? { tags } : {}),
         },
         select: { id: true },
       });
@@ -168,8 +211,14 @@ export async function importarArvore(
               number: episodio.numero,
             },
           },
-          select: { id: true },
+          select: { id: true, thumbKey: true },
         });
+
+        // Miniatura própria quando existe; senão a capa da novela, que já é
+        // real ou gerada conforme o caso.
+        const miniatura =
+          episodio.thumbChave ?? capa ?? `gen:capa/${slug}`;
+        const estreia = dataDaEstreia(episodio.estreadoEm ?? null) ?? agora;
 
         await db.episode.upsert({
           where: {
@@ -182,18 +231,25 @@ export async function importarArvore(
             seasonId: temporada.id,
             novelaId,
             number: episodio.numero,
+            // A origem não tem título nem sinopse por episódio; o texto fica
+            // para quem escreve a ficha no painel.
             title: `Episódio ${episodio.numero}`,
             synopsis: "",
             durationSec: Math.max(1, Math.round(episodio.duracaoSeg ?? 0)),
             mediaKey: episodio.chave,
             mediaProvider: "LOCAL",
             mediaFormat: "mp4",
-            thumbKey: `gen:capa/${slug}`,
-            releasedAt: agora,
+            thumbKey: miniatura,
+            releasedAt: estreia,
           },
           update: {
             mediaKey: episodio.chave,
             durationSec: Math.max(1, Math.round(episodio.duracaoSeg ?? 0)),
+            ...(episodio.thumbChave &&
+            isGeneratedArt(jaExiste?.thumbKey ?? "gen:")
+              ? { thumbKey: episodio.thumbChave }
+              : {}),
+            ...(episodio.estreadoEm ? { releasedAt: estreia } : {}),
           },
         });
 

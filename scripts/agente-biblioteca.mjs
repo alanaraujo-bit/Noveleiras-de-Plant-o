@@ -150,6 +150,10 @@ async function executar(varredura) {
         container: sondagem.container,
         checksum,
         erro: sondagem.erro,
+        // Do manifesto, sem sondagem: o disco já os provou ao ser lido.
+        thumbChave: episodio.thumbChave,
+        estreadoEm: episodio.estreadoEm,
+        previa: episodio.previa,
       });
 
       processados += 1;
@@ -167,6 +171,13 @@ async function executar(varredura) {
       ignorados: novela.ignorados,
       totalDeclarado: novela.totalDeclarado,
       origem: novela.origem,
+      // Ficha e arte que o baixador deixou na pasta. O agente não as
+      // interpreta: só as transporta até quem grava no catálogo.
+      sinopse: novela.sinopse,
+      capaChave: novela.capaChave,
+      temas: novela.temas,
+      fonte: novela.fonte,
+      totalDuracaoSeg: novela.totalDuracaoSeg,
     });
   }
 
