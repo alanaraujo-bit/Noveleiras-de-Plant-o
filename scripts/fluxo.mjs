@@ -169,11 +169,26 @@ async function main() {
   await gratuito.close();
 
   // 10. Busca ----------------------------------------------------------------
+  // Pausa antes de sair do player: com o vídeo tocando, a navegação seguinte
+  // concorre com o envio de progresso e o passo fica intermitente.
+  await pagina.locator("video").evaluate((v) => v.pause()).catch(() => {});
   await pagina.goto(`${BASE}/buscar`, { waitUntil: "domcontentloaded" });
-  await pagina.fill('input[type="search"]', "coracao");
-  await pagina.waitForTimeout(1500);
+  await pagina.waitForSelector('input[type="search"]', { timeout: ESPERA });
+  await pagina.fill('input[type="search"]', "coracao", { timeout: ESPERA });
+  // Espera a lista de resultados, não as sugestões: sem isto o passo pode
+  // passar contando os atalhos de "mais vistas" que já estavam na tela.
+  await pagina
+    .waitForSelector("text=/resultado/i", { timeout: ESPERA })
+    .catch(() => {});
   const achados = await pagina.locator('a[href^="/novela/"]').count();
-  passo("busca sem acento encontra", achados > 0, `${achados} resultados`);
+  const achouCerto = await pagina
+    .locator('a[href="/novela/coracao-em-plantao"]')
+    .count();
+  passo(
+    "busca sem acento encontra a novela certa",
+    achouCerto > 0,
+    `${achados} resultado(s)`,
+  );
   await captura("5-busca");
 
   await navegador.close();
