@@ -1,0 +1,479 @@
+// Noveleiras de Plantao - modelo de dados da Fase 01.
+// Modelado para que o painel administrativo da Fase 02 nasca observavel:
+// todo evento relevante cai em `Event` (log append-only) e as tabelas
+// consultadas em tempo real ficam normalizadas ao lado.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------- contas
+
+enum Role {
+  USER
+  EDITOR
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+model User {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  passwordHash String
+  name         String
+  handle       String     @unique
+  avatarSeed   String     @default("1")
+  role         Role       @default(USER)
+  status       UserStatus @default(ACTIVE)
+
+  onboardedAt DateTime?
+  lastSeenAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  preference   Preference?
+  subscription Subscription?
+  sessions     AppSession[]
+  progress     WatchProgress[]
+  favorites    Favorite[]
+  searches     SearchQuery[]
+  events       Event[]
+  posts        Post[]
+  postLikes    PostLike[]
+  comments     Comment[]
+
+  @@index([createdAt])
+  @@index([lastSeenAt])
+}
+
+model Preference {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  favoriteGenreIds String[] @default([])
+  autoplayNext     Boolean  @default(true)
+  dataSaver        Boolean  @default(false)
+  reduceMotion     Boolean  @default(false)
+  spoilerGuard     Boolean  @default(true)
+  notifyReleases   Boolean  @default(true)
+  notifyCommunity  Boolean  @default(true)
+  preferredQuality String   @default("auto")
+
+  updatedAt DateTime @updatedAt
+}
+
+// -------------------------------------------------------- assinatura
+
+enum SubscriptionPlan {
+  FREE
+  PREMIUM
+  VIP
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  EXPIRED
+}
+
+model Subscription {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  plan   SubscriptionPlan   @default(FREE)
+  status SubscriptionStatus @default(ACTIVE)
+
+  // Preparado para um provedor de pagamento real sem migracao adicional.
+  provider           String?
+  externalCustomerId String?
+  externalId         String?
+  priceCents         Int?
+  trialEndsAt        DateTime?
+  startedAt          DateTime  @default(now())
+  currentPeriodEnd   DateTime?
+  cancelAtPeriodEnd  Boolean   @default(false)
+  canceledAt         DateTime?
+  updatedAt          DateTime  @updatedAt
+
+  @@index([plan, status])
+}
+
+// ------------------------------------------------ sessoes e dispositivos
+
+model AppSession {
+  id     String  @id @default(cuid())
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  deviceId   String
+  platform   String  @default("web")
+  osName     String?
+  browser    String?
+  screenW    Int?
+  screenH    Int?
+  standalone Boolean @default(false)
+  userAgent  String?
+  language   String?
+  timezone   String?
+  referrer   String?
+
+  startedAt   DateTime  @default(now())
+  lastBeatAt  DateTime  @default(now())
+  endedAt     DateTime?
+  durationMs  Int       @default(0)
+  screenViews Int       @default(0)
+  watchedMs   Int       @default(0)
+
+  events Event[]
+
+  @@index([userId, startedAt])
+  @@index([deviceId])
+  @@index([startedAt])
+}
+
+// ------------------------------------------------------------- catalogo
+
+enum AccessTier {
+  FREE
+  PREMIUM
+}
+
+enum NovelaStatus {
+  ONGOING
+  COMPLETED
+  COMING_SOON
+}
+
+model Genre {
+  id      String @id @default(cuid())
+  slug    String @unique
+  name    String
+  tagline String
+  accent  String
+  sort    Int    @default(0)
+
+  novelas NovelaGenre[]
+}
+
+model Novela {
+  id       String @id @default(cuid())
+  slug     String @unique
+  title    String
+  tagline  String
+  synopsis String
+
+  status     NovelaStatus @default(ONGOING)
+  accessTier AccessTier   @default(FREE)
+  ageRating  String       @default("14")
+  year       Int
+  country    String       @default("Brasil")
+
+  // Arte: chaves opacas resolvidas pela camada de midia.
+  posterKey  String
+  heroKey    String
+  accent     String  @default("#B3325A")
+  trailerKey String?
+
+  editorialNote String?
+  isFeatured    Boolean @default(false)
+
+  // Texto normalizado (sem acento, minusculo) com titulo, sinopse, elenco e
+  // tags: e o que a busca compara. Preenchido no seed/ingestao.
+  searchText String @default("")
+
+  featuredRank  Int?
+
+  cast        Json     @default("[]")
+  tags        String[] @default([])
+  rating      Float    @default(0)
+  ratingCount Int      @default(0)
+
+  // Contadores denormalizados: mantem "populares" barato e alimenta o painel.
+  viewCount     Int    @default(0)
+  favoriteCount Int    @default(0)
+  watchedMs     BigInt @default(0)
+
+  releasedAt DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  genres    NovelaGenre[]
+  seasons   Season[]
+  episodes  Episode[]
+  favorites Favorite[]
+  progress  WatchProgress[]
+  posts     Post[]
+
+  @@index([status, releasedAt])
+  @@index([viewCount])
+  @@index([isFeatured, featuredRank])
+}
+
+model NovelaGenre {
+  novelaId String
+  genreId  String
+  novela   Novela @relation(fields: [novelaId], references: [id], onDelete: Cascade)
+  genre    Genre  @relation(fields: [genreId], references: [id], onDelete: Cascade)
+
+  @@id([novelaId, genreId])
+  @@index([genreId])
+}
+
+model Season {
+  id       String @id @default(cuid())
+  novelaId String
+  novela   Novela @relation(fields: [novelaId], references: [id], onDelete: Cascade)
+
+  number   Int
+  title    String
+  synopsis String?
+
+  episodes Episode[]
+
+  @@unique([novelaId, number])
+}
+
+enum MediaProvider {
+  LOCAL
+  RAILWAY
+  OBJECT_STORE
+  CDN
+  EXTERNAL
+}
+
+model Episode {
+  id       String @id @default(cuid())
+  seasonId String
+  season   Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  novelaId String
+  novela   Novela @relation(fields: [novelaId], references: [id], onDelete: Cascade)
+
+  number   Int
+  title    String
+  synopsis String
+
+  durationSec Int
+  accessTier  AccessTier @default(FREE)
+  isBonus     Boolean    @default(false)
+
+  // A origem do video nunca e uma URL: e chave + provedor, resolvidos em runtime.
+  mediaKey      String
+  mediaProvider MediaProvider @default(LOCAL)
+  mediaFormat   String        @default("mp4")
+  thumbKey      String
+
+  releasedAt DateTime
+  viewCount  Int      @default(0)
+  watchedMs  BigInt   @default(0)
+  createdAt  DateTime @default(now())
+
+  progress WatchProgress[]
+  posts    Post[]
+
+  @@unique([seasonId, number])
+  @@index([novelaId, number])
+  @@index([releasedAt])
+}
+
+// ------------------------------------------- progresso, lista, historico
+
+model WatchProgress {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  episodeId String
+  episode   Episode @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  novelaId  String
+  novela    Novela  @relation(fields: [novelaId], references: [id], onDelete: Cascade)
+
+  positionSec Int     @default(0)
+  durationSec Int
+  percent     Int     @default(0)
+  completed   Boolean @default(false)
+
+  // Tempo real de tela, nao apenas a posicao final: base para "tempo assistido".
+  watchedMs   Int      @default(0)
+  playCount   Int      @default(1)
+  abandonedAt Int?
+  firstPlayAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, episodeId])
+  @@index([userId, updatedAt])
+  @@index([userId, novelaId, updatedAt])
+  @@index([novelaId])
+}
+
+model Favorite {
+  id       String @id @default(cuid())
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  novelaId String
+  novela   Novela @relation(fields: [novelaId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, novelaId])
+  @@index([userId, createdAt])
+  @@index([novelaId])
+}
+
+model SearchQuery {
+  id     String  @id @default(cuid())
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  sessionId       String?
+  term            String
+  normalized      String
+  resultCount     Int      @default(0)
+  clickedNovelaId String?
+  createdAt       DateTime @default(now())
+
+  @@index([normalized])
+  @@index([createdAt])
+}
+
+// ----------------------------------------------------- feed / comunidade
+
+enum PostKind {
+  THOUGHT
+  REVIEW
+  THEORY
+}
+
+model Post {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  novelaId  String?
+  novela    Novela?  @relation(fields: [novelaId], references: [id], onDelete: SetNull)
+  episodeId String?
+  episode   Episode? @relation(fields: [episodeId], references: [id], onDelete: SetNull)
+
+  kind    PostKind @default(THOUGHT)
+  body    String
+  spoiler Boolean  @default(false)
+  rating  Int?
+
+  likeCount    Int       @default(0)
+  commentCount Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  hiddenAt     DateTime?
+
+  likes    PostLike[]
+  comments Comment[]
+
+  @@index([createdAt])
+  @@index([novelaId, createdAt])
+}
+
+model PostLike {
+  postId String
+  post   Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@id([postId, userId])
+  @@index([userId])
+}
+
+model Comment {
+  id     String @id @default(cuid())
+  postId String
+  post   Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  body      String
+  createdAt DateTime  @default(now())
+  hiddenAt  DateTime?
+
+  @@index([postId, createdAt])
+}
+
+// ----------------------------------------------------------- telemetria
+
+enum EventType {
+  SESSION_START
+  SESSION_HEARTBEAT
+  SESSION_END
+  SCREEN_VIEW
+  ONBOARDING_STEP
+  ONBOARDING_COMPLETE
+  SIGN_UP
+  SIGN_IN
+  SIGN_OUT
+  NOVELA_VIEW
+  EPISODE_VIEW
+  PLAY_START
+  PLAY_PROGRESS
+  PLAY_PAUSE
+  PLAY_SEEK
+  PLAY_COMPLETE
+  PLAY_ABANDON
+  PLAY_ERROR
+  SEARCH
+  SEARCH_RESULT_CLICK
+  CATEGORY_OPEN
+  FAVORITE_ADD
+  FAVORITE_REMOVE
+  FEED_VIEW
+  POST_CREATE
+  POST_LIKE
+  POST_COMMENT
+  PAYWALL_VIEW
+  PAYWALL_CTA
+  PREFERENCES_UPDATE
+  PWA_INSTALLED
+  CLIENT_ERROR
+}
+
+// Log append-only. Todas as visoes do painel (retencao, abandono, buscas,
+// engajamento, novelas mais acessadas) derivam daqui + WatchProgress.
+model Event {
+  id     String    @id @default(cuid())
+  type   EventType
+  userId String?
+  user   User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  sessionId String?
+  session   AppSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  entityType String?
+  entityId   String?
+  novelaId   String?
+  episodeId  String?
+
+  valueMs  Int?
+  payload  Json    @default("{}")
+  path     String?
+  platform String?
+  deviceId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([type, createdAt])
+  @@index([userId, createdAt])
+  @@index([novelaId, createdAt])
+  @@index([createdAt])
+}

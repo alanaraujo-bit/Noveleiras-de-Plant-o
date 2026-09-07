@@ -1,0 +1,684 @@
+"use client";
+
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
+
+import { useTelemetry } from "@/components/sistema/TelemetryProvider";
+import {
+  IconeCadeado,
+  IconePausa,
+  IconePlay,
+  IconeProximo,
+  IconeVoltar,
+  IconeVolume,
+} from "@/components/ui/icones";
+import { formatClock } from "@/lib/format";
+
+/**
+ * Player.
+ *
+ * A URL do vídeo nunca vem da página: é pedida a /api/midia, que decide o
+ * acesso no servidor. Por isso o player tem três destinos possíveis — tocar,
+ * mostrar o paywall ou mostrar erro — e trata os três como estados de primeira
+ * classe, não como exceção.
+ *
+ * O progresso é enviado com o tempo real de exibição acumulado, não com a
+ * posição pura: é assim que "tempo assistido" fica honesto no painel.
+ */
+
+type EpisodioPlayer = {
+  id: string;
+  titulo: string;
+  numero: number;
+  temporada: number;
+  duracaoSec: number;
+  capaUrl: string;
+  novela: { id: string; slug: string; titulo: string; accent: string };
+};
+
+type Proximo = {
+  id: string;
+  titulo: string;
+  numero: number;
+  temporada: number;
+  capaUrl: string;
+};
+
+type Fonte = { kind: "mp4" | "hls"; url: string; poster: string | null };
+
+type Estado =
+  | { nome: "carregando" }
+  | { nome: "pronto"; fonte: Fonte }
+  | { nome: "bloqueado"; motivo: "needs-account" | "needs-subscription"; mensagem: string }
+  | { nome: "erro"; mensagem: string };
+
+const OCULTAR_CONTROLES_MS = 2800;
+const INTERVALO_SALVAR_MS = 10_000;
+
+export function Player({
+  episodio,
+  retomarEm,
+  proximo,
+  autoplay,
+}: {
+  episodio: EpisodioPlayer;
+  retomarEm: number;
+  proximo: Proximo | null;
+  autoplay: boolean;
+}) {
+  const router = useRouter();
+  const { track, sessionId } = useTelemetry();
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  const [estado, setEstado] = useState<Estado>({ nome: "carregando" });
+  const [tocando, setTocando] = useState(false);
+  const [mudo, setMudo] = useState(false);
+  const [posicao, setPosicao] = useState(retomarEm);
+  const [duracao, setDuracao] = useState(episodio.duracaoSec);
+  const [bufferando, setBufferando] = useState(false);
+  const [controles, setControles] = useState(true);
+  const [contagem, setContagem] = useState<number | null>(null);
+  const [avisoRetomada, setAvisoRetomada] = useState(retomarEm > 5);
+
+  const assistidoMsRef = useRef(0);
+  const ultimoTickRef = useRef(0);
+  const salvoAteRef = useRef(0);
+  const ocultarRef = useRef<number | null>(null);
+
+  // ---------------------------------------------------------------- mídia
+  useEffect(() => {
+    let cancelado = false;
+    setEstado({ nome: "carregando" });
+
+    fetch(`/api/midia/${episodio.id}`)
+      .then(async (resposta) => {
+        const dados = await resposta.json().catch(() => null);
+        if (cancelado) return;
+
+        if (resposta.ok && dados?.fonte) {
+          setEstado({ nome: "pronto", fonte: dados.fonte });
+          return;
+        }
+        if (resposta.status === 401 || resposta.status === 402) {
+          setEstado({
+            nome: "bloqueado",
+            motivo: dados?.motivo ?? "needs-subscription",
+            mensagem: dados?.erro ?? "Este episódio é do Plantão Premium.",
+          });
+          return;
+        }
+        setEstado({
+          nome: "erro",
+          mensagem: dados?.erro ?? "Não consegui carregar este episódio.",
+        });
+      })
+      .catch(() => {
+        if (!cancelado) {
+          setEstado({
+            nome: "erro",
+            mensagem: "Sem conexão com o servidor de vídeo.",
+          });
+        }
+      });
+
+    return () => {
+      cancelado = true;
+    };
+  }, [episodio.id]);
+
+  // ------------------------------------------------------------- progresso
+  const enviarProgresso = useCallback(
+    (opcoes: { completo?: boolean; abandonado?: boolean; beacon?: boolean } = {}) => {
+      const video = videoRef.current;
+      const posicaoAtual = video?.currentTime ?? posicao;
+      const duracaoAtual =
+        video && Number.isFinite(video.duration) && video.duration > 0
+          ? video.duration
+          : duracao;
+
+      const deltaMs = Math.round(assistidoMsRef.current);
+      if (
+        deltaMs === 0 &&
+        !opcoes.completo &&
+        Math.abs(posicaoAtual - salvoAteRef.current) < 1
+      ) {
+        return;
+      }
+      assistidoMsRef.current = 0;
+      salvoAteRef.current = posicaoAtual;
+
+      const corpo = JSON.stringify({
+        episodeId: episodio.id,
+        positionSec: posicaoAtual,
+        durationSec: duracaoAtual,
+        deltaMs,
+        completed: opcoes.completo,
+        abandoned: opcoes.abandonado,
+        sessionId: sessionId(),
+      });
+
+      if (opcoes.beacon && navigator.sendBeacon) {
+        navigator.sendBeacon(
+          "/api/progresso",
+          new Blob([corpo], { type: "application/json" }),
+        );
+        return;
+      }
+      void fetch("/api/progresso", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: corpo,
+        keepalive: true,
+      }).catch(() => {});
+    },
+    [duracao, episodio.id, posicao, sessionId],
+  );
+
+  useEffect(() => {
+    const salvar = window.setInterval(() => {
+      if (videoRef.current && !videoRef.current.paused) enviarProgresso();
+    }, INTERVALO_SALVAR_MS);
+
+    const aoSair = () => enviarProgresso({ abandonado: true, beacon: true });
+    window.addEventListener("pagehide", aoSair);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") aoSair();
+    });
+
+    return () => {
+      window.clearInterval(salvar);
+      window.removeEventListener("pagehide", aoSair);
+      enviarProgresso({ abandonado: true });
+    };
+  }, [enviarProgresso]);
+
+  // ------------------------------------------------------------- controles
+  const agendarOcultar = useCallback(() => {
+    if (ocultarRef.current) window.clearTimeout(ocultarRef.current);
+    ocultarRef.current = window.setTimeout(() => {
+      if (videoRef.current && !videoRef.current.paused) setControles(false);
+    }, OCULTAR_CONTROLES_MS);
+  }, []);
+
+  const mostrarControles = useCallback(() => {
+    setControles(true);
+    agendarOcultar();
+  }, [agendarOcultar]);
+
+  const alternarPlay = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      void video.play().catch(() => {});
+    } else {
+      video.pause();
+    }
+    mostrarControles();
+  }, [mostrarControles]);
+
+  const pular = useCallback(
+    (segundos: number) => {
+      const video = videoRef.current;
+      if (!video) return;
+      video.currentTime = Math.max(
+        0,
+        Math.min(video.duration || duracao, video.currentTime + segundos),
+      );
+      track("PLAY_SEEK", {
+        episodeId: episodio.id,
+        novelaId: episodio.novela.id,
+        payload: { segundos },
+      });
+      mostrarControles();
+    },
+    [duracao, episodio.id, episodio.novela.id, mostrarControles, track],
+  );
+
+  // Teclado, para quem estiver no computador.
+  useEffect(() => {
+    const aoTeclar = (evento: KeyboardEvent) => {
+      if (evento.target instanceof HTMLInputElement) return;
+      if (evento.code === "Space" || evento.code === "KeyK") {
+        evento.preventDefault();
+        alternarPlay();
+      }
+      if (evento.code === "ArrowRight") pular(10);
+      if (evento.code === "ArrowLeft") pular(-10);
+      if (evento.code === "KeyM") setMudo((v) => !v);
+      if (evento.code === "Escape") router.back();
+    };
+    window.addEventListener("keydown", aoTeclar);
+    return () => window.removeEventListener("keydown", aoTeclar);
+  }, [alternarPlay, pular, router]);
+
+  // ------------------------------------------------------- autoplay do próximo
+  useEffect(() => {
+    if (contagem === null) return;
+    if (contagem <= 0) {
+      if (proximo) router.replace(`/assistir/${proximo.id}`);
+      return;
+    }
+    const timer = window.setTimeout(() => setContagem((v) => (v ?? 1) - 1), 1000);
+    return () => window.clearTimeout(timer);
+  }, [contagem, proximo, router]);
+
+  // ------------------------------------------------------------------ vídeo
+  const aoCarregarMetadados = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (Number.isFinite(video.duration) && video.duration > 0) {
+      setDuracao(video.duration);
+    }
+    if (retomarEm > 0 && retomarEm < video.duration - 2) {
+      video.currentTime = retomarEm;
+    }
+    void video.play().catch(() => {
+      // Autoplay barrado: o cartaz e o botão grande resolvem.
+      setTocando(false);
+      setControles(true);
+    });
+  };
+
+  const aoAtualizarTempo = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    const agora = performance.now();
+    if (!video.paused && ultimoTickRef.current > 0) {
+      assistidoMsRef.current += Math.min(agora - ultimoTickRef.current, 2000);
+    }
+    ultimoTickRef.current = agora;
+    setPosicao(video.currentTime);
+  };
+
+  const progresso = duracao > 0 ? (posicao / duracao) * 100 : 0;
+
+  // ---------------------------------------------------------------- telas
+  if (estado.nome === "bloqueado") {
+    return (
+      <TelaMensagem
+        episodio={episodio}
+        titulo={
+          estado.motivo === "needs-account"
+            ? "Entre para continuar assistindo"
+            : "Este episódio é do Plantão Premium"
+        }
+        texto={
+          estado.motivo === "needs-account"
+            ? "Sua conta guarda o progresso e libera os episódios."
+            : "Assine para desbloquear a novela inteira, sem espera entre episódios."
+        }
+        icone={<IconeCadeado tamanho={26} />}
+        acao={
+          estado.motivo === "needs-account" ? (
+            <Link
+              href="/entrar"
+              className="tap flex h-13 items-center justify-center rounded-2xl bg-cream-50 px-7 text-[0.9375rem] font-bold text-ink-950"
+            >
+              Entrar
+            </Link>
+          ) : (
+            <Link
+              href="/perfil/assinatura"
+              className="tap flex h-13 items-center justify-center rounded-2xl bg-gold-400 px-7 text-[0.9375rem] font-bold text-ink-950"
+            >
+              Conhecer o Premium
+            </Link>
+          )
+        }
+      />
+    );
+  }
+
+  if (estado.nome === "erro") {
+    return (
+      <TelaMensagem
+        episodio={episodio}
+        titulo="Não deu para tocar agora"
+        texto={estado.mensagem}
+        acao={
+          <button
+            type="button"
+            onClick={() => router.refresh()}
+            className="tap flex h-13 items-center justify-center rounded-2xl bg-cream-50 px-7 text-[0.9375rem] font-bold text-ink-950"
+          >
+            Tentar de novo
+          </button>
+        }
+      />
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] bg-black">
+      {estado.nome === "pronto" ? (
+        <video
+          ref={videoRef}
+          src={estado.fonte.url}
+          poster={estado.fonte.poster ?? episodio.capaUrl}
+          playsInline
+          muted={mudo}
+          preload="metadata"
+          className="size-full object-contain"
+          onLoadedMetadata={aoCarregarMetadados}
+          onTimeUpdate={aoAtualizarTempo}
+          onWaiting={() => setBufferando(true)}
+          onPlaying={() => {
+            setBufferando(false);
+            setTocando(true);
+            ultimoTickRef.current = performance.now();
+            agendarOcultar();
+          }}
+          onPlay={() => {
+            setTocando(true);
+            track("PLAY_START", {
+              episodeId: episodio.id,
+              novelaId: episodio.novela.id,
+            });
+          }}
+          onPause={() => {
+            setTocando(false);
+            setControles(true);
+            enviarProgresso();
+            track("PLAY_PAUSE", {
+              episodeId: episodio.id,
+              novelaId: episodio.novela.id,
+              valueMs: Math.round(posicao * 1000),
+            });
+          }}
+          onEnded={() => {
+            setTocando(false);
+            setControles(true);
+            enviarProgresso({ completo: true });
+            track("PLAY_COMPLETE", {
+              episodeId: episodio.id,
+              novelaId: episodio.novela.id,
+            });
+            if (proximo) setContagem(autoplay ? 5 : null);
+          }}
+          onError={() => {
+            track("PLAY_ERROR", {
+              episodeId: episodio.id,
+              novelaId: episodio.novela.id,
+            });
+            setEstado({
+              nome: "erro",
+              mensagem:
+                "O arquivo deste episódio não respondeu. Se você está rodando a demonstração, gere a mídia com “npm run midia:demo”.",
+            });
+          }}
+        />
+      ) : (
+        <div className="grid size-full place-items-center">
+          <span
+            aria-hidden
+            className="size-9 animate-spin rounded-full border-2 border-white/25 border-t-white"
+          />
+          <span className="sr-only">Carregando episódio</span>
+        </div>
+      )}
+
+      {/* Camada de toque: um toque mostra/esconde, toque duplo pula. */}
+      <button
+        type="button"
+        aria-label={controles ? "Esconder controles" : "Mostrar controles"}
+        onClick={() => (controles ? setControles(false) : mostrarControles())}
+        onDoubleClick={(evento) => {
+          const meio = evento.currentTarget.clientWidth / 2;
+          pular(evento.nativeEvent.offsetX > meio ? 10 : -10);
+        }}
+        className="absolute inset-0 cursor-default"
+      />
+
+      {bufferando && estado.nome === "pronto" ? (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute left-1/2 top-1/2 size-9 -translate-x-1/2 -translate-y-1/2 animate-spin rounded-full border-2 border-white/25 border-t-white"
+        />
+      ) : null}
+
+      {/* Aviso de retomada ------------------------------------------------ */}
+      <AnimatePresence>
+        {avisoRetomada && estado.nome === "pronto" ? (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            className="pointer-events-none absolute inset-x-0 flex justify-center"
+            style={{ top: "calc(var(--safe-t) + 4.5rem)" }}
+            onAnimationComplete={() => {
+              window.setTimeout(() => setAvisoRetomada(false), 3000);
+            }}
+          >
+            <span className="rounded-full bg-black/65 px-3.5 py-2 text-[0.8125rem] font-medium text-white backdrop-blur-sm">
+              Retomando de {formatClock(retomarEm)}
+            </span>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
+      {/* Controles -------------------------------------------------------- */}
+      <AnimatePresence>
+        {controles ? (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.22 }}
+            className="pointer-events-none absolute inset-0"
+          >
+            <div className="absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-black/75 to-transparent" />
+            <div className="absolute inset-x-0 bottom-0 h-52 bg-gradient-to-t from-black/85 to-transparent" />
+
+            <div
+              className="pointer-events-auto absolute inset-x-0 top-0 flex items-start gap-3 px-4 py-3"
+              style={{ paddingTop: "calc(var(--safe-t) + 0.75rem)" }}
+            >
+              <button
+                type="button"
+                onClick={() => router.back()}
+                aria-label="Voltar"
+                className="tap grid size-10 shrink-0 place-items-center rounded-full bg-black/45 text-white backdrop-blur-sm"
+              >
+                <IconeVoltar tamanho={20} />
+              </button>
+              <div className="min-w-0 flex-1 pt-0.5">
+                <p className="truncate text-[0.6875rem] font-bold uppercase tracking-[0.1em] text-gold-400">
+                  T{episodio.temporada} · Episódio {episodio.numero}
+                </p>
+                <p className="truncate font-display text-[1.0625rem] font-semibold leading-tight text-white">
+                  {episodio.titulo}
+                </p>
+                <Link
+                  href={`/novela/${episodio.novela.slug}`}
+                  className="truncate text-[0.75rem] text-white/65"
+                >
+                  {episodio.novela.titulo}
+                </Link>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMudo((v) => !v)}
+                aria-label={mudo ? "Ativar som" : "Silenciar"}
+                className="tap grid size-10 shrink-0 place-items-center rounded-full bg-black/45 text-white backdrop-blur-sm"
+              >
+                <IconeVolume tamanho={19} mudo={mudo} />
+              </button>
+            </div>
+
+            <div className="pointer-events-auto absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-7">
+              <button
+                type="button"
+                onClick={() => pular(-10)}
+                aria-label="Voltar 10 segundos"
+                className="tap text-[0.8125rem] font-bold text-white/85"
+              >
+                −10s
+              </button>
+              <button
+                type="button"
+                onClick={alternarPlay}
+                aria-label={tocando ? "Pausar" : "Tocar"}
+                className="tap grid size-16 place-items-center rounded-full bg-white/95 text-ink-950 shadow-lift"
+              >
+                {tocando ? (
+                  <IconePausa tamanho={26} />
+                ) : (
+                  <IconePlay tamanho={26} className="ml-0.5" />
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => pular(10)}
+                aria-label="Avançar 10 segundos"
+                className="tap text-[0.8125rem] font-bold text-white/85"
+              >
+                +10s
+              </button>
+            </div>
+
+            <div
+              className="pointer-events-auto absolute inset-x-0 bottom-0 px-5 pb-5"
+              style={{ paddingBottom: "calc(var(--safe-b) + 1.25rem)" }}
+            >
+              <input
+                type="range"
+                min={0}
+                max={Math.max(1, Math.round(duracao))}
+                value={Math.round(posicao)}
+                aria-label="Posição no episódio"
+                onChange={(evento) => {
+                  const valor = Number(evento.target.value);
+                  setPosicao(valor);
+                  if (videoRef.current) videoRef.current.currentTime = valor;
+                  mostrarControles();
+                }}
+                className="w-full accent-rose-500"
+                style={{
+                  background: `linear-gradient(to right, ${episodio.novela.accent} ${progresso}%, rgb(255 255 255 / 0.25) ${progresso}%)`,
+                  height: "0.25rem",
+                  borderRadius: "999px",
+                  appearance: "none",
+                }}
+              />
+              <div className="mt-2 flex items-center justify-between text-[0.75rem] font-medium text-white/75">
+                <span>{formatClock(posicao)}</span>
+                <div className="flex items-center gap-3">
+                  {proximo ? (
+                    <Link
+                      href={`/assistir/${proximo.id}`}
+                      className="tap flex items-center gap-1.5 font-semibold text-white"
+                    >
+                      <IconeProximo tamanho={16} />
+                      Próximo
+                    </Link>
+                  ) : null}
+                  <span>{formatClock(duracao)}</span>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
+      {/* Fim do episódio -------------------------------------------------- */}
+      <AnimatePresence>
+        {contagem !== null && proximo ? (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 grid place-items-center bg-ink-950/92 px-7 text-center backdrop-blur-sm"
+          >
+            <div>
+              <p className="eyebrow">A seguir</p>
+              <div
+                className="mx-auto mt-4 w-44 overflow-hidden rounded-card border border-white/10"
+                style={{ aspectRatio: "16 / 9" }}
+              >
+                <img src={proximo.capaUrl} alt="" className="size-full object-cover" />
+              </div>
+              <h2 className="mt-4 text-[1.375rem] leading-tight">
+                {proximo.titulo}
+              </h2>
+              <p className="mt-1 text-[0.8125rem] text-cream-400">
+                T{proximo.temporada} · Episódio {proximo.numero}
+              </p>
+              <div className="mt-6 flex flex-col gap-2.5">
+                <Link
+                  href={`/assistir/${proximo.id}`}
+                  className="tap flex h-13 items-center justify-center gap-2 rounded-2xl bg-cream-50 text-[0.9375rem] font-bold text-ink-950"
+                >
+                  <IconePlay tamanho={16} />
+                  Assistir agora ({contagem})
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => setContagem(null)}
+                  className="tap flex h-13 items-center justify-center rounded-2xl border border-white/14 bg-white/6 text-[0.9375rem] font-semibold text-cream-200"
+                >
+                  Ficar aqui
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function TelaMensagem({
+  episodio,
+  titulo,
+  texto,
+  acao,
+  icone,
+}: {
+  episodio: EpisodioPlayer;
+  titulo: string;
+  texto: string;
+  acao: React.ReactNode;
+  icone?: React.ReactNode;
+}) {
+  return (
+    <div className="fixed inset-0 z-[60] overflow-hidden bg-ink-950">
+      <img
+        src={episodio.capaUrl}
+        alt=""
+        className="absolute inset-0 size-full object-cover opacity-25 blur-xl"
+      />
+      <div className="absolute inset-0 bg-gradient-to-t from-ink-950 via-ink-950/85 to-ink-950/60" />
+
+      <div
+        className="relative flex h-full flex-col items-center justify-center px-8 text-center"
+        style={{ paddingBottom: "calc(var(--safe-b) + 2rem)" }}
+      >
+        {icone ? (
+          <span className="mb-5 grid size-14 place-items-center rounded-2xl bg-gold-400/15 text-gold-400">
+            {icone}
+          </span>
+        ) : null}
+        <p className="eyebrow">
+          T{episodio.temporada} · Episódio {episodio.numero}
+        </p>
+        <h1 className="mt-2 text-[1.625rem] leading-tight text-balance-pt">
+          {titulo}
+        </h1>
+        <p className="selectable mt-2.5 max-w-[22rem] text-[0.9375rem] leading-relaxed text-cream-400">
+          {texto}
+        </p>
+        <div className="mt-7 flex flex-col items-stretch gap-2.5">
+          {acao}
+          <Link
+            href={`/novela/${episodio.novela.slug}`}
+            className="tap flex h-13 items-center justify-center rounded-2xl border border-white/14 bg-white/6 px-7 text-[0.9375rem] font-semibold text-cream-200"
+          >
+            Voltar para a novela
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}

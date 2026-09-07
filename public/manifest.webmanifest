@@ -1,0 +1,26 @@
+{
+  "name": "Noveleiras de Plantão",
+  "short_name": "Plantão",
+  "description": "Novelas verticais brasileiras em episódios curtos: romance, vingança, herança e comunidade.",
+  "lang": "pt-BR",
+  "dir": "ltr",
+  "start_url": "/inicio",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait",
+  "background_color": "#130810",
+  "theme_color": "#130810",
+  "categories": ["entertainment", "lifestyle"],
+  "icons": [
+    { "src": "/icones/icone.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icones/icone-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icones/icone-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icones/icone-mascara-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Continuar assistindo", "url": "/inicio", "description": "Retomar de onde você parou" },
+    { "name": "Buscar", "url": "/buscar", "description": "Procurar uma novela" },
+    { "name": "Minha lista", "url": "/minha-lista", "description": "Suas novelas guardadas" }
+  ]
+}

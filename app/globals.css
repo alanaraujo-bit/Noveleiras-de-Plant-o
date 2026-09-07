@@ -1,0 +1,318 @@
+@import "tailwindcss";
+
+/* ==========================================================================
+   Noveleiras de Plantão — sistema visual
+   Noite quente de novela: base vinho-tinta, carmim de folhetim, ouro editorial.
+   ========================================================================== */
+
+@theme {
+  /* base — nunca preto puro: tinta com fundo vinho */
+  --color-ink-950: #130810;
+  --color-ink-900: #1a0c15;
+  --color-ink-850: #21101b;
+  --color-ink-800: #2a1523;
+  --color-ink-750: #331a2a;
+  --color-ink-700: #3f2133;
+
+  /* tinta clara */
+  --color-cream-50: #fcf3ee;
+  --color-cream-200: #ecd8dd;
+  --color-cream-400: #cdaab5;
+  --color-cream-600: #9d7f8b;
+
+  /* carmim */
+  --color-rose-700: #a01f45;
+  --color-rose-600: #c42a55;
+  --color-rose-500: #e03a69;
+  --color-rose-400: #f2648c;
+  --color-rose-300: #ff9ab3;
+
+  /* ouro editorial */
+  --color-gold-500: #d9a355;
+  --color-gold-400: #e9bd78;
+  --color-gold-300: #f4d9a8;
+
+  --color-jade-400: #5fc79b;
+
+  --font-display: var(--font-fraunces), Georgia, "Times New Roman", serif;
+  --font-sans: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
+
+  --radius-card: 1.25rem;
+  --radius-panel: 1.75rem;
+  --radius-sheet: 2rem;
+
+  --shadow-lift: 0 1.125rem 2.5rem -1.125rem rgb(0 0 0 / 0.8);
+  --shadow-poster: 0 0.875rem 2rem -0.75rem rgb(0 0 0 / 0.7);
+
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+:root {
+  color-scheme: dark;
+  --bg: var(--color-ink-950);
+  --surface: var(--color-ink-850);
+  --elevated: var(--color-ink-800);
+  --line: rgb(255 255 255 / 0.07);
+  --line-strong: rgb(255 255 255 / 0.13);
+  --text: var(--color-cream-50);
+  --muted: var(--color-cream-400);
+  --faint: var(--color-cream-600);
+  --accent: var(--color-rose-500);
+
+  /* alturas de cromo do app — usadas para padding de conteúdo */
+  --tabbar-h: 4.125rem;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-t: env(safe-area-inset-top, 0px);
+}
+
+/* --------------------------------------------------- comportamento nativo */
+
+* {
+  scrollbar-width: none;
+  -webkit-tap-highlight-color: transparent;
+}
+*::-webkit-scrollbar {
+  display: none;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  touch-action: manipulation;
+  overscroll-behavior: none;
+  scroll-behavior: smooth;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  line-height: 1.5;
+  overscroll-behavior: none;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* interface não se seleciona; conteúdo textual reativa via .selectable */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+input,
+textarea,
+select,
+[contenteditable="true"],
+.selectable {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+button,
+[role="button"],
+a {
+  -webkit-user-drag: none;
+}
+
+img {
+  max-width: 100%;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+/* grão: dá textura de impressão sem sujar a tela */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  pointer-events: none;
+  opacity: 0.035;
+  mix-blend-mode: soft-light;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+::selection {
+  background: var(--color-rose-600);
+  color: var(--color-cream-50);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-rose-400);
+  outline-offset: 2px;
+  border-radius: 0.375rem;
+}
+
+/* --------------------------------------------------------------- tipografia */
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.12;
+  margin: 0;
+  font-variation-settings: "SOFT" 30, "WONK" 1;
+}
+
+/* --------------------------------------------------------------- utilitários */
+
+@utility text-balance-pt {
+  text-wrap: balance;
+}
+
+@utility tap {
+  position: relative;
+  transition: transform 0.16s var(--ease-out-soft), opacity 0.16s ease;
+  &:active {
+    transform: scale(0.965);
+    opacity: 0.9;
+  }
+}
+
+@utility hairline {
+  border: 1px solid var(--line);
+}
+
+@utility surface-card {
+  background: linear-gradient(
+    168deg,
+    color-mix(in oklab, var(--elevated) 92%, white) 0%,
+    var(--surface) 100%
+  );
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-lift);
+}
+
+@utility eyebrow {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-gold-400);
+}
+
+@utility no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+@utility rail {
+  display: flex;
+  gap: 0.75rem;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+  padding-inline: 1.25rem;
+  scroll-padding-inline-start: 1.25rem;
+}
+
+@utility rail-item {
+  scroll-snap-align: start;
+  flex: 0 0 auto;
+}
+
+/* glow quente atrás de heróis e capas em destaque */
+@utility warm-glow {
+  position: relative;
+  &::before {
+    content: "";
+    position: absolute;
+    inset: -20% -10% auto;
+    height: 60%;
+    background: radial-gradient(
+      60% 100% at 50% 0%,
+      color-mix(in oklab, var(--accent) 40%, transparent),
+      transparent 70%
+    );
+    filter: blur(2.5rem);
+    pointer-events: none;
+    z-index: 0;
+  }
+}
+
+/* ------------------------------------------------------------- animações */
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 0.75rem, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes pulse-soft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@utility animate-rise {
+  animation: rise 0.5s var(--ease-out-soft) both;
+}
+
+@utility animate-fade {
+  animation: fade 0.35s ease both;
+}
+
+/* esqueleto de carregamento com brilho que percorre */
+@utility skeleton {
+  position: relative;
+  overflow: hidden;
+  background: color-mix(in oklab, var(--surface) 80%, white 4%);
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgb(255 255 255 / 0.06),
+      transparent
+    );
+    animation: shimmer 1.6s infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

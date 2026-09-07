@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Sem conexão · Noveleiras de Plantão</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100dvh;
+        display: grid;
+        place-items: center;
+        padding: 2rem;
+        text-align: center;
+        background:
+          radial-gradient(120% 70% at 50% 0%, #3d1226 0%, #21101b 45%, #130810 100%);
+        color: #fcf3ee;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      .marca {
+        font-size: 0.6875rem;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: #e9bd78;
+      }
+      h1 {
+        margin: 0.75rem 0 0;
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 1.875rem;
+        line-height: 1.1;
+        font-weight: 600;
+      }
+      p {
+        margin: 0.75rem auto 0;
+        max-width: 22rem;
+        font-size: 0.9375rem;
+        line-height: 1.6;
+        color: #cdaab5;
+      }
+      button {
+        margin-top: 1.75rem;
+        height: 3.25rem;
+        padding: 0 1.75rem;
+        border: 0;
+        border-radius: 1rem;
+        background: #c42a55;
+        color: #fcf3ee;
+        font-size: 0.9375rem;
+        font-weight: 700;
+        font-family: inherit;
+        cursor: pointer;
+      }
+      button:active {
+        transform: scale(0.97);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="marca">Noveleiras de Plantão</p>
+      <h1>O plantão caiu por um instante</h1>
+      <p>
+        Seu aparelho está sem conexão. O progresso que você já tinha continua
+        guardado — assim que a internet voltar, é só continuar de onde parou.
+      </p>
+      <button type="button" onclick="location.reload()">Tentar de novo</button>
+    </main>
+  </body>
+</html>
