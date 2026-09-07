@@ -70,6 +70,13 @@ export type NovelaNoDisco = {
   /** Capa real, relativa à raiz. `null` = arte gerada. */
   capaChave: string | null;
   /**
+   * Trailer real, relativo à raiz. `null` quando a novela não tem um.
+   *
+   * Segue a mesma regra da capa: manifesto promete, disco prova. Um trailer
+   * declarado cujo arquivo não veio vira `null`, e não um botão que dá 404.
+   */
+  trailerChave: string | null;
+  /**
    * Temas da origem, sem tradução.
    *
    * Viram gênero por decisão de quem edita, no painel — nunca sozinhos: o
@@ -108,8 +115,14 @@ const PRECISA_CONVERTER = /\.(ts|mts|m2ts|mkv)$/i;
  * Um `.part` no meio da biblioteca é um download em curso, não um episódio.
  * Catalogá-lo criaria um episódio quebrado que se conserta sozinho depois —
  * e um alerta falso é pior que nenhum alerta.
+ *
+ * O sufixo intermediário vem antes da extensão final, e é aí que mora a
+ * armadilha: `Novela - E01.parcial.mp4` termina em `.mp4` e carrega um número
+ * de episódio válido. Sem a alternativa do meio, ele entrava no catálogo como
+ * se fosse o episódio pronto.
  */
-const INCOMPLETO = /\.(part|parcial|crdownload|tmp|!ut)$|\.part\./i;
+const INCOMPLETO =
+  /\.(part|parcial|crdownload|tmp|!ut)$|\.(part|parcial|tmp|crdownload)\./i;
 
 export function precisaDeConversao(arquivo: string): boolean {
   return PRECISA_CONVERTER.test(arquivo);
@@ -159,6 +172,13 @@ type Manifesto = {
   description?: string;
   /** Caminho relativo à pasta da novela. */
   poster?: string;
+  /**
+   * Vídeo de apresentação, relativo à pasta (`trailer.mp4`).
+   *
+   * Opcional de verdade: a maioria das novelas não tem um, e o catálogo
+   * precisa continuar funcionando sem ele.
+   */
+  trailer?: string;
   totalDurationSec?: number;
   themes?: { key?: string; value?: string }[];
   episodes?: Record<
@@ -277,6 +297,29 @@ export async function lerBiblioteca(raiz: string): Promise<NovelaNoDisco[]> {
       return null;
     };
 
+    /**
+     * O trailer, provado no disco.
+     *
+     * Não usa `arteNoDisco` porque aquilo consulta o índice de imagens; aqui o
+     * arquivo é vídeo. Um intermediário de download não conta: `INCOMPLETO`
+     * barra o `trailer.parcial.mp4` que uma conversão interrompida deixou.
+     */
+    const trailerNoDisco = (): string | null => {
+      const candidatos = [manifesto?.trailer, "trailer.mp4"];
+      for (const candidato of candidatos) {
+        if (!candidato) continue;
+        const limpo = candidato.replace(/^\.?[\\/]+/, "").replace(/\\/g, "/");
+        if (limpo.includes("/") || !VIDEO.test(limpo) || INCOMPLETO.test(limpo)) {
+          continue;
+        }
+        const existe = arquivos.some(
+          (a) => a.isFile() && a.name.toLowerCase() === limpo.toLowerCase(),
+        );
+        if (existe) return `${entrada.name}/${limpo}`;
+      }
+      return null;
+    };
+
     const episodios: EpisodioNoDisco[] = [];
     const ignorados: string[] = [];
 
@@ -354,6 +397,7 @@ export async function lerBiblioteca(raiz: string): Promise<NovelaNoDisco[]> {
       origem: manifesto?.dramaID ?? null,
       sinopse: manifesto?.description?.trim() || null,
       capaChave: arteNoDisco(manifesto?.poster, "poster.jpg"),
+      trailerChave: trailerNoDisco(),
       temas: (manifesto?.themes ?? [])
         .map((tema) => ({
           chave: tema?.key?.trim() ?? "",

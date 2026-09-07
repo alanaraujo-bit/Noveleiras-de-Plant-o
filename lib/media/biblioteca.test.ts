@@ -322,6 +322,90 @@ describe("lerBiblioteca", () => {
     expect(novela.episodios).toHaveLength(1);
     expect(novela.ignorados).toEqual([]);
   });
+
+  // ------------------------------------------------------------- trailer
+
+  it("publica o trailer quando o manifesto o declara e o arquivo existe", async () => {
+    await montar(
+      "Como domar um coroa",
+      {
+        "Como domar um coroa - E01.mp4": "v",
+        "trailer.mp4": "v",
+        "poster.jpg": "img",
+      },
+      { dramaName: "Como domar um coroa", trailer: "trailer.mp4" },
+    );
+
+    const [novela] = await lerBiblioteca(raiz);
+    expect(novela.trailerChave).toBe("Como domar um coroa/trailer.mp4");
+  });
+
+  it("acha o trailer pelo nome de convencao mesmo sem o manifesto declarar", async () => {
+    await montar(
+      "Sem Declaracao",
+      { "Sem Declaracao - E01.mp4": "v", "trailer.mp4": "v" },
+      { dramaName: "Sem Declaracao" },
+    );
+
+    const [novela] = await lerBiblioteca(raiz);
+    expect(novela.trailerChave).toBe("Sem Declaracao/trailer.mp4");
+  });
+
+  it("novela sem trailer continua funcionando, com a chave nula", async () => {
+    await montar(
+      "Sem Trailer",
+      { "Sem Trailer - E01.mp4": "v", "poster.jpg": "img" },
+      { dramaName: "Sem Trailer" },
+    );
+
+    const [novela] = await lerBiblioteca(raiz);
+    expect(novela.trailerChave).toBeNull();
+    expect(novela.episodios).toHaveLength(1);
+  });
+
+  // Manifesto promete, disco prova. Um trailer declarado cujo arquivo nao veio
+  // viraria um botao que da 404 na cara de quem clica.
+  it("recusa o trailer declarado que nao esta no disco", async () => {
+    await montar(
+      "Trailer Fantasma",
+      { "Trailer Fantasma - E01.mp4": "v" },
+      { dramaName: "Trailer Fantasma", trailer: "trailer.mp4" },
+    );
+
+    const [novela] = await lerBiblioteca(raiz);
+    expect(novela.trailerChave).toBeNull();
+  });
+
+  // O intermediario do remux termina em `.mp4` e engana quem olha so a
+  // extensao. Nem vira trailer, nem vira episodio.
+  it("nao aceita intermediario de download como trailer nem como episodio", async () => {
+    await montar(
+      "Em Conversao",
+      {
+        "Em Conversao - E01.mp4": "v",
+        "trailer.parcial.mp4": "v",
+        "Em Conversao - E02.parcial.mp4": "v",
+      },
+      { dramaName: "Em Conversao", trailer: "trailer.parcial.mp4" },
+    );
+
+    const [novela] = await lerBiblioteca(raiz);
+    expect(novela.trailerChave).toBeNull();
+    expect(novela.episodios.map((e) => e.numero)).toEqual([1]);
+  });
+
+  // Caminho com barra sairia da pasta da novela; a chave e sempre local.
+  it("recusa trailer apontando para fora da pasta", async () => {
+    await montar(
+      "Escapista",
+      { "Escapista - E01.mp4": "v", "trailer.mp4": "v" },
+      { dramaName: "Escapista", trailer: "../outra/trailer.mp4" },
+    );
+
+    const [novela] = await lerBiblioteca(raiz);
+    // Cai no nome de convencao, que e local e existe.
+    expect(novela.trailerChave).toBe("Escapista/trailer.mp4");
+  });
 });
 
 describe("dataDaEstreia", () => {

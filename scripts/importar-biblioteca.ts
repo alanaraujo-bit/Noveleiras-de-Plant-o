@@ -136,6 +136,9 @@ async function main() {
       posterKey: novela.capaChave ?? `gen:capa/${slug}`,
       heroKey: novela.capaChave ?? `gen:hero/${slug}`,
       accent: corDoTitulo(novela.titulo),
+      // Só entra quando o arquivo foi provado no disco. `null` é a resposta
+      // honesta para novela sem trailer, e é o que some com a ação na página.
+      trailerKey: novela.trailerChave,
       tags,
       searchText: textoDeBusca(novela.titulo, sinopse, tags.join(" ")),
       editorialNote: novela.origem
@@ -170,6 +173,9 @@ async function main() {
         ...(novela.capaChave && heroEhGerado
           ? { heroKey: novela.capaChave }
           : {}),
+        // Trailer que apareceu no disco entra; trailer que sumiu do disco sai.
+        // Reimportar é o que reconcilia o banco com a pasta, nos dois sentidos.
+        trailerKey: novela.trailerChave,
         ...(sinopse && sinopseVazia ? { synopsis: sinopse } : {}),
         ...(tags.length && !existente?.tags.length ? { tags } : {}),
       },

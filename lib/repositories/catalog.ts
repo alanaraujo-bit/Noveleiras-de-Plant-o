@@ -1,7 +1,11 @@
 import "server-only";
 
 import { db } from "@/lib/db";
-import { posterUrl } from "@/lib/media/resolver";
+import {
+  posterUrl,
+  resolveMedia,
+  type MediaSource,
+} from "@/lib/media/resolver";
 import { canWatchEpisode, type Entitlement } from "@/lib/access/entitlements";
 import type { Viewer } from "@/lib/auth/session";
 import type { AccessTier, NovelaStatus, Prisma } from "@prisma/client";
@@ -240,6 +244,15 @@ export type NovelaDetail = NovelaCard & {
   seasons: SeasonItem[];
   totalEpisodes: number;
   isFavorite: boolean;
+  /**
+   * Trailer já resolvido pela camada de mídia. `null` quando a novela não tem
+   * um — e é esse `null` que faz a ação sumir da página, em vez de oferecer um
+   * botão que não toca nada.
+   *
+   * Resolvido aqui porque `trailerKey` é chave opaca: quem renderiza nunca vê
+   * caminho de disco, e trocar disco por CDN não mexe na página.
+   */
+  trailer: MediaSource | null;
   /** Próximo episódio a assistir — alimenta o botão principal. */
   resume: {
     episodeId: string;
@@ -265,6 +278,7 @@ export async function getNovelaDetail(
       cast: true,
       country: true,
       favoriteCount: true,
+      trailerKey: true,
       seasons: {
         orderBy: { number: "asc" },
         select: {
@@ -381,6 +395,19 @@ export async function getNovelaDetail(
     seasons,
     totalEpisodes: flat.length,
     isFavorite,
+    // Trailer é opcional em toda a cadeia: sem chave, não há descritor, e a
+    // página simplesmente não oferece a ação.
+    trailer: row.trailerKey
+      ? resolveMedia({
+          mediaKey: row.trailerKey,
+          // Sem provedor explicito: o trailer mora junto dos episodios, entao
+          // vale o provedor padrao do ambiente (MEDIA_PROVIDER).
+          format: "mp4",
+          // A capa serve de pôster do trailer: é a arte que a novela já tem.
+          thumbKey: row.posterKey,
+          durationSec: 0,
+        })
+      : null,
     resume: target
       ? {
           episodeId: target.id,

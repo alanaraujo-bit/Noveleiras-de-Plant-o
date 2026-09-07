@@ -8,6 +8,7 @@ import { alternarFavorito, registrarAcessoNovela } from "@/lib/actions/catalogo"
 import { useToast } from "@/components/sistema/ToastProvider";
 import { useTelemetry } from "@/components/sistema/TelemetryProvider";
 import { BarraProgresso, Selo } from "@/components/ui/primitivos";
+import { PlayerTrailer } from "@/components/novela/PlayerTrailer";
 import {
   IconeCadeado,
   IconeCheck,
@@ -38,6 +39,9 @@ export function PainelNovela({
     novela.resume?.seasonNumber ?? novela.seasons[0]?.number ?? 1,
   );
   const [sinopseAberta, setSinopseAberta] = useState(false);
+  // O trailer abre sobre a página, e não na rota `/assistir`: aquela rota é a
+  // que registra progresso de episódio, e trailer não é episódio.
+  const [trailerAberto, setTrailerAberto] = useState(false);
   const [salvando, iniciar] = useTransition();
 
   useEffect(() => {
@@ -203,6 +207,33 @@ export function PainelNovela({
           )}
         </button>
       </div>
+
+      {/* Trailer ---------------------------------------------------------
+          Some por completo quando não há: um botão desabilitado anunciaria
+          um recurso que esta novela não tem. */}
+      {novela.trailer ? (
+        <div className="mt-2.5 px-5">
+          <button
+            type="button"
+            onClick={() => setTrailerAberto(true)}
+            aria-haspopup="dialog"
+            className="tap flex h-11 w-full items-center justify-center gap-2 rounded-2xl border border-white/12 bg-white/6 text-[0.875rem] font-semibold text-cream-200"
+          >
+            <IconePlay tamanho={14} />
+            Assistir trailer
+          </button>
+        </div>
+      ) : null}
+
+      {novela.trailer ? (
+        <PlayerTrailer
+          aberto={trailerAberto}
+          aoFechar={() => setTrailerAberto(false)}
+          url={novela.trailer.url}
+          poster={novela.trailer.poster}
+          titulo={novela.title}
+        />
+      ) : null}
 
       {/* Sinopse --------------------------------------------------------- */}
       <div className="mt-6 px-5">

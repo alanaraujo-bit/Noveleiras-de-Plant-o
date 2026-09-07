@@ -114,3 +114,34 @@ describe("chaves com nome real de biblioteca", () => {
     expect(fonte.url).toBe("/media/A%20Novela/E01.mp4");
   });
 });
+
+describe("trailer", () => {
+  // O trailer é um arquivo como qualquer outro na pasta da novela: passa pela
+  // mesma resolução, e trocar disco por CDN não exige código novo.
+  it("resolve a chave do trailer pela mesma camada dos episódios", () => {
+    process.env.MEDIA_BASE_URL = "https://midia.exemplo.com";
+    const fonte = resolveMedia({
+      mediaKey: "Como domar um coroa/trailer.mp4",
+      format: "mp4",
+      thumbKey: "Como domar um coroa/poster.jpg",
+    });
+    expect(fonte.url).toBe(
+      "https://midia.exemplo.com/Como%20domar%20um%20coroa/trailer.mp4",
+    );
+    expect(fonte.kind).toBe("mp4");
+    expect(fonte.poster).toBe(
+      "https://midia.exemplo.com/Como%20domar%20um%20coroa/poster.jpg",
+    );
+  });
+
+  // Nenhum caminho de disco pode vazar para o cliente: a chave é relativa e a
+  // base é configuração.
+  it("não expõe caminho absoluto do computador", () => {
+    process.env.MEDIA_BASE_URL = "/media";
+    const fonte = resolveMedia({ mediaKey: "Como domar um coroa/trailer.mp4" });
+    expect(fonte.url).toBe("/media/Como%20domar%20um%20coroa/trailer.mp4");
+    // Nada de "D:\..." nem da raiz da biblioteca vazando na URL.
+    expect(fonte.url.includes(":\\")).toBe(false);
+    expect(fonte.url).not.toContain("Noveleiras de Plant");
+  });
+});

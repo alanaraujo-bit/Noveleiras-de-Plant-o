@@ -67,6 +67,13 @@ export type NovelaVarrida = {
   sinopse: string | null;
   /** Capa real no disco. `null` = arte gerada. */
   capaChave: string | null;
+  /**
+   * Trailer real no disco. `null` = a novela nao tem um.
+   *
+   * Opcional tambem no tipo: um agente mais antigo nao manda o campo, e
+   * continua importando normalmente — so sem trailer.
+   */
+  trailerChave?: string | null;
   /** Temas da origem, crus. Viram gênero por decisão de quem edita. */
   temas: { chave: string; valor: string }[];
   fonte: string | null;
@@ -145,6 +152,7 @@ export async function importarArvore(
       // estado de hoje, e não um erro.
       const sinopse = novela.sinopse ?? "";
       const capa = novela.capaChave ?? null;
+      const trailer = novela.trailerChave ?? null;
       const tags = (novela.temas ?? []).map((tema) => tema.valor);
 
       // Arte gerada dá lugar à real: é ganho, não sobrescrita. O que uma
@@ -166,6 +174,7 @@ export async function importarArvore(
           posterKey: capa ?? `gen:capa/${slug}`,
           heroKey: capa ?? `gen:hero/${slug}`,
           accent: corDoTitulo(novela.titulo),
+          trailerKey: trailer,
           tags,
           searchText: textoDeBusca(novela.titulo, sinopse, tags.join(" ")),
           editorialNote: novela.origem
@@ -184,6 +193,9 @@ export async function importarArvore(
           ),
           ...(capa && capaEhGerada ? { posterKey: capa } : {}),
           ...(capa && heroEhGerado ? { heroKey: capa } : {}),
+          // Reimportar reconcilia o banco com a pasta nos dois sentidos:
+          // trailer que apareceu entra, trailer que sumiu sai.
+          trailerKey: trailer,
           ...(sinopse && sinopseVazia ? { synopsis: sinopse } : {}),
           ...(tags.length && !existente?.tags.length ? { tags } : {}),
         },
