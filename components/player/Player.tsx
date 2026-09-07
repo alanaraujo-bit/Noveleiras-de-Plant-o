@@ -19,10 +19,12 @@ import { formatClock } from "@/lib/format";
 /**
  * Player.
  *
- * A URL do vídeo nunca vem da página: é pedida a /api/midia, que decide o
- * acesso no servidor. Por isso o player tem três destinos possíveis — tocar,
- * mostrar o paywall ou mostrar erro — e trata os três como estados de primeira
- * classe, não como exceção.
+ * A fonte do vídeo chega pronta da página, que já decidiu o acesso no servidor
+ * — o player abre tocando, sem uma ida à rede antes do primeiro quadro. A rota
+ * /api/midia continua sendo a autoridade e serve para renovar a fonte quando
+ * ela expirar (URLs assinadas de CDN, mais adiante).
+ *
+ * Tocar, paywall e erro são três estados de primeira classe, não exceções.
  *
  * O progresso é enviado com o tempo real de exibição acumulado, não com a
  * posição pura: é assim que "tempo assistido" fica honesto no painel.
@@ -46,12 +48,18 @@ type Proximo = {
   capaUrl: string;
 };
 
-type Fonte = { kind: "mp4" | "hls"; url: string; poster: string | null };
+type Fonte = {
+  kind: "mp4" | "hls";
+  url: string;
+  poster: string | null;
+  expiresAt?: string | null;
+};
+
+type Bloqueio = "needs-account" | "needs-subscription";
 
 type Estado =
-  | { nome: "carregando" }
   | { nome: "pronto"; fonte: Fonte }
-  | { nome: "bloqueado"; motivo: "needs-account" | "needs-subscription"; mensagem: string }
+  | { nome: "bloqueado"; motivo: Bloqueio }
   | { nome: "erro"; mensagem: string };
 
 const OCULTAR_CONTROLES_MS = 2800;
@@ -59,11 +67,15 @@ const INTERVALO_SALVAR_MS = 10_000;
 
 export function Player({
   episodio,
+  fonte,
+  bloqueio,
   retomarEm,
   proximo,
   autoplay,
 }: {
   episodio: EpisodioPlayer;
+  fonte: Fonte | null;
+  bloqueio: Bloqueio | null;
   retomarEm: number;
   proximo: Proximo | null;
   autoplay: boolean;
@@ -72,7 +84,11 @@ export function Player({
   const { track, sessionId } = useTelemetry();
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  const [estado, setEstado] = useState<Estado>({ nome: "carregando" });
+  const [estado, setEstado] = useState<Estado>(() =>
+    fonte
+      ? { nome: "pronto", fonte }
+      : { nome: "bloqueado", motivo: bloqueio ?? "needs-subscription" },
+  );
   const [tocando, setTocando] = useState(false);
   const [mudo, setMudo] = useState(false);
   const [posicao, setPosicao] = useState(retomarEm);
@@ -87,45 +103,39 @@ export function Player({
   const salvoAteRef = useRef(0);
   const ocultarRef = useRef<number | null>(null);
 
-  // ---------------------------------------------------------------- mídia
+  // Trocar de episódio pelo botão "próximo" reaproveita este componente:
+  // o estado precisa acompanhar a nova fonte que a página entregou.
   useEffect(() => {
-    let cancelado = false;
-    setEstado({ nome: "carregando" });
+    setEstado(
+      fonte
+        ? { nome: "pronto", fonte }
+        : { nome: "bloqueado", motivo: bloqueio ?? "needs-subscription" },
+    );
+  }, [fonte, bloqueio]);
 
-    fetch(`/api/midia/${episodio.id}`)
-      .then(async (resposta) => {
-        const dados = await resposta.json().catch(() => null);
-        if (cancelado) return;
-
-        if (resposta.ok && dados?.fonte) {
-          setEstado({ nome: "pronto", fonte: dados.fonte });
-          return;
-        }
-        if (resposta.status === 401 || resposta.status === 402) {
-          setEstado({
-            nome: "bloqueado",
-            motivo: dados?.motivo ?? "needs-subscription",
-            mensagem: dados?.erro ?? "Este episódio é do Plantão Premium.",
-          });
-          return;
-        }
+  /**
+   * Renova a fonte pela rota de mídia. Só é necessário quando a URL expira —
+   * o caminho normal já vem resolvido do servidor.
+   */
+  const renovarFonte = useCallback(async () => {
+    try {
+      const resposta = await fetch(`/api/midia/${episodio.id}`);
+      const dados = await resposta.json().catch(() => null);
+      if (resposta.ok && dados?.fonte) {
+        setEstado({ nome: "pronto", fonte: dados.fonte });
+        return true;
+      }
+      if (resposta.status === 401 || resposta.status === 402) {
         setEstado({
-          nome: "erro",
-          mensagem: dados?.erro ?? "Não consegui carregar este episódio.",
+          nome: "bloqueado",
+          motivo: dados?.motivo ?? "needs-subscription",
         });
-      })
-      .catch(() => {
-        if (!cancelado) {
-          setEstado({
-            nome: "erro",
-            mensagem: "Sem conexão com o servidor de vídeo.",
-          });
-        }
-      });
-
-    return () => {
-      cancelado = true;
-    };
+        return true;
+      }
+    } catch {
+      /* tratado por quem chamou */
+    }
+    return false;
   }, [episodio.id]);
 
   // ------------------------------------------------------------- progresso
@@ -265,21 +275,49 @@ export function Player({
   }, [contagem, proximo, router]);
 
   // ------------------------------------------------------------------ vídeo
-  const aoCarregarMetadados = () => {
+
+  /**
+   * Posiciona o vídeo onde a pessoa parou e começa a tocar.
+   *
+   * Não pode depender só do evento `loadedmetadata`: o elemento vem no HTML do
+   * servidor e o navegador pode carregar os metadados (ou tê-los em cache)
+   * antes da hidratação, engolindo o evento e reiniciando o episódio do zero.
+   * Por isso o efeito abaixo também trata o vídeo que já chegou pronto.
+   */
+  const retomadaAplicadaRef = useRef(false);
+
+  const prepararVideo = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
+
     if (Number.isFinite(video.duration) && video.duration > 0) {
       setDuracao(video.duration);
     }
-    if (retomarEm > 0 && retomarEm < video.duration - 2) {
+    if (
+      !retomadaAplicadaRef.current &&
+      retomarEm > 0 &&
+      Number.isFinite(video.duration) &&
+      retomarEm < video.duration - 2
+    ) {
+      retomadaAplicadaRef.current = true;
       video.currentTime = retomarEm;
     }
-    void video.play().catch(() => {
-      // Autoplay barrado: o cartaz e o botão grande resolvem.
-      setTocando(false);
-      setControles(true);
-    });
-  };
+    if (video.paused) {
+      void video.play().catch(() => {
+        // Autoplay barrado pelo navegador: o cartaz e o botão grande resolvem.
+        setTocando(false);
+        setControles(true);
+      });
+    }
+  }, [retomarEm]);
+
+  useEffect(() => {
+    retomadaAplicadaRef.current = false;
+    const video = videoRef.current;
+    if (!video) return;
+    // HAVE_METADATA ou mais: a duração já é conhecida, dá para posicionar.
+    if (video.readyState >= 1) prepararVideo();
+  }, [episodio.id, prepararVideo]);
 
   const aoAtualizarTempo = () => {
     const video = videoRef.current;
@@ -304,6 +342,8 @@ export function Player({
             ? "Entre para continuar assistindo"
             : "Este episódio é do Plantão Premium"
         }
+        // Um episódio bloqueado ainda mostra a arte da cena, desfocada: a
+        // pessoa vê o que está perdendo, não uma tela vazia.
         texto={
           estado.motivo === "needs-account"
             ? "Sua conta guarda o progresso e libera os episódios."
@@ -361,7 +401,7 @@ export function Player({
           muted={mudo}
           preload="metadata"
           className="size-full object-contain"
-          onLoadedMetadata={aoCarregarMetadados}
+          onLoadedMetadata={prepararVideo}
           onTimeUpdate={aoAtualizarTempo}
           onWaiting={() => setBufferando(true)}
           onPlaying={() => {
@@ -402,22 +442,18 @@ export function Player({
               episodeId: episodio.id,
               novelaId: episodio.novela.id,
             });
-            setEstado({
-              nome: "erro",
-              mensagem:
-                "O arquivo deste episódio não respondeu. Se você está rodando a demonstração, gere a mídia com “npm run midia:demo”.",
+            // Pode ser só uma URL vencida: pedimos uma nova antes de desistir.
+            void renovarFonte().then((renovou) => {
+              if (renovou) return;
+              setEstado({
+                nome: "erro",
+                mensagem:
+                  "O arquivo deste episódio não respondeu. Se você está rodando a demonstração, gere a mídia com “npm run midia:demo”.",
+              });
             });
           }}
         />
-      ) : (
-        <div className="grid size-full place-items-center">
-          <span
-            aria-hidden
-            className="size-9 animate-spin rounded-full border-2 border-white/25 border-t-white"
-          />
-          <span className="sr-only">Carregando episódio</span>
-        </div>
-      )}
+      ) : null}
 
       {/* Camada de toque: um toque mostra/esconde, toque duplo pula. */}
       <button
