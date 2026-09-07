@@ -28,7 +28,11 @@ export type ArquivoDeMidia = {
   modificadoEm: Date;
 };
 
-const EXTENSOES = new Set([".mp4", ".m4v", ".mov", ".mkv", ".webm", ".m3u8"]);
+// `.ts` é MPEG-TS: vídeo legítimo que o navegador não toca direto. Entra no
+// inventário porque existe no disco; a conversão para MP4 é outro passo.
+const EXTENSOES = new Set([
+  ".mp4", ".m4v", ".mov", ".mkv", ".webm", ".m3u8", ".ts", ".mts", ".m2ts",
+]);
 
 /** Varre a raiz recursivamente e devolve os arquivos de vídeo encontrados. */
 export async function varrer(raiz: string): Promise<ArquivoDeMidia[]> {

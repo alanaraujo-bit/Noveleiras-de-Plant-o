@@ -33,7 +33,8 @@
     "servidor:midia": "node scripts/servir-midia.mjs",
     "agente:biblioteca": "node --env-file=.env.agente scripts/agente-biblioteca.mjs",
     "painel:provar-biblioteca": "node --env-file=.env scripts/provar-biblioteca.mjs",
-    "limpar:ficcao": "node --env-file=.env scripts/limpar-ficcao.ts"
+    "limpar:ficcao": "node --env-file=.env scripts/limpar-ficcao.ts",
+    "midia:converter": "node scripts/converter-para-mp4.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

@@ -5,6 +5,7 @@ import {
   caminhoDentroDaRaiz,
   corDoTitulo,
   numeroDoEpisodio,
+  precisaDeConversao,
   slugificar,
   textoDeBusca,
 } from "./biblioteca";
@@ -144,5 +145,14 @@ describe("textoDeBusca", () => {
 
   it("ignora partes ausentes", () => {
     expect(textoDeBusca("Título", null, undefined, "")).toBe("titulo");
+  });
+});
+
+describe("arquivos que não são episódio", () => {
+  it("reconhece contêiner que o navegador recusa", () => {
+    expect(precisaDeConversao("Novela - E01.ts")).toBe(true);
+    expect(precisaDeConversao("Novela - E01.mkv")).toBe(true);
+    expect(precisaDeConversao("Novela - E01.mp4")).toBe(false);
+    expect(precisaDeConversao("Novela - E01.webm")).toBe(false);
   });
 });

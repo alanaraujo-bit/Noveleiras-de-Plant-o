@@ -49,7 +49,38 @@ export type NovelaNoDisco = {
   origem: string | null;
 };
 
-const VIDEO = /\.(mp4|m4v|mov|mkv|webm)$/i;
+/**
+ * O que conta como episódio no disco.
+ *
+ * `.ts` entra porque é o que sai de muita gravação e de fluxo HLS baixado —
+ * um MPEG-TS é vídeo legítimo. Ele exige um passo a mais que os outros: o
+ * navegador não toca TS puro, então precisa virar MP4 antes de ir ao ar. Quem
+ * decide isso é `precisaDeConversao`, não esta lista; aqui a pergunta é só
+ * "isto é um vídeo?".
+ */
+const VIDEO = /\.(mp4|m4v|mov|mkv|webm|ts|mts|m2ts)$/i;
+
+/**
+ * Formatos que o navegador não reproduz direto.
+ *
+ * Um MPEG-TS tem o mesmo h264 dentro de um MP4, mas num contêiner que o
+ * `<video>` recusa. A conversão é remux — troca o invólucro, não recodifica —
+ * e por isso é rápida e sem perda de qualidade.
+ */
+const PRECISA_CONVERTER = /\.(ts|mts|m2ts|mkv)$/i;
+
+/**
+ * Arquivo que ainda está sendo baixado ou convertido.
+ *
+ * Um `.part` no meio da biblioteca é um download em curso, não um episódio.
+ * Catalogá-lo criaria um episódio quebrado que se conserta sozinho depois —
+ * e um alerta falso é pior que nenhum alerta.
+ */
+const INCOMPLETO = /\.(part|parcial|crdownload|tmp|!ut)$|\.part\./i;
+
+export function precisaDeConversao(arquivo: string): boolean {
+  return PRECISA_CONVERTER.test(arquivo);
+}
 
 /**
  * O número do episódio.
@@ -131,6 +162,9 @@ export async function lerBiblioteca(raiz: string): Promise<NovelaNoDisco[]> {
 
     for (const arquivo of arquivos) {
       if (!arquivo.isFile() || !VIDEO.test(arquivo.name)) continue;
+      // Download em curso não é episódio: ele vira um, sozinho, quando
+      // terminar.
+      if (INCOMPLETO.test(arquivo.name)) continue;
 
       const numero = numeroDoEpisodio(arquivo.name);
       if (numero === null) {
