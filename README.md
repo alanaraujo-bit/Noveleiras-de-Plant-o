@@ -58,7 +58,8 @@ em tempo real fica normalizado ao lado (`WatchProgress`, `AppSession`,
 `SearchQuery`). Nenhuma tela escreve métrica agregada: registra o fato, o
 agregado se deriva depois.
 
-Já é possível responder, com os dados desta fase: usuários, sessões, tempo
+`npm run painel:previa` responde, com os dados já gravados, cada pergunta que o
+painel vai fazer — é a prova de que ele não vai exigir migração. São elas: usuários, sessões, tempo
 dentro da plataforma, tempo assistido, progresso, novelas e episódios mais
 acessados, buscas (e o que foi clicado nelas), favoritos, abandono, retenção,
 engajamento no feed, dispositivos, assinaturas e catálogo.
@@ -97,6 +98,7 @@ scripts/            inspeção visual, fluxo ponta a ponta, mídia, ícones
 | `npm run inspecionar` | Capturas de cada rota em 390×844 e erros de console |
 | `npm run fluxo` | Percorre entrar → novela → player → progresso → busca |
 | `npm run auditar` | PWA, acessibilidade prática e comportamento nativo |
+| `npm run painel:previa` | Responde, com os dados já gravados, cada pergunta do painel da Fase 02 |
 | `npm run db:push` / `db:seed` / `db:studio` | Banco |
 | `npm run midia:demo` | Gera os clipes de demonstração |
 | `npm run icones` | Regera os PNGs do ícone a partir do SVG |

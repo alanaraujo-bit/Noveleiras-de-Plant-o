@@ -82,11 +82,15 @@ export async function trackMany(events: TrackInput[]): Promise<number> {
   }
 }
 
-/** Eventos que o cliente pode enviar. O resto só o servidor emite. */
+/**
+ * Eventos que o cliente pode enviar. O resto só o servidor emite.
+ *
+ * Sessão não está aqui de propósito: começo, batimento e fim passam pela rota
+ * /api/telemetria/sessao, que atualiza a própria AppSession — medir duração por
+ * evento avulso perderia o tempo de quem fecha o app sem avisar.
+ */
 export const CLIENT_EVENT_TYPES = [
   "SCREEN_VIEW",
-  "SESSION_HEARTBEAT",
-  "SESSION_END",
   "NOVELA_VIEW",
   "EPISODE_VIEW",
   "PLAY_START",

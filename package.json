@@ -16,7 +16,8 @@
     "inspecionar": "node scripts/inspecionar.mjs",
     "icones": "node scripts/gerar-icones.mjs",
     "fluxo": "node scripts/fluxo.mjs",
-    "auditar": "node scripts/auditar.mjs"
+    "auditar": "node scripts/auditar.mjs",
+    "painel:previa": "node --env-file=.env scripts/painel-previa.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
