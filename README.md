@@ -41,11 +41,15 @@ nenhuma tela — o descritor `MediaSource` já carrega o campo `expiresAt`.
 
 ### 2. Acesso decidido no servidor — `lib/access/entitlements.ts`
 
-A regra de quem pode assistir vive em um módulo só e é aplicada em
-`/api/midia/[episodeId]`, **antes de a URL existir**. A interface mostra o
-cadeado, mas quem impede é a rota. O plano gratuito libera os dois primeiros
-episódios de cada novela premium; a integração com um provedor de pagamento
-entra em `alternarPlano`, sem mexer no resto.
+A regra de quem pode assistir vive em um módulo só e é aplicada **no servidor,
+antes de a URL existir** — tanto na página de `/assistir` (que resolve a fonte e
+a entrega pronta, para o player abrir tocando) quanto em `/api/midia`, que
+continua sendo a autoridade e serve para renovar fontes que expiram. A interface
+mostra o cadeado, mas quem impede é o servidor.
+
+O plano gratuito libera os dois primeiros episódios de cada novela premium; a
+integração com um provedor de pagamento entra em `alternarPlano`, sem mexer no
+resto.
 
 ### 3. Telemetria como fundação do painel — `lib/analytics/track.ts`
 
