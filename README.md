@@ -183,9 +183,12 @@ comando disfarçada de perfil.
 Um alerta não é escrito à mão: é uma condição que passou a valer sobre fatos
 que já estão no banco — servidor mudo, disco apertado, mídia prometida e
 ausente, fila falhando, erro de reprodução acima do normal. A avaliação roda a
-cada batimento (reação rápida) e a cada dez minutos pelo agendador da Vercel,
-que é o caso que o batimento não cobre: quando o agente **parou**, ninguém vai
-chamar nada.
+cada batimento — de minuto em minuto enquanto o agente estiver vivo — e uma vez
+por dia pelo agendador, que cobre o caso em que o agente **parou** e ninguém
+vai chamar nada. A cadência diária é limite do plano Hobby da Vercel; numa
+conta Pro, troque o `schedule` em `vercel.json` para `*/10 * * * *` e a lacuna
+some sem mudar código. Enquanto isso, um agente morto aparece imediatamente na
+tela de Servidor, que deriva a situação do silêncio e não depende de alerta.
 
 Três comportamentos que definem o motor: a deduplicação é por chave, então o
 mesmo problema voltando soma ocorrências em vez de virar fila nova; o

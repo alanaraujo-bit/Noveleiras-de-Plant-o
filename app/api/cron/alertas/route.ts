@@ -15,6 +15,13 @@ import { log } from "@/lib/painel/log";
  * A avaliação também roda a cada batimento do agente, que é o que dá reação
  * rápida. Este cron existe para o caso que o batimento não cobre: quando o
  * agente **parou**, e portanto ninguém vai chamar nada.
+ *
+ * A cadência é diária porque o plano Hobby da Vercel não permite mais que
+ * isso. Na prática a lacuna é menor do que parece: enquanto o agente vive, a
+ * avaliação acontece a cada minuto; quando ele morre, a tela de Servidor já
+ * mostra o silêncio na hora, sem depender de alerta, e o botão "Avaliar
+ * agora" força a passagem. Numa conta Pro, um schedule de dez em dez minutos
+ * em `vercel.json` fecha essa lacuna sem mudar nenhuma linha de código.
  */
 
 export const dynamic = "force-dynamic";

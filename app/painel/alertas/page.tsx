@@ -144,8 +144,12 @@ export default async function PaginaDeAlertas({
                 <h2 className="text-[0.9375rem] font-semibold text-[var(--p-texto)]">
                   Incidentes
                 </h2>
-                <p className="mt-0.5 text-[0.75rem] text-[var(--p-fraco)]">
-                  Ordenados por gravidade, não por data
+                <p className="mt-0.5 max-w-[74ch] text-[0.75rem] leading-relaxed text-[var(--p-fraco)]">
+                  Ordenados por gravidade, não por data. A fila é reavaliada a
+                  cada batimento do agente — de minuto em minuto enquanto ele
+                  estiver vivo — e uma vez por dia pelo agendador. Se o agente
+                  parou, a tela de Servidor mostra o silêncio na hora, e
+                  “Avaliar agora” força a passagem.
                 </p>
               </header>
               <BarraDeFiltros>
