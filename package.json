@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit",
     "inspecionar": "node scripts/inspecionar.mjs",
     "icones": "node scripts/gerar-icones.mjs",
-    "fluxo": "node scripts/fluxo.mjs"
+    "fluxo": "node scripts/fluxo.mjs",
+    "auditar": "node scripts/auditar.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

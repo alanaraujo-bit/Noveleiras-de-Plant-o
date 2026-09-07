@@ -216,7 +216,7 @@ export function PainelNovela({
         <button
           type="button"
           onClick={() => setSinopseAberta((v) => !v)}
-          className="tap mt-1.5 text-[0.8125rem] font-semibold text-rose-400"
+          className="tap -mx-1 mt-0.5 px-1 py-2 text-[0.8125rem] font-semibold text-rose-400"
         >
           {sinopseAberta ? "Mostrar menos" : "Ler mais"}
         </button>

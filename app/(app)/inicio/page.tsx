@@ -80,7 +80,7 @@ export default async function InicioPage() {
               acao={
                 <Link
                   href="/perfil/historico"
-                  className="tap inline-flex items-center gap-1 text-[0.8125rem] font-semibold text-cream-400"
+                  className="tap -my-2 inline-flex items-center gap-1 py-2 text-[0.8125rem] font-semibold text-cream-400"
                 >
                   Histórico
                   <IconeSeta tamanho={14} />
@@ -126,7 +126,7 @@ export default async function InicioPage() {
             acao={
               <Link
                 href="/generos"
-                className="tap inline-flex items-center gap-1 text-[0.8125rem] font-semibold text-cream-400"
+                className="tap -my-2 inline-flex items-center gap-1 py-2 text-[0.8125rem] font-semibold text-cream-400"
               >
                 Gêneros
                 <IconeSeta tamanho={14} />
@@ -178,7 +178,7 @@ export default async function InicioPage() {
               acao={
                 <Link
                   href="/feed"
-                  className="tap inline-flex items-center gap-1 text-[0.8125rem] font-semibold text-cream-400"
+                  className="tap -my-2 inline-flex items-center gap-1 py-2 text-[0.8125rem] font-semibold text-cream-400"
                 >
                   Ver tudo
                   <IconeSeta tamanho={14} />

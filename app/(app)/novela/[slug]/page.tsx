@@ -58,7 +58,7 @@ export default async function NovelaPage({ params }: Params) {
             acao={
               <Link
                 href="/feed"
-                className="tap inline-flex items-center gap-1 text-[0.8125rem] font-semibold text-cream-400"
+                className="tap -my-2 inline-flex items-center gap-1 py-2 text-[0.8125rem] font-semibold text-cream-400"
               >
                 Plantão
                 <IconeSeta tamanho={14} />

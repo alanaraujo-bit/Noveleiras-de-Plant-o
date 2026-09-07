@@ -58,9 +58,11 @@ export function TopoApp({
             <IconeMarca tamanho={26} />
           </span>
           <span className="min-w-0">
-            <span className="block truncate font-display text-[0.9375rem] font-semibold leading-tight text-cream-50">
+            {/* Título da Home: o nome do produto. Fica em h1 para a página ter
+                um cabeçalho principal, sem mudar a aparência. */}
+            <h1 className="block truncate font-display text-[0.9375rem] font-semibold leading-tight text-cream-50">
               Noveleiras de Plantão
-            </span>
+            </h1>
             <span className="block truncate text-[0.6875rem] font-medium text-cream-600">
               {saudacao}, {nome.split(" ")[0]}
             </span>

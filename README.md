@@ -92,6 +92,7 @@ scripts/            inspeção visual, fluxo ponta a ponta, mídia, ícones
 | `npm run typecheck` | TypeScript sem emitir |
 | `npm run inspecionar` | Capturas de cada rota em 390×844 e erros de console |
 | `npm run fluxo` | Percorre entrar → novela → player → progresso → busca |
+| `npm run auditar` | PWA, acessibilidade prática e comportamento nativo |
 | `npm run db:push` / `db:seed` / `db:studio` | Banco |
 | `npm run midia:demo` | Gera os clipes de demonstração |
 | `npm run icones` | Regera os PNGs do ícone a partir do SVG |

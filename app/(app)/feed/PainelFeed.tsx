@@ -263,7 +263,7 @@ function Publicacao({
           type="button"
           onClick={aoCurtir}
           aria-pressed={post.likedByViewer}
-          className={`tap flex items-center gap-1.5 text-[0.8125rem] font-semibold transition-colors ${
+          className={`tap -mx-2 -my-2 flex items-center gap-1.5 px-2 py-2 text-[0.8125rem] font-semibold transition-colors ${
             post.likedByViewer ? "text-rose-400" : "text-cream-400"
           }`}
         >
@@ -274,7 +274,7 @@ function Publicacao({
           type="button"
           onClick={() => setAbertos((v) => !v)}
           aria-expanded={abertos}
-          className="tap flex items-center gap-1.5 text-[0.8125rem] font-semibold text-cream-400"
+          className="tap -mx-2 -my-2 flex items-center gap-1.5 px-2 py-2 text-[0.8125rem] font-semibold text-cream-400"
         >
           <IconeConversa tamanho={17} />
           {total}
