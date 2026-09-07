@@ -2,6 +2,7 @@ import { Cabecalho, Conteudo } from "@/components/painel/Cabecalho";
 import { SeletorDePeriodo } from "@/components/painel/SeletorDePeriodo";
 import { Seletor, BarraDeFiltros } from "@/components/painel/Filtros";
 import { AguardandoInstrumentacao } from "@/components/painel/Instrumentacao";
+import { AcoesDoAlerta, ReavaliarAgora } from "@/components/painel/InfraAcoes";
 import {
   Bloco,
   LinhaRazao,
@@ -31,7 +32,8 @@ export default async function PaginaDeAlertas({
 }: {
   searchParams: Busca;
 }) {
-  await exigirPermissao("alertas.ver");
+  const operador = await exigirPermissao("alertas.ver");
+  const podeGerenciar = operador.pode("alertas.gerenciar");
 
   const params = await searchParams;
   const periodo = resolverPeriodo(params.periodo, {
@@ -53,7 +55,12 @@ export default async function PaginaDeAlertas({
             ? "Nenhum alerta jamais registrado"
             : `${fmtNumero(resumo.abertos)} ${resumo.abertos === 1 ? "alerta aberto" : "alertas abertos"} · ${fmtNumero(resumo.criticos)} ${resumo.criticos === 1 ? "crítico" : "críticos"}`
         }
-        acoes={<SeletorDePeriodo />}
+        acoes={
+          <>
+            <ReavaliarAgora podeGerenciar={podeGerenciar} />
+            <SeletorDePeriodo />
+          </>
+        }
       />
 
       <Conteudo className="space-y-5">
@@ -179,6 +186,11 @@ export default async function PaginaDeAlertas({
                       <span className="text-[0.75rem] whitespace-nowrap text-[var(--p-fraco)]">
                         {fmtDesde(alerta.vistoEm)}
                       </span>
+                      <AcoesDoAlerta
+                        alertaId={alerta.id}
+                        situacao={alerta.situacao}
+                        podeGerenciar={podeGerenciar}
+                      />
                     </div>
                     {alerta.detalhe ? (
                       <p className="mt-1 text-[0.75rem] leading-relaxed text-[var(--p-suave)]">

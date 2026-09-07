@@ -26,7 +26,9 @@
     "midia:inventariar": "node --env-file=.env scripts/inventariar-midia.ts",
     "servidor": "node --env-file=.env scripts/servidor-midia.ts",
     "agente": "node --env-file=.env.agente scripts/agente-midia.mjs",
-    "painel:provar-agente": "node --env-file=.env scripts/provar-agente.mjs"
+    "painel:provar-agente": "node --env-file=.env scripts/provar-agente.mjs",
+    "agente:transcode": "node --env-file=.env.agente scripts/agente-transcode.mjs",
+    "painel:provar-infra": "node --env-file=.env scripts/provar-infra.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

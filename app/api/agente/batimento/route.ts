@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
+import { reconciliarAlertas } from "@/lib/painel/alertas";
+import { log } from "@/lib/painel/log";
 import {
   CABECALHO_DO_SEGREDO,
   segredoConfere,
@@ -118,6 +120,22 @@ export async function POST(requisicao: Request) {
       },
     }),
   ]);
+
+  // Cada batimento reavalia os alertas: é o que faz um disco enchendo virar
+  // incidente em um minuto em vez de esperar o cron. Falhar aqui não pode
+  // recusar o batimento — o dado já foi gravado, e perder a telemetria por
+  // causa da regra que a lê seria o pior dos dois mundos.
+  try {
+    await reconciliarAlertas();
+  } catch (erro) {
+    void log.error({
+      channel: "JOBS",
+      message: "Falha ao reavaliar alertas após batimento",
+      erro,
+      entityType: "MediaServer",
+      entityId: servidor.id,
+    });
+  }
 
   return NextResponse.json({ ok: true, recebidoEm: agora.toISOString() });
 }

@@ -106,7 +106,8 @@ scripts/            inspeção visual, fluxo ponta a ponta, mídia, ícones
 | `npm run painel:reconciliar` | Mostra (e com `--aplicar` corrige) contadores divergentes do catálogo |
 | `npm run admin` | Concede e revoga acesso ao painel pela linha de comando |
 | `npm run servidor` | Registra servidores de mídia e emite o segredo do agente |
-| `npm run agente` | Roda o agente na máquina que serve a mídia |
+| `npm run agente` | Roda o agente de batimentos na máquina que serve a mídia |
+| `npm run agente:transcode` | Executa a fila de transcodificação nessa mesma máquina |
 | `npm run midia:inventariar` | Varre os arquivos e escreve o inventário de mídia |
 | `npm run painel:provar-moderacao` / `provar-acesso` / `provar-agente` | Exercitam ações e travas de ponta a ponta contra o banco |
 
@@ -153,6 +154,48 @@ chegou, não do que ele afirmou: um agente que parou não deixa o servidor "no a
 para sempre. Passados 90 segundos ele fica degradado; passados três minutos,
 fora do ar.
 
+### Transcodificação
+
+O painel enfileira, o agente executa. A separação não é preferência: uma
+função serverless vive minutos e transcodificar um episódio leva mais que
+isso — e o arquivo de entrada está na máquina, não na nuvem.
+
+Na tela de Mídia, o botão enfileira o lote que está listado (o filtro de
+estado define o lote) num dos perfis: 720p, 480p ou HLS. Na máquina, rode o
+executor ao lado do agente de batimentos:
+
+```bash
+node --env-file=.env.agente scripts/agente-transcode.mjs
+```
+
+Ele pega um trabalho por vez, roda o ffmpeg e reporta progresso, velocidade e
+ETA. Cancelar no painel alcança um processo já em execução: o agente descobre
+no próximo reporte e encerra. Trabalho preso em execução por mais de dez
+minutos sem dar sinal volta para a fila sozinho — um agente que morreu não
+pode bloquear a fila para sempre.
+
+Os perfis vivem em código nos dois lados, duplicados de propósito: um agente
+que aceitasse argumentos de ffmpeg vindos pela rede seria execução remota de
+comando disfarçada de perfil.
+
+### Alertas
+
+Um alerta não é escrito à mão: é uma condição que passou a valer sobre fatos
+que já estão no banco — servidor mudo, disco apertado, mídia prometida e
+ausente, fila falhando, erro de reprodução acima do normal. A avaliação roda a
+cada batimento (reação rápida) e a cada dez minutos pelo agendador da Vercel,
+que é o caso que o batimento não cobre: quando o agente **parou**, ninguém vai
+chamar nada.
+
+Três comportamentos que definem o motor: a deduplicação é por chave, então o
+mesmo problema voltando soma ocorrências em vez de virar fila nova; o
+fechamento é automático, porque alerta que só fecha na mão vira fila que
+ninguém lê; e a reabertura preserva a história, já que "isso já aconteceu seis
+vezes este mês" é a informação que resolve o caso.
+
+Em produção é preciso definir `CRON_SECRET` — sem ela a rota de avaliação se
+recusa a rodar, em vez de ficar aberta.
+
 O inventário de arquivos é separado do batimento e roda sob demanda:
 
 ```bash
@@ -172,4 +215,4 @@ e duplicata detectada por conteúdo em vez de por nome.
   integração de Git ligada, então um push sozinho não publica nada.
 - **Railway** — PostgreSQL
 - Variáveis necessárias em produção: `DATABASE_URL`, `SESSION_SECRET`,
-  `MEDIA_PROVIDER`, `MEDIA_BASE_URL`
+  `MEDIA_PROVIDER`, `MEDIA_BASE_URL`, `CRON_SECRET`

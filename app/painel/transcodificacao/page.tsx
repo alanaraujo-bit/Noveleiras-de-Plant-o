@@ -2,6 +2,7 @@ import { Cabecalho, Conteudo } from "@/components/painel/Cabecalho";
 import { SeletorDePeriodo } from "@/components/painel/SeletorDePeriodo";
 import { BarraDeFiltros, Seletor } from "@/components/painel/Filtros";
 import { AguardandoInstrumentacao } from "@/components/painel/Instrumentacao";
+import { AcoesDoTrabalho } from "@/components/painel/InfraAcoes";
 import {
   Bloco,
   LinhaRazao,
@@ -46,7 +47,8 @@ export default async function PaginaDeTranscodificacao({
 }: {
   searchParams: Busca;
 }) {
-  await exigirPermissao("transcode.ver");
+  const operador = await exigirPermissao("transcode.ver");
+  const podeGerenciar = operador.pode("transcode.gerenciar");
 
   const params = await searchParams;
   const periodo = resolverPeriodo(params.periodo, {
@@ -186,6 +188,11 @@ export default async function PaginaDeTranscodificacao({
                           ? fmtDataHora(trabalho.terminadoEm)
                           : fmtDesde(trabalho.enfileiradoEm)}
                       </span>
+                      <AcoesDoTrabalho
+                        jobId={trabalho.id}
+                        situacao={trabalho.situacao}
+                        podeGerenciar={podeGerenciar}
+                      />
                     </div>
 
                     {trabalho.situacao === "RUNNING" ? (

@@ -1,6 +1,7 @@
 import { Cabecalho, Conteudo } from "@/components/painel/Cabecalho";
 import { BarraDeFiltros, Seletor } from "@/components/painel/Filtros";
 import { AguardandoInstrumentacao } from "@/components/painel/Instrumentacao";
+import { EnfileirarPerfil } from "@/components/painel/InfraAcoes";
 import {
   Bloco,
   LinhaRazao,
@@ -44,7 +45,8 @@ export default async function PaginaDeMidia({
 }: {
   searchParams: Busca;
 }) {
-  await exigirPermissao("midia.ver");
+  const operador = await exigirPermissao("midia.ver");
+  const podeTranscodificar = operador.pode("transcode.gerenciar");
 
   const params = await searchParams;
   const [resumo, arquivos] = await Promise.all([
@@ -151,13 +153,24 @@ export default async function PaginaDeMidia({
           />
         ) : (
           <section className="painel-cartao overflow-hidden">
-            <header className="border-b border-[var(--p-linha)] px-5 py-4">
-              <h2 className="text-[0.9375rem] font-semibold text-[var(--p-texto)]">
-                Arquivos
-              </h2>
-              <p className="mt-0.5 text-[0.75rem] text-[var(--p-fraco)]">
-                Chaves opacas e provedores — nunca URLs
-              </p>
+            <header className="flex flex-wrap items-start justify-between gap-3 border-b border-[var(--p-linha)] px-5 py-4">
+              <div>
+                <h2 className="text-[0.9375rem] font-semibold text-[var(--p-texto)]">
+                  Arquivos
+                </h2>
+                <p className="mt-0.5 text-[0.75rem] text-[var(--p-fraco)]">
+                  Chaves opacas e provedores — nunca URLs
+                </p>
+              </div>
+              {/* Enfileira o que está listado agora: o filtro de estado acima é
+                  o que define o lote, e "os 84 arquivos prontos" é uma seleção
+                  mais honesta que caixinhas que ninguém marca uma a uma. */}
+              <EnfileirarPerfil
+                assetIds={arquivos
+                  .filter((a) => a.estado !== "MISSING" && a.estado !== "BROKEN")
+                  .map((a) => a.id)}
+                podeGerenciar={podeTranscodificar}
+              />
             </header>
             <BarraDeFiltros>
               <Seletor
