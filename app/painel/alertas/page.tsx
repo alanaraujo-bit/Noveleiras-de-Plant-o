@@ -1,7 +1,10 @@
 import { Cabecalho, Conteudo } from "@/components/painel/Cabecalho";
 import { SeletorDePeriodo } from "@/components/painel/SeletorDePeriodo";
 import { Seletor, BarraDeFiltros } from "@/components/painel/Filtros";
-import { AguardandoInstrumentacao } from "@/components/painel/Instrumentacao";
+import {
+  AguardandoInstrumentacao,
+  NadaAconteceu,
+} from "@/components/painel/Instrumentacao";
 import { AcoesDoAlerta, ReavaliarAgora } from "@/components/painel/InfraAcoes";
 import {
   Bloco,
@@ -11,6 +14,7 @@ import {
 } from "@/components/painel/primitivos";
 import { exigirPermissao } from "@/lib/painel/guarda";
 import {
+  instrumentacaoDaInfraestrutura,
   listarAlertas,
   resumoDeAlertas,
 } from "@/lib/painel/metricas/infraestrutura";
@@ -41,9 +45,10 @@ export default async function PaginaDeAlertas({
     ate: params.ate,
   });
 
-  const [resumo, alertas] = await Promise.all([
+  const [resumo, alertas, instrumentacao] = await Promise.all([
     resumoDeAlertas(periodo),
     listarAlertas({ situacao: params.situacao }),
+    instrumentacaoDaInfraestrutura(),
   ]);
 
   return (
@@ -52,7 +57,7 @@ export default async function PaginaDeAlertas({
         titulo="Alertas"
         descricao={
           resumo.totalRegistrado === 0
-            ? "Nenhum alerta jamais registrado"
+            ? "Nenhum incidente registrado até agora"
             : `${fmtNumero(resumo.abertos)} ${resumo.abertos === 1 ? "alerta aberto" : "alertas abertos"} · ${fmtNumero(resumo.criticos)} ${resumo.criticos === 1 ? "crítico" : "críticos"}`
         }
         acoes={
@@ -64,7 +69,7 @@ export default async function PaginaDeAlertas({
       />
 
       <Conteudo className="space-y-5">
-        {resumo.totalRegistrado === 0 ? (
+        {resumo.totalRegistrado === 0 && !instrumentacao.ligada ? (
           <AguardandoInstrumentacao
             oQue="Incidentes abertos e o que exige atenção"
             tabela="Alert"
@@ -74,8 +79,8 @@ export default async function PaginaDeAlertas({
                 (disco baixo, servidor fora do ar), a fila de transcodificação
                 (trabalho falhando repetidas vezes) e o próprio produto (erro de
                 reprodução acima do normal). Nenhum desses observadores está
-                ligado ainda — o servidor de mídia não foi registrado, e sem ele
-                não há o que observar.
+                ligado ainda — nenhum servidor de mídia foi registrado, e sem
+                ele não há o que observar.
                 <br />
                 <br />
                 A chave <code className="rounded bg-[var(--p-elevado)] px-1.5 py-0.5 text-[0.75rem] text-[var(--p-texto)]">dedupeKey</code>{" "}
@@ -89,6 +94,19 @@ export default async function PaginaDeAlertas({
               "Reconhecer (alguém está olhando) separado de resolver (acabou).",
               "O que cada alerta aponta: qual servidor, qual episódio, qual arquivo.",
             ]}
+          />
+        ) : resumo.totalRegistrado === 0 ? (
+          <NadaAconteceu
+            titulo="Nenhum incidente até agora"
+            porQue="As regras estão rodando e nenhuma condição passou a valer: servidor respondendo, disco folgado, mídia no lugar, fila sem falhas. Vazio aqui é a boa notícia."
+            proximoPasso={
+              <>
+                A avaliação acontece a cada batimento do agente e uma vez por dia
+                pelo agendador. Para forçar uma passagem agora, use{" "}
+                <strong>Avaliar agora</strong> no topo.
+              </>
+            }
+            fonte={`instrumentação viva · ${instrumentacao.servidoresQueBateram === 1 ? "1 servidor reportando" : `${instrumentacao.servidoresQueBateram} servidores reportando`} · ${fmtNumero(instrumentacao.arquivos)} arquivos vigiados`}
           />
         ) : (
           <>

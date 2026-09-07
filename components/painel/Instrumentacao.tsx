@@ -85,3 +85,45 @@ export function AguardandoInstrumentacao({
     </section>
   );
 }
+
+/**
+ * Estado "instrumentado e sem nada a mostrar".
+ *
+ * O oposto do de cima, e a distinção é o ponto: aqui a fonte existe e está
+ * escrevendo — só não houve o que registrar. Silêncio assim costuma ser boa
+ * notícia (nenhum incidente) ou apenas trabalho que ninguém pediu ainda, e nos
+ * dois casos a tela deve dizer qual dos dois é, com o próximo passo à mão.
+ */
+export function NadaAconteceu({
+  titulo,
+  porQue,
+  proximoPasso,
+  fonte,
+}: {
+  titulo: string;
+  porQue: string;
+  proximoPasso?: ReactNode;
+  /** O que prova que a instrumentação está viva. */
+  fonte: string;
+}) {
+  return (
+    <section className="painel-cartao overflow-hidden">
+      <div className="px-6 py-10 text-center">
+        <p className="text-[0.9375rem] font-medium text-[var(--p-suave)]">
+          {titulo}
+        </p>
+        <p className="mx-auto mt-2 max-w-[62ch] text-[0.8125rem] leading-relaxed text-[var(--p-fraco)]">
+          {porQue}
+        </p>
+        {proximoPasso ? (
+          <div className="mt-4 text-[0.8125rem] text-[var(--p-suave)]">
+            {proximoPasso}
+          </div>
+        ) : null}
+        <p className="mx-auto mt-5 max-w-max rounded-md bg-[var(--p-elevado)] px-2.5 py-1 text-[0.6875rem] text-[var(--p-fraco)]">
+          {fonte}
+        </p>
+      </div>
+    </section>
+  );
+}

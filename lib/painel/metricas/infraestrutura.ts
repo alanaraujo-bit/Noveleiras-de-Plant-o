@@ -20,6 +20,40 @@ import { situacaoPorBatimento } from "@/lib/painel/servidor";
  * que denuncia arquivo prometido e ausente.
  */
 
+/**
+ * Há quem alimente estas telas?
+ *
+ * Existe porque uma tabela vazia tem dois significados opostos, e a tela que
+ * os confunde mente. Fila de transcodificação vazia com agente registrado e
+ * arquivos catalogados significa *ninguém enfileirou* — notícia neutra, com um
+ * próximo passo claro. A mesma fila vazia sem servidor nenhum significa *nada
+ * está sendo medido*, que é dívida.
+ *
+ * A pergunta é sobre a fonte, não sobre o conteúdo: um servidor que já bateu e
+ * um inventário com linhas provam que a instrumentação existe, mesmo que hoje
+ * não haja um único trabalho ou incidente.
+ */
+export type Instrumentacao = {
+  servidores: number;
+  servidoresQueBateram: number;
+  arquivos: number;
+  ligada: boolean;
+};
+
+export async function instrumentacaoDaInfraestrutura(): Promise<Instrumentacao> {
+  const [servidores, bateram, arquivos] = await Promise.all([
+    db.mediaServer.count(),
+    db.mediaServer.count({ where: { lastBeatAt: { not: null } } }),
+    db.mediaAsset.count(),
+  ]);
+  return {
+    servidores,
+    servidoresQueBateram: bateram,
+    arquivos,
+    ligada: bateram > 0 || arquivos > 0,
+  };
+}
+
 // ------------------------------------------------------------- alertas
 
 export type ResumoDeAlertas = {

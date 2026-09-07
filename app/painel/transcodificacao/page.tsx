@@ -1,7 +1,10 @@
 import { Cabecalho, Conteudo } from "@/components/painel/Cabecalho";
 import { SeletorDePeriodo } from "@/components/painel/SeletorDePeriodo";
 import { BarraDeFiltros, Seletor } from "@/components/painel/Filtros";
-import { AguardandoInstrumentacao } from "@/components/painel/Instrumentacao";
+import {
+  AguardandoInstrumentacao,
+  NadaAconteceu,
+} from "@/components/painel/Instrumentacao";
 import { AcoesDoTrabalho } from "@/components/painel/InfraAcoes";
 import {
   Bloco,
@@ -11,6 +14,7 @@ import {
 } from "@/components/painel/primitivos";
 import { exigirPermissao } from "@/lib/painel/guarda";
 import {
+  instrumentacaoDaInfraestrutura,
   listarTrabalhos,
   resumoDaFila,
 } from "@/lib/painel/metricas/infraestrutura";
@@ -56,9 +60,10 @@ export default async function PaginaDeTranscodificacao({
     ate: params.ate,
   });
 
-  const [resumo, trabalhos] = await Promise.all([
+  const [resumo, trabalhos, instrumentacao] = await Promise.all([
     resumoDaFila(periodo),
     listarTrabalhos({ situacao: params.situacao }),
+    instrumentacaoDaInfraestrutura(),
   ]);
 
   return (
@@ -67,14 +72,14 @@ export default async function PaginaDeTranscodificacao({
         titulo="Transcodificação"
         descricao={
           resumo.total === 0
-            ? "Nenhum trabalho jamais enfileirado"
+            ? "Fila vazia — nenhum trabalho pedido até agora"
             : `${fmtNumero(resumo.naFila)} na fila · ${fmtNumero(resumo.rodando)} rodando · ${fmtNumero(resumo.falhados)} com falha`
         }
         acoes={<SeletorDePeriodo />}
       />
 
       <Conteudo className="space-y-5">
-        {resumo.total === 0 ? (
+        {resumo.total === 0 && !instrumentacao.ligada ? (
           <AguardandoInstrumentacao
             oQue="Fila, progresso e falhas de preparação de vídeo"
             tabela="TranscodeJob"
@@ -87,8 +92,9 @@ export default async function PaginaDeTranscodificacao({
                 <br />
                 <br />
                 Nenhuma das duas pontas existe ainda: sem servidor registrado e
-                sem inventário de arquivos, não há o que preparar. Esta tela e a
-                de Mídia se ligam pelo mesmo agente.
+                sem inventário de arquivos, não há o que preparar. Registre o
+                servidor e rode o inventário — esta tela e a de Mídia se ligam
+                pelo mesmo agente.
               </>
             }
             oQueVaiMostrar={[
@@ -97,6 +103,23 @@ export default async function PaginaDeTranscodificacao({
               "Se o trabalho usou GPU, e quantas tentativas já foram feitas.",
               "A mensagem de erro de cada falha, copiável, para reenfileirar com conhecimento de causa.",
             ]}
+          />
+        ) : resumo.total === 0 ? (
+          <NadaAconteceu
+            titulo="A fila está vazia"
+            porQue="Nenhum trabalho foi enfileirado. Isso não é falha: transcodificar é sob demanda, e ninguém pediu ainda."
+            proximoPasso={
+              <>
+                Abra <strong>Mídia</strong>, filtre os arquivos que quer preparar
+                e escolha um perfil de saída. Na máquina que guarda os vídeos,
+                deixe o executor rodando com{" "}
+                <code className="rounded bg-[var(--p-elevado)] px-1.5 py-0.5 text-[0.75rem] text-[var(--p-texto)]">
+                  npm run agente:transcode
+                </code>
+                .
+              </>
+            }
+            fonte={`instrumentação viva · ${fmtNumero(instrumentacao.arquivos)} arquivos catalogados · ${instrumentacao.servidoresQueBateram === 1 ? "1 servidor reportando" : `${instrumentacao.servidoresQueBateram} servidores reportando`}`}
           />
         ) : (
           <>
