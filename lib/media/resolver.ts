@@ -61,9 +61,36 @@ function baseUrlFor(provider: MediaProviderName): string {
   }
 }
 
+/**
+ * Junta base e chave, codificando cada segmento.
+ *
+ * A codificação é por segmento, não sobre a chave inteira: `encodeURIComponent`
+ * na chave toda transformaria as barras em `%2F` e destruiria o caminho.
+ *
+ * Isso nunca apareceu enquanto as chaves vinham do seed (`demo/slug/s1e1.mp4`,
+ * tudo minúsculo e sem espaço). Uma biblioteca de verdade tem "A Filha Secreta
+ * do CEO - E01.mp4", e uma URL com espaço cru só funciona porque o navegador
+ * conserta — o que não vale para `fetch`, para o servidor de mídia nem para um
+ * cliente que não seja navegador.
+ *
+ * Um segmento já codificado é preservado: decodificar antes evita transformar
+ * `%20` em `%2520` a cada passagem.
+ */
 function joinKey(base: string, key: string): string {
   const clean = key.replace(/^\/+/, "");
-  return `${base}/${clean}`;
+  const encoded = clean
+    .split("/")
+    .map((segmento) => {
+      let cru = segmento;
+      try {
+        cru = decodeURIComponent(segmento);
+      } catch {
+        // Percentagem malformada: trata como texto literal.
+      }
+      return encodeURIComponent(cru);
+    })
+    .join("/");
+  return `${base}/${encoded}`;
 }
 
 /**

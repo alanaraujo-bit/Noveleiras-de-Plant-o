@@ -89,3 +89,28 @@ describe("isGeneratedArt", () => {
     expect(isGeneratedArt("capas/x.jpg")).toBe(false);
   });
 });
+
+describe("chaves com nome real de biblioteca", () => {
+  it("codifica espaço e acento por segmento", () => {
+    process.env.MEDIA_BASE_URL = "https://midia.exemplo.com";
+    const fonte = resolveMedia({
+      mediaKey: "A Filha Secreta do CEO/A Filha Secreta do CEO - E01.mp4",
+    });
+    expect(fonte.url).toBe(
+      "https://midia.exemplo.com/A%20Filha%20Secreta%20do%20CEO/A%20Filha%20Secreta%20do%20CEO%20-%20E01.mp4",
+    );
+  });
+
+  it("preserva as barras — codificar a chave inteira destruiria o caminho", () => {
+    process.env.MEDIA_BASE_URL = "/media";
+    const fonte = resolveMedia({ mediaKey: "Mãe por Um Milhão/E05.mp4" });
+    expect(fonte.url.split("/").length).toBe(4);
+    expect(fonte.url).toContain("M%C3%A3e");
+  });
+
+  it("não codifica duas vezes uma chave que já veio codificada", () => {
+    process.env.MEDIA_BASE_URL = "/media";
+    const fonte = resolveMedia({ mediaKey: "A%20Novela/E01.mp4" });
+    expect(fonte.url).toBe("/media/A%20Novela/E01.mp4");
+  });
+});

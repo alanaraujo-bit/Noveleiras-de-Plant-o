@@ -108,21 +108,92 @@ scripts/            inspeção visual, fluxo ponta a ponta, mídia, ícones
 | `npm run servidor` | Registra servidores de mídia e emite o segredo do agente |
 | `npm run agente` | Roda o agente de batimentos na máquina que serve a mídia |
 | `npm run agente:transcode` | Executa a fila de transcodificação nessa mesma máquina |
+| `npm run biblioteca:importar` | Lê uma pasta de novelas e **cria** o catálogo a partir dela |
 | `npm run midia:inventariar` | Varre os arquivos e escreve o inventário de mídia |
+| `npm run servidor:midia` | Serve os vídeos da sua máquina, com Range e CORS |
 | `npm run painel:provar-moderacao` / `provar-acesso` / `provar-agente` | Exercitam ações e travas de ponta a ponta contra o banco |
 
 ## Conteúdo
 
-Todo o catálogo — novelas, episódios, elenco, comentários — é **ficção criada
-para esta fase**, e o app diz isso em tela. As capas são desenhadas pelo próprio
-produto (`lib/art.ts`) a partir do slug e da cor de cada obra; quando houver arte
-real, basta a chave deixar de começar com `gen:`.
+O catálogo tem duas origens, e o painel as distingue. O material do seed —
+novelas, elenco, comentários — é **ficção criada para esta fase**, e o app diz
+isso em tela. O que entra por `npm run biblioteca:importar` é conteúdo real,
+importado de uma pasta do disco; a nota editorial de cada novela registra de
+onde veio.
+
+As capas são desenhadas pelo próprio produto (`lib/art.ts`) a partir do slug e
+da cor de cada obra, valendo para as duas origens; quando houver arte real,
+basta a chave deixar de começar com `gen:`.
 
 Os clipes em `public/media` (84 arquivos, ~11 MB) são cenas de demonstração
 geradas por `npm run midia:demo`: a arte da novela, o título do episódio e um
 relógio, o bastante para exercitar o player, a retomada e o tempo assistido de
 verdade. Ficam versionados só para o app publicado ser assistível — no dia em
 que `MEDIA_BASE_URL` apontar para a origem real, a pasta pode ser apagada.
+
+## Trazer novelas do seu computador
+
+O caminho tem três passos, e cada um responde uma pergunta diferente.
+
+**1. Onde ficam os arquivos.** A convenção é uma pasta por novela, episódios
+numerados no nome:
+
+```
+D:/Noveleiras de Plantão/
+  A Filha Secreta do CEO/
+    A Filha Secreta do CEO - E01.mp4
+    A Filha Secreta do CEO - E02.mp4
+    manifest.json          (opcional)
+  Mãe por Um Milhão/
+    Mãe por Um Milhão - E01.mp4
+    ...
+```
+
+O leitor aceita `- E01`, `E01`, `S01E01` e `ep 1`, porque biblioteca real é
+irregular. Um `manifest.json` com duração e dimensões poupa a sondagem; sem
+ele, o ffmpeg mede.
+
+**2. Criar o catálogo.** É o "escanear biblioteca" do Jellyfin:
+
+```bash
+npm run biblioteca:importar -- --raiz="D:/Noveleiras de Plantão"            # mostra o que faria
+npm run biblioteca:importar -- --raiz="D:/Noveleiras de Plantão" --aplicar
+```
+
+Ele cria novela, temporada e episódios, e **não inventa texto**: sinopse e
+tagline nascem vazias até alguém escrever, porque um resumo adivinhado
+enganaria quem lê o catálogo. Rodar de novo atualiza o que mudou sem duplicar
+nada, e sem sobrescrever o texto que você escreveu à mão.
+
+A capa é desenhada pelo próprio app a partir do slug e de uma cor derivada do
+título — o mesmo mecanismo do catálogo de demonstração.
+
+**3. Entregar o vídeo.** O app roda na Vercel e os arquivos estão no seu PC;
+alguém precisa levar os bytes de um ao outro:
+
+```bash
+npm run servidor:midia -- --raiz="D:/Noveleiras de Plantão"
+```
+
+Num outro terminal, o túnel que dá um endereço público sem mexer no roteador:
+
+```bash
+cloudflared tunnel --url http://localhost:8099
+```
+
+Copie o endereço que ele imprimir para `MEDIA_BASE_URL` (em produção, com
+`vercel env add`). Pronto: o player pede a URL ao resolvedor, o resolvedor
+monta `MEDIA_BASE_URL + chave`, e o vídeo sai da sua máquina.
+
+O servidor responde `206` a `Range:` — sem isso o player baixaria o arquivo
+inteiro antes de tocar e arrastar a barra não funcionaria — e recusa qualquer
+caminho que escape da raiz. Essa guarda vive em `lib/media/biblioteca.ts` e é
+testada com travessia, codificação e byte nulo.
+
+**Enquanto o túnel está no ar, o PC precisa ficar ligado.** A banda de subida
+da sua internet é o teto de espectadores simultâneos. Quando isso apertar, o
+caminho é trocar `MEDIA_BASE_URL` por um armazenamento em nuvem — e nada mais
+no app muda, que é a razão de a chave ser opaca desde o começo.
 
 ## Servidor de mídia
 

@@ -22,7 +22,7 @@
  *   npm run midia:inventariar -- --raiz=D:/videos --aplicar
  *   npm run midia:inventariar -- --aplicar --rechecar
  */
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { PrismaClient } from "@prisma/client";
 import ffmpegPath from "ffmpeg-static";
@@ -82,6 +82,7 @@ async function main() {
         variant: true,
         sizeBytes: true,
         checksum: true,
+        path: true,
       },
     }),
     // Um servidor registrado marca de onde o arquivo veio. Sem ele o
@@ -165,8 +166,28 @@ async function main() {
 
   // Uma chave que o catálogo promete e a varredura não encontrou. Ela precisa
   // aparecer como MISSING; apagar a linha esconderia o problema.
+  //
+  // Mas só vale julgar o que pertence a esta raiz. Com duas bibliotecas — a de
+  // demonstração em `public/media` e a real em outro disco — varrer uma delas
+  // condenaria os arquivos da outra como sumidos, que é uma acusação falsa.
+  // O critério é o caminho já gravado: um arquivo cujo `path` aponta para
+  // fora desta raiz não é assunto desta varredura.
   const encontradas = new Set(arquivos.map((a) => a.chave));
-  const sumidas = episodios.filter((e) => e.mediaKey && !encontradas.has(e.mediaKey));
+  // `resolve` iguala separadores e maiúsculas de unidade; comparar as strings
+  // cruas falharia entre "D:/Biblioteca" (como veio na linha de comando) e
+  // "D:\Biblioteca\..." (como o Node gravou).
+  const raizNormalizada = resolve(RAIZ);
+  const deOutraRaiz = new Set(
+    existentes
+      .filter((a) => a.path && !resolve(a.path).startsWith(raizNormalizada))
+      .map((a) => a.mediaKey),
+  );
+  const sumidas = episodios.filter(
+    (e) => e.mediaKey && !encontradas.has(e.mediaKey) && !deOutraRaiz.has(e.mediaKey),
+  );
+  const forasteiros = episodios.filter(
+    (e) => e.mediaKey && deOutraRaiz.has(e.mediaKey),
+  ).length;
 
   if (sumidas.length > 0) {
     console.log(`\n  ${sumidas.length} chave(s) prometida(s) e não encontrada(s):`);
@@ -219,7 +240,10 @@ async function main() {
   console.log(
     `\n  ${arquivos.length} arquivo(s) · ${bytes(bytesTotais)}` +
       `\n  ${novos} novo(s) · ${atualizados} atualizado(s)` +
-      `\n  ${quebrados} ilegível(is) · ${orfaos} órfão(s) · ${sumidas.length} sumido(s)`,
+      `\n  ${quebrados} ilegível(is) · ${orfaos} órfão(s) · ${sumidas.length} sumido(s)` +
+      (forasteiros > 0
+        ? `\n  ${forasteiros} arquivo(s) de outra biblioteca, fora do alcance desta varredura`
+        : ""),
   );
   console.log(
     APLICAR
