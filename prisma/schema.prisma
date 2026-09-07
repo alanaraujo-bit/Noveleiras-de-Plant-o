@@ -663,10 +663,113 @@ model MediaServer {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  beats  MediaServerBeat[]
-  assets MediaAsset[]
+  beats     MediaServerBeat[]
+  assets    MediaAsset[]
+  libraries MediaLibrary[]
+  scans     LibraryScan[]
 
   @@index([status])
+}
+
+// ------------------------------------------------------------ biblioteca
+
+/**
+ * Uma pasta de conteudo declarada pela operacao.
+ *
+ * A diferenca estrutural em relacao a um servidor de midia tradicional: aqui
+ * quem tem o disco nao e quem roda a aplicacao. O painel **declara** a
+ * biblioteca (nome, caminho, regras); o agente na maquina do disco a
+ * **varre**; o servidor **importa** o resultado. Por isso `path` e um caminho
+ * na maquina do agente, e nao algo que a aplicacao consiga abrir.
+ *
+ * Plural desde o comeco pelo mesmo motivo dos servidores: uma pasta hoje,
+ * varias amanha, sem reescrever tela.
+ */
+model MediaLibrary {
+  id   String @id @default(cuid())
+  name String
+  // Caminho na maquina do agente. A aplicacao nunca o abre.
+  path String
+
+  serverId String?
+  server   MediaServer? @relation(fields: [serverId], references: [id], onDelete: SetNull)
+
+  enabled Boolean @default(true)
+  // Criar novela/temporada/episodio a partir das pastas, ou so inventariar
+  // arquivos. Quem so quer conferir integridade desliga isto.
+  autoImport Boolean @default(true)
+  // Novelas criadas por esta biblioteca nascem publicadas ou em rascunho.
+  publishOnImport Boolean @default(false)
+
+  lastScanAt     DateTime?
+  lastScanState  String?
+  // Contagens da ultima varredura, para a tela nao precisar reagregar.
+  lastNovelas    Int @default(0)
+  lastEpisodes   Int @default(0)
+  lastFiles      Int @default(0)
+  lastBytes      BigInt @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  scans LibraryScan[]
+
+  @@unique([serverId, path])
+  @@index([enabled])
+}
+
+enum ScanState {
+  QUEUED
+  RUNNING
+  DONE
+  FAILED
+  CANCELED
+}
+
+/**
+ * Uma varredura pedida pelo painel e executada pelo agente.
+ *
+ * Existe como linha para que a operacao veja o progresso enquanto acontece e
+ * o historico depois. Uma varredura que so aparece no terminal de quem a
+ * rodou nao e observavel.
+ */
+model LibraryScan {
+  id        String       @id @default(cuid())
+  libraryId String
+  library   MediaLibrary @relation(fields: [libraryId], references: [id], onDelete: Cascade)
+
+  serverId String?
+  server   MediaServer? @relation(fields: [serverId], references: [id], onDelete: SetNull)
+
+  state ScanState @default(QUEUED)
+  // Etapa corrente em palavras: "varrendo", "lendo metadados", "importando".
+  phase String?
+  // Progresso bruto; a tela deriva o percentual.
+  totalFiles     Int @default(0)
+  processedFiles Int @default(0)
+
+  // O que a varredura produziu.
+  novelasCreated  Int @default(0)
+  novelasUpdated  Int @default(0)
+  episodesCreated Int @default(0)
+  episodesUpdated Int @default(0)
+  filesIndexed    Int @default(0)
+  filesMissing    Int @default(0)
+  bytesTotal      BigInt @default(0)
+  // Arquivos que nao casaram com o padrao de nome, para alguem olhar.
+  warnings Json @default("[]")
+
+  error       String?
+  requestedBy String?
+  // Varredura completa relê metadados e checksum de tudo.
+  full Boolean @default(false)
+
+  queuedAt   DateTime  @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  @@index([state, queuedAt])
+  @@index([libraryId, queuedAt])
 }
 
 /**

@@ -3,6 +3,10 @@ import { BarraDeFiltros, Seletor } from "@/components/painel/Filtros";
 import { AguardandoInstrumentacao } from "@/components/painel/Instrumentacao";
 import { EnfileirarPerfil } from "@/components/painel/InfraAcoes";
 import {
+  CartaoDeBiblioteca,
+  NovaBiblioteca,
+} from "@/components/painel/Bibliotecas";
+import {
   Bloco,
   LinhaRazao,
   Razao,
@@ -14,8 +18,14 @@ import {
 import { exigirPermissao } from "@/lib/painel/guarda";
 import { listarMidia, resumoDeMidia } from "@/lib/painel/metricas/infraestrutura";
 import {
+  historicoDeVarreduras,
+  listarBibliotecas,
+} from "@/lib/painel/bibliotecas";
+import { db } from "@/lib/db";
+import {
   fmtBytes,
   fmtDataHora,
+  fmtDesde,
   fmtNumero,
   fmtRelogio,
 } from "@/lib/painel/numeros";
@@ -47,12 +57,21 @@ export default async function PaginaDeMidia({
 }) {
   const operador = await exigirPermissao("midia.ver");
   const podeTranscodificar = operador.pode("transcode.gerenciar");
+  const podeGerenciar = operador.pode("midia.gerenciar");
 
   const params = await searchParams;
-  const [resumo, arquivos] = await Promise.all([
-    resumoDeMidia(),
-    listarMidia({ estado: params.estado }),
-  ]);
+  const [resumo, arquivos, bibliotecas, varreduras, servidores] =
+    await Promise.all([
+      resumoDeMidia(),
+      listarMidia({ estado: params.estado }),
+      listarBibliotecas(),
+      historicoDeVarreduras(8),
+      db.mediaServer.findMany({
+        where: { enabled: true },
+        select: { id: true, name: true, slug: true },
+        orderBy: { name: "asc" },
+      }),
+    ]);
 
   const cobertura =
     resumo.episodiosComChave > 0
@@ -72,6 +91,116 @@ export default async function PaginaDeMidia({
       />
 
       <Conteudo className="space-y-5">
+        {/* ------------------------------------------------ bibliotecas */}
+        <section className="space-y-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-[1rem] font-semibold text-[var(--p-texto)]">
+                Bibliotecas
+              </h2>
+              <p className="mt-0.5 max-w-[74ch] text-[0.8125rem] leading-relaxed text-[var(--p-fraco)]">
+                Pastas de conteúdo nas máquinas que guardam os vídeos. O painel
+                declara e pede a varredura; o agente lê o disco; o servidor
+                importa o resultado — nenhum dos três faz o trabalho do outro.
+              </p>
+            </div>
+            <NovaBiblioteca
+              servidores={servidores.map((s) => ({
+                id: s.id,
+                nome: s.name,
+                slug: s.slug,
+              }))}
+              podeGerenciar={podeGerenciar}
+            />
+          </div>
+
+          {bibliotecas.length === 0 ? (
+            <section className="painel-cartao px-6 py-10 text-center">
+              <p className="text-[0.9375rem] font-medium text-[var(--p-suave)]">
+                Nenhuma biblioteca registrada
+              </p>
+              <p className="mx-auto mt-2 max-w-[62ch] text-[0.8125rem] leading-relaxed text-[var(--p-fraco)]">
+                Uma biblioteca é uma pasta na máquina que guarda os vídeos.
+                Registre a primeira e peça a varredura: o agente lê as pastas,
+                mede cada arquivo e o catálogo nasce daí — sem digitar episódio
+                por episódio.
+              </p>
+            </section>
+          ) : (
+            <div className="space-y-4">
+              {bibliotecas.map((biblioteca) => (
+                <CartaoDeBiblioteca
+                  key={biblioteca.id}
+                  biblioteca={biblioteca}
+                  podeGerenciar={podeGerenciar}
+                />
+              ))}
+            </div>
+          )}
+
+          {varreduras.length > 0 ? (
+            <details className="painel-cartao overflow-hidden">
+              <summary className="cursor-pointer px-5 py-3.5 text-[0.8125rem] text-[var(--p-suave)] hover:text-[var(--p-texto)]">
+                Histórico de varreduras ({varreduras.length})
+              </summary>
+              <ul className="divide-y divide-[var(--p-linha)] border-t border-[var(--p-linha)]">
+                {varreduras.map((varredura) => (
+                  <li key={varredura.id} className="px-5 py-3">
+                    <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+                      <Selo
+                        tom={
+                          varredura.estado === "DONE"
+                            ? "bom"
+                            : varredura.estado === "FAILED"
+                              ? "perigo"
+                              : varredura.estado === "RUNNING"
+                                ? "info"
+                                : "neutro"
+                        }
+                      >
+                        {varredura.estado.toLowerCase()}
+                      </Selo>
+                      <span className="text-[0.8125rem] text-[var(--p-texto)]">
+                        {varredura.biblioteca}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-[0.75rem] text-[var(--p-fraco)]">
+                        {varredura.estado === "DONE"
+                          ? `${fmtNumero(varredura.novelasCriadas)} novela(s) nova(s) · ${fmtNumero(varredura.episodiosCriados)} episódio(s) · ${fmtNumero(varredura.arquivos)} arquivo(s) · ${fmtBytes(varredura.bytes)}`
+                          : (varredura.etapa ?? "")}
+                      </span>
+                      <span className="text-[0.75rem] whitespace-nowrap text-[var(--p-fraco)]">
+                        {fmtDesde(varredura.pedidaEm)}
+                      </span>
+                    </div>
+                    {varredura.erro ? (
+                      <p className="mt-1 rounded bg-[var(--p-elevado)] px-2 py-1 text-[0.6875rem] break-words text-[var(--p-perigo)]">
+                        {varredura.erro}
+                      </p>
+                    ) : null}
+                    {varredura.avisos.length > 0 ? (
+                      <ul className="mt-1 space-y-0.5">
+                        {varredura.avisos.slice(0, 4).map((aviso) => (
+                          <li
+                            key={aviso}
+                            className="text-[0.6875rem] text-[var(--p-atencao)]"
+                          >
+                            {aviso}
+                          </li>
+                        ))}
+                        {varredura.avisos.length > 4 ? (
+                          <li className="text-[0.6875rem] text-[var(--p-fraco)]">
+                            e mais {varredura.avisos.length - 4}
+                          </li>
+                        ) : null}
+                      </ul>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
+        </section>
+
         {/* A distância entre o que o catálogo declara e o que a camada de
             mídia conhece é fato mensurável mesmo com zero arquivos — e é
             exatamente o trabalho que falta. */}

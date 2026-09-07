@@ -108,6 +108,7 @@ scripts/            inspeção visual, fluxo ponta a ponta, mídia, ícones
 | `npm run servidor` | Registra servidores de mídia e emite o segredo do agente |
 | `npm run agente` | Roda o agente de batimentos na máquina que serve a mídia |
 | `npm run agente:transcode` | Executa a fila de transcodificação nessa mesma máquina |
+| `npm run agente:biblioteca` | Varre as bibliotecas pedidas pelo painel |
 | `npm run biblioteca:importar` | Lê uma pasta de novelas e **cria** o catálogo a partir dela |
 | `npm run midia:inventariar` | Varre os arquivos e escreve o inventário de mídia |
 | `npm run servidor:midia` | Serve os vídeos da sua máquina, com Range e CORS |
@@ -153,10 +154,33 @@ O leitor aceita `- E01`, `E01`, `S01E01` e `ep 1`, porque biblioteca real é
 irregular. Um `manifest.json` com duração e dimensões poupa a sondagem; sem
 ele, o ffmpeg mede.
 
-**2. Criar o catálogo.** É o "escanear biblioteca" do Jellyfin:
+**2. Registrar a biblioteca no painel.** Em **Mídia › Bibliotecas**, clique em
+*Adicionar biblioteca*, dê um nome e informe o caminho na máquina que guarda os
+vídeos. A aplicação nunca abre essa pasta — quem abre é o agente, e é a primeira
+varredura que diz se o caminho existe.
+
+Depois é só *Escanear*. Na máquina dos arquivos, deixe o varredor rodando:
 
 ```bash
-npm run biblioteca:importar -- --raiz="D:/Noveleiras de Plantão"            # mostra o que faria
+node --env-file=.env.agente scripts/agente-biblioteca.mjs
+```
+
+Ele pega a varredura da fila, lê as pastas, mede cada arquivo e devolve a
+árvore; o servidor importa. O painel mostra a etapa e o progresso ao vivo,
+e *Cancelar* alcança um agente que já está lendo o disco.
+
+O ciclo tem três donos e nenhum faz o trabalho do outro: **o painel declara e
+pede**, **o agente lê o disco**, **o servidor importa**. Não é gosto — a
+aplicação roda em função serverless e não alcança o disco de ninguém; a
+credencial do banco fica no servidor e nunca desce para a máquina de casa.
+
+*Escanear* incremental confia no tamanho do arquivo; *Completa* recalcula o
+checksum de tudo, que é o que detecta um vídeo corrompido que manteve o
+tamanho.
+
+Para automatizar sem painel, o mesmo trabalho existe em linha de comando:
+
+```bash
 npm run biblioteca:importar -- --raiz="D:/Noveleiras de Plantão" --aplicar
 ```
 
