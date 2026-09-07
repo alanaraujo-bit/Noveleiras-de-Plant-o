@@ -21,7 +21,8 @@
     "admin": "node --env-file=.env scripts/admin.ts",
     "painel:reconciliar": "node --env-file=.env scripts/reconciliar-contadores.ts",
     "painel:inspecionar": "node --env-file=.env scripts/inspecionar-painel.mjs",
-    "painel:provar-moderacao": "node --env-file=.env scripts/provar-moderacao.mjs"
+    "painel:provar-moderacao": "node --env-file=.env scripts/provar-moderacao.mjs",
+    "painel:provar-acesso": "node --env-file=.env scripts/provar-acesso.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
