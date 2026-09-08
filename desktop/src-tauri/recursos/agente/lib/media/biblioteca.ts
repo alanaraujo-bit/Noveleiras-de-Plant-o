@@ -516,26 +516,3 @@ export function textoDeBusca(...partes: (string | null | undefined)[]): string {
     .replace(/\s+/g, " ")
     .trim();
 }
-
-/**
- * Decide se vale retirar do catálogo o que sumiu do disco.
- *
- * A pergunta que isto responde é "a pasta esvaziou, ou o disco sumiu?". As
- * duas coisas chegam ao código iguais — nenhum arquivo encontrado —, e
- * tratá-las do mesmo jeito apagaria a biblioteca inteira de quem apenas
- * desconectou um HD externo. Por isso, quando a varredura não achou NADA e o
- * catálogo tinha conteúdo, não se remove nada: espera-se a próxima varredura,
- * com o disco de volta.
- *
- * O preço é conhecido: quem esvazia a pasta de propósito continua vendo o
- * catálogo antigo e resolve pelo botão Remover na tela de Mídia. Perder um
- * clique é melhor que perder o catálogo por um cabo solto.
- *
- * Mora aqui, e não em `lib/painel/bibliotecas.ts`, porque aquele módulo é
- * `server-only` e não carrega fora do Next — uma regra desta gravidade
- * precisa ser exercitada por teste.
- */
-export function podeRemover(vistos: number, conhecidos: number): boolean {
-  if (conhecidos === 0) return false;
-  return vistos > 0;
-}

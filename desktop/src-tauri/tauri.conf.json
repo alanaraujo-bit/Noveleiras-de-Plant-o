@@ -1,0 +1,54 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Noveleiras",
+  "version": "1.0.0",
+  "identifier": "com.noveleiras.agente",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1430",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Noveleiras",
+        "width": 620,
+        "height": 660,
+        "resizable": true,
+        "center": true,
+        "visible": false,
+        "theme": "Dark"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "externalBin": ["binaries/node", "binaries/ffmpeg"],
+    "resources": { "recursos/agente": "agente" },
+    "publisher": "Alan Araujo",
+    "category": "Utility",
+    "shortDescription": "Mantem a biblioteca do Noveleiras no ar",
+    "longDescription": "Serve os videos da biblioteca, varre a pasta quando o painel pede e reporta que esta maquina esta no ar. Sobe junto com o Windows e vive na bandeja.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["PortugueseBR", "English"],
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

@@ -1,0 +1,280 @@
+/* Uma tela só, lida de cima para baixo. Nada de decoração: a pergunta que ela
+   responde é "está no ar?" e, se não está, "o que falta?". */
+
+:root {
+  --fundo: #14110f;
+  --superficie: #1c1917;
+  --borda: #2e2825;
+  --texto: #f0ebe6;
+  --fraco: #a09890;
+  --destaque: #e11d48;
+  --ok: #4ec9a0;
+  --atencao: #f0a830;
+  --ruim: #e5564b;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* O atributo `hidden` do HTML só esconde pela folha de estilo do navegador, e
+   QUALQUER `display` declarado aqui vence aquilo. Sem esta regra, `.modal`
+   (`display: grid`) fica visível para sempre — e como ele cobre a janela
+   inteira, engole todo clique: o aplicativo inteiro deixa de responder.
+   O `!important` é o ponto: `hidden` precisa ganhar de qualquer componente. */
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  background: var(--fundo);
+  color: var(--texto);
+  font: 14px/1.5 "Segoe UI", system-ui, sans-serif;
+}
+
+.topo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--borda);
+}
+
+.marca {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.marca div {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+
+.ponto {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--borda);
+  flex-shrink: 0;
+}
+
+.ponto.e-noar {
+  background: var(--ok);
+}
+
+/* Reiniciando pulsa: o estado é transitório, e um ponto parado sugeriria que
+   alguém precisa agir agora. */
+.ponto.e-reiniciando {
+  background: var(--atencao);
+  animation: pulso 1.1s ease-in-out infinite;
+}
+
+.ponto.e-desistiu {
+  background: var(--ruim);
+}
+
+.ponto.e-incompleto {
+  background: var(--atencao);
+}
+
+@keyframes pulso {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.fraco {
+  color: var(--fraco);
+  font-size: 12px;
+}
+
+.aviso {
+  margin: 14px 18px 0;
+  padding: 9px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--atencao);
+  color: var(--atencao);
+  font-size: 13px;
+}
+
+.aviso.ruim {
+  border-color: var(--ruim);
+  color: var(--ruim);
+}
+
+main {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  padding: 18px;
+}
+
+.campo {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.rotulo {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fraco);
+}
+
+.dica {
+  font-size: 11.5px;
+  color: var(--fraco);
+}
+
+.linha {
+  display: flex;
+  gap: 8px;
+}
+
+.linha input {
+  flex: 1;
+  min-width: 0;
+}
+
+.dupla {
+  display: grid;
+  grid-template-columns: 1fr 110px;
+  gap: 12px;
+}
+
+input[type="text"],
+input[type="password"],
+input[type="number"] {
+  padding: 9px 11px;
+  border-radius: 9px;
+  border: 1px solid var(--borda);
+  background: var(--superficie);
+  color: var(--texto);
+  font: inherit;
+}
+
+input:focus-visible {
+  outline: 2px solid var(--destaque);
+  outline-offset: 1px;
+}
+
+.btn {
+  padding: 9px 14px;
+  border-radius: 9px;
+  border: 1px solid var(--borda);
+  background: var(--superficie);
+  color: var(--texto);
+  font: inherit;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.btn:hover {
+  border-color: var(--fraco);
+}
+
+.btn-sm {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.btn-primario {
+  background: var(--destaque);
+  border-color: var(--destaque);
+}
+
+.acoes {
+  display: flex;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.rodape {
+  margin: 0;
+  padding-top: 4px;
+  border-top: 1px solid var(--borda);
+  padding-top: 12px;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 20px;
+}
+
+.cartao {
+  width: 100%;
+  max-width: 560px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--borda);
+  border-radius: 12px;
+  background: var(--superficie);
+  overflow: hidden;
+}
+
+.cartao-topo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--borda);
+}
+
+/* Monoespaçada porque é saída de processo: alinhamento de coluna é o que torna
+   um rastro de erro legível. */
+#registro-corpo {
+  margin: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fraco);
+}
+
+/* Atalho do primeiro uso. Fica acima do formulário porque é o caminho que
+   quase todo mundo deveria tomar — o formulário existe para quem não tem o
+   projeto nesta máquina. */
+.atalho {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 14px 18px 0;
+  padding: 13px 15px;
+  border: 1px solid var(--borda);
+  border-radius: 11px;
+  background: var(--superficie);
+}
+
+.atalho div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.atalho code {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 11.5px;
+}

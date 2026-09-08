@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import {
   corDoTitulo,
   dataDaEstreia,
+  podeRemover,
   slugificar,
   textoDeBusca,
 } from "@/lib/media/biblioteca";
@@ -87,6 +88,10 @@ export type ResultadoDaImportacao = {
   episodiosAtualizados: number;
   arquivosIndexados: number;
   arquivosAusentes: number;
+  /** Episódios retirados do catálogo por não existirem mais no disco. */
+  episodiosRemovidos: number;
+  /** Novelas retiradas por terem ficado sem episódio nenhum. */
+  novelasRemovidas: number;
   bytesTotal: number;
   avisos: string[];
 };
@@ -113,6 +118,8 @@ export async function importarArvore(
     episodiosAtualizados: 0,
     arquivosIndexados: 0,
     arquivosAusentes: 0,
+    episodiosRemovidos: 0,
+    novelasRemovidas: 0,
     bytesTotal: 0,
     avisos: [],
   };
@@ -320,12 +327,16 @@ export async function importarArvore(
   }
 
   // ---- o que sumiu -----------------------------------------------------
-  // Um arquivo que esta biblioteca conhecia e a varredura não achou vira
-  // MISSING; some da pasta, não do inventário. Apagar a linha esconderia
-  // exatamente o problema que a tela de Mídia existe para mostrar.
+  // Varrer é reconciliar com o disco nos dois sentidos: o que apareceu entra,
+  // o que sumiu sai. Enquanto um episódio sem arquivo continua no catálogo,
+  // quem abre o aplicativo vê uma novela que não toca.
   if (biblioteca.serverId) {
+    // Inclui os já marcados MISSING de propósito. Filtrá-los prenderia num
+    // limbo tudo o que uma varredura anterior marcou: eles deixariam de ser
+    // "conhecidos", nunca mais apareceriam como sumidos e ficariam para
+    // sempre no catálogo — que é exatamente o defeito que isto conserta.
     const conhecidos = await db.mediaAsset.findMany({
-      where: { serverId: biblioteca.serverId, state: { not: "MISSING" } },
+      where: { serverId: biblioteca.serverId },
       select: { id: true, mediaKey: true },
     });
     const sumidos = conhecidos.filter((a) => !chavesVistas.has(a.mediaKey));
@@ -340,9 +351,39 @@ export async function importarArvore(
         },
       });
       resultado.arquivosAusentes = sumidos.length;
-      resultado.avisos.push(
-        `${sumidos.length} arquivo(s) sumiram do disco e continuam no catálogo`,
-      );
+
+      // Marcar não basta: enquanto o episódio continua no catálogo, quem abre
+      // o aplicativo vê uma novela que não toca. Varrer é reconciliar com o
+      // disco, nos dois sentidos — o que apareceu entra, o que sumiu sai.
+      if (podeRemover(chavesVistas.size, conhecidos.length)) {
+        const chavesSumidas = sumidos.map((a) => a.mediaKey);
+        const removidos = await db.episode.deleteMany({
+          where: { mediaKey: { in: chavesSumidas } },
+        });
+        resultado.episodiosRemovidos = removidos.count;
+
+        // Novela sem episódio nenhum é casca: não há o que assistir nela.
+        const vazias = await db.novela.findMany({
+          where: { seasons: { every: { episodes: { none: {} } } } },
+          select: { id: true, title: true },
+        });
+        if (vazias.length > 0) {
+          await db.novela.deleteMany({ where: { id: { in: vazias.map((n) => n.id) } } });
+          resultado.novelasRemovidas = vazias.length;
+          resultado.avisos.push(
+            `retiradas do catálogo: ${vazias.map((n) => n.title).join(", ")}`,
+          );
+        }
+        // O inventário guarda o histórico; o catálogo mostra o que existe.
+        await db.mediaAsset.deleteMany({ where: { mediaKey: { in: chavesSumidas } } });
+      } else {
+        // Nada encontrado com catálogo cheio: é disco fora do ar, não pasta
+        // esvaziada. Avisar e não tocar em nada.
+        resultado.avisos.push(
+          `${sumidos.length} arquivo(s) sumiram do disco e continuam no catálogo — ` +
+            "nenhum arquivo foi encontrado nesta varredura, então o catálogo foi preservado",
+        );
+      }
     }
   }
 

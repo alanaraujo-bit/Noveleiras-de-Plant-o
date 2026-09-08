@@ -54,3 +54,13 @@ capturas/
 
 # cópias antes de apagar dados
 /backups/
+
+# Aplicativo de bandeja (desktop/)
+desktop/dist
+desktop/node_modules
+desktop/src-tauri/target
+desktop/src-tauri/gen
+# Node e ffmpeg viajam dentro do instalador: 176 MB que o Git nunca mais
+# esqueceria. `desktop/src-tauri/binaries/README.md` diz de onde vêm.
+desktop/src-tauri/binaries/*
+!desktop/src-tauri/binaries/README.md

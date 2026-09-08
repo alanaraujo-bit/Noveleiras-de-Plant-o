@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Cache-Control" content="no-store" />
+    <title>Noveleiras</title>
+  </head>
+  <body>
+    <header class="topo">
+      <div class="marca">
+        <span class="ponto" id="ponto" aria-hidden="true"></span>
+        <div>
+          <strong>Noveleiras</strong>
+          <span id="estado" class="fraco">verificando…</span>
+        </div>
+      </div>
+      <button id="registro-abrir" class="btn btn-sm" type="button">Registro</button>
+    </header>
+
+    <p id="aviso" class="aviso" hidden></p>
+
+    <!-- Primeiro uso: os dados já existem no projeto, e digitar um segredo à
+         mão é onde tudo dá errado em silêncio. -->
+    <section id="atalho" class="atalho" hidden>
+      <div>
+        <strong>Já tem o projeto nesta máquina?</strong>
+        <span class="fraco">Puxo tudo do <code>.env.agente</code> e você não digita nada.</span>
+      </div>
+      <button id="importar" class="btn btn-primario" type="button">Importar</button>
+    </section>
+
+    <main>
+      <label class="campo">
+        <span class="rotulo">Pasta das novelas</span>
+        <div class="linha">
+          <input id="biblioteca" type="text" spellcheck="false" placeholder="D:\Noveleiras" />
+          <button id="procurar" class="btn" type="button">Procurar</button>
+        </div>
+        <span class="dica">
+          É a pasta que o aplicativo de download deixa pronta. O painel lê daqui.
+        </span>
+      </label>
+
+      <label class="campo">
+        <span class="rotulo">Endereço do painel</span>
+        <input id="painel" type="text" spellcheck="false" placeholder="http://localhost:3100" />
+      </label>
+
+      <div class="dupla">
+        <label class="campo">
+          <span class="rotulo">Nome desta máquina</span>
+          <input id="slug" type="text" spellcheck="false" placeholder="casa" />
+        </label>
+        <label class="campo">
+          <span class="rotulo">Porta</span>
+          <input id="porta" type="number" min="1" max="65535" />
+        </label>
+      </div>
+
+      <label class="campo">
+        <span class="rotulo">Segredo desta máquina</span>
+        <input id="segredo" type="password" spellcheck="false" />
+        <span class="dica">
+          Aparece uma única vez ao registrar o servidor no painel. Fica guardado aqui.
+        </span>
+      </label>
+
+      <div class="acoes">
+        <button id="salvar" class="btn btn-primario" type="button">Salvar e religar</button>
+        <button id="ligar" class="btn" type="button">Ligar</button>
+        <button id="desligar" class="btn" type="button">Desligar</button>
+      </div>
+
+      <label class="check">
+        <input id="autostart" type="checkbox" />
+        <span>Iniciar junto com o Windows</span>
+      </label>
+
+      <p class="rodape fraco">
+        Fechar esta janela não desliga nada — o Noveleiras continua na bandeja.
+        Para encerrar de verdade, botão direito no ícone e <strong>Sair</strong>.
+      </p>
+    </main>
+
+    <div id="registro" class="modal" hidden>
+      <div class="cartao">
+        <div class="cartao-topo">
+          <strong>Registro</strong>
+          <button id="registro-fechar" class="btn btn-sm" type="button">Fechar</button>
+        </div>
+        <pre id="registro-corpo">sem nada registrado ainda</pre>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
