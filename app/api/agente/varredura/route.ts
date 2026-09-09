@@ -381,7 +381,11 @@ export async function POST(requisicao: Request) {
     });
 
     const faltantes = await reconciliarAusentes(biblioteca, atual.id);
-    const avisosFinais = [...avisos, ...faltantes.avisos].slice(0, LIMITE_DE_AVISOS);
+    // A reconciliação vem na frente do teto de propósito: as lacunas das 141
+    // novelas enchem os 200 lugares sozinhas, e o aviso que importa é o dela —
+    // "nenhum arquivo foi encontrado, o catálogo foi preservado" é o único
+    // sinal de que o disco estava fora do ar.
+    const avisosFinais = [...faltantes.avisos, ...avisos].slice(0, LIMITE_DE_AVISOS);
     const agora = new Date();
 
     await db.$transaction([
