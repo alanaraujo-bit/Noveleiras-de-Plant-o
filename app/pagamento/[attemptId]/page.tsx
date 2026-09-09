@@ -43,6 +43,7 @@ export default async function PagamentoPage({
       pixQrCode: true,
       expiresAt: true,
       failureMessage: true,
+      rawStatus: true,
       novelaId: true,
     },
   });
@@ -82,6 +83,7 @@ export default async function PagamentoPage({
         pixQrCode: tentativa.pixQrCode,
         expiraEm: tentativa.expiresAt?.toISOString() ?? null,
         mensagem: tentativa.failureMessage,
+        motivoCru: tentativa.rawStatus,
       }}
       destino={voltarPara}
       nomeDoItem={nomeDoItem}

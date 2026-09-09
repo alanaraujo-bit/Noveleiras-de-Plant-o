@@ -12,6 +12,11 @@ import {
 import { MercadoPago } from "./mercadopago";
 import { ProvedorMock, SEGREDO_MOCK } from "./mock";
 import {
+  contaEhDeTeste,
+  esquecerModoDeTeste,
+  resolverPagador,
+} from "./mercadopago";
+import {
   economiaAnualCents,
   ehPlanoVendavel,
   fimDoCiclo,
@@ -390,5 +395,130 @@ describe("validação de webhook", () => {
     const b = await p.lerWebhook(corpo, new Headers(), url);
     expect(a.eventId).toBe(b.eventId);
     expect(a.eventId).toContain("p-1");
+  });
+});
+
+// ------------------------------------------------- pagador de teste
+
+/**
+ * Substitui `fetch` para simular a resposta de `/users/me`.
+ *
+ * O que interessa provar aqui não é a rede: é que a substituição do pagador
+ * só acontece com credenciais de teste, e que na dúvida ela **não** acontece.
+ */
+function fingirConta(resposta: { ok: boolean; tags?: string[] }) {
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ id: 1, tags: resposta.tags ?? [] }), {
+      status: resposta.ok ? 200 : 500,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+}
+
+describe("pagador de teste", () => {
+  const fetchOriginal = globalThis.fetch;
+
+  beforeEach(() => {
+    esquecerModoDeTeste();
+    process.env.MERCADOPAGO_ACCESS_TOKEN = "APP_USR-token-qualquer";
+    process.env.MERCADOPAGO_WEBHOOK_SECRET = "segredo";
+  });
+
+  afterEach(() => {
+    globalThis.fetch = fetchOriginal;
+    esquecerModoDeTeste();
+  });
+
+  it("sem a variável, usa sempre o e-mail real", async () => {
+    delete process.env.MERCADOPAGO_TEST_PAYER_EMAIL;
+    fingirConta({ ok: true, tags: ["test_user"] });
+
+    expect(await resolverPagador("pessoa@real.com")).toEqual({
+      email: "pessoa@real.com",
+      substituido: false,
+    });
+  });
+
+  it("substitui quando a conta é de teste", async () => {
+    process.env.MERCADOPAGO_TEST_PAYER_EMAIL = "test_user_99@testuser.com";
+    fingirConta({ ok: true, tags: ["user_product_seller", "test_user"] });
+
+    expect(await resolverPagador("pessoa@real.com")).toEqual({
+      email: "test_user_99@testuser.com",
+      substituido: true,
+    });
+  });
+
+  it("NÃO substitui com credenciais reais, mesmo com a variável setada", async () => {
+    // A trava que importa: esquecer a variável ao migrar para produção não
+    // pode fazer a cobrança sair no nome de um comprador de teste.
+    process.env.MERCADOPAGO_TEST_PAYER_EMAIL = "test_user_99@testuser.com";
+    fingirConta({ ok: true, tags: ["normal", "user_product_seller"] });
+
+    expect(await resolverPagador("pessoa@real.com")).toEqual({
+      email: "pessoa@real.com",
+      substituido: false,
+    });
+  });
+
+  it("falha fechada: se não dá para saber, trata como produção", async () => {
+    process.env.MERCADOPAGO_TEST_PAYER_EMAIL = "test_user_99@testuser.com";
+    fingirConta({ ok: false });
+
+    expect(await resolverPagador("pessoa@real.com")).toEqual({
+      email: "pessoa@real.com",
+      substituido: false,
+    });
+  });
+
+  it("credencial com prefixo TEST- dispensa a consulta", async () => {
+    process.env.MERCADOPAGO_ACCESS_TOKEN = "TEST-1234-abcd";
+    process.env.MERCADOPAGO_TEST_PAYER_EMAIL = "test_user_99@testuser.com";
+    globalThis.fetch = (async () => {
+      throw new Error("não deveria consultar a rede");
+    }) as typeof fetch;
+
+    expect(await contaEhDeTeste()).toBe(true);
+    expect((await resolverPagador("pessoa@real.com")).substituido).toBe(true);
+  });
+
+  it("a resposta é memorizada entre chamadas", async () => {
+    process.env.MERCADOPAGO_TEST_PAYER_EMAIL = "test_user_99@testuser.com";
+    let idas = 0;
+    globalThis.fetch = (async () => {
+      idas += 1;
+      return new Response(JSON.stringify({ id: 1, tags: ["test_user"] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    await resolverPagador("a@b.c");
+    await resolverPagador("a@b.c");
+    await resolverPagador("a@b.c");
+    expect(idas).toBe(1);
+  });
+
+  it("a dúvida não é memorizada: tenta de novo na próxima", async () => {
+    process.env.MERCADOPAGO_TEST_PAYER_EMAIL = "test_user_99@testuser.com";
+    let idas = 0;
+    globalThis.fetch = (async () => {
+      idas += 1;
+      return new Response("erro", { status: 500 });
+    }) as typeof fetch;
+
+    await resolverPagador("a@b.c");
+    await resolverPagador("a@b.c");
+    expect(idas).toBe(2);
+  });
+
+  it("tags ausentes contam como produção", async () => {
+    process.env.MERCADOPAGO_TEST_PAYER_EMAIL = "test_user_99@testuser.com";
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ id: 1 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch;
+
+    expect(await contaEhDeTeste()).toBe(false);
   });
 });

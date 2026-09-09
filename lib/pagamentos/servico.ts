@@ -131,6 +131,10 @@ export async function iniciarAssinatura(entrada: {
         checkoutUrl: resposta.checkoutUrl,
         pixQrCode: resposta.pixQrCode,
         expiresAt: resposta.expiraEm,
+        // Cobranca feita contra um comprador de teste nao e receita. `isDemo`
+        // ja e o campo que o painel usa para separar faturamento real de
+        // vitrine — reusa-lo evita um conceito paralelo.
+        isDemo: mock || resposta.pagadorSubstituido === true,
       },
     });
 
@@ -259,7 +263,12 @@ export async function iniciarCompra(entrada: {
           checkoutUrl: resposta.checkoutUrl,
           pixQrCode: resposta.pixQrCode,
           expiresAt: resposta.expiraEm,
+          isDemo: mock || resposta.pagadorSubstituido === true,
         },
+      }),
+      db.purchase.update({
+        where: { id: compra.id },
+        data: { isDemo: mock || resposta.pagadorSubstituido === true },
       }),
       db.purchase.update({
         where: { id: compra.id },

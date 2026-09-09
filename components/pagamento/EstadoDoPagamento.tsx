@@ -39,6 +39,14 @@ type Cobranca = {
   pixQrCode: string | null;
   expiraEm: string | null;
   mensagem: string | null;
+  /**
+   * Como o provedor descreveu o estado, cru.
+   *
+   * Serve para separar "voce cancelou" de "o prazo acabou": os dois caem em
+   * EXPIRED no nosso enum, mas dizer "cobranca expirada" a quem clicou em
+   * cancelar e confuso o bastante para gerar suporte.
+   */
+  motivoCru: string | null;
 };
 
 const ESPERAS_MS = [1500, 2000, 3000, 4000, 6000, 8000, 10_000, 15_000];
@@ -194,15 +202,22 @@ export function EstadoDoPagamento({
   }
 
   if (cobranca.status === "EXPIRED") {
+    // O nosso enum não distingue os dois, mas o provedor sim. Quem clicou em
+    // "cancelar" não pode ler "expirou": parece erro do sistema.
+    const cancelou = /cancel/i.test(cobranca.motivoCru ?? "");
+
     return (
       <Moldura>
         <div className="grid size-16 place-items-center rounded-full bg-white/8 text-2xl">
-          ⏳
+          {cancelou ? "↩" : "⏳"}
         </div>
-        <h1 className="mt-5 text-[1.5rem] leading-tight">Cobrança expirada</h1>
+        <h1 className="mt-5 text-[1.5rem] leading-tight">
+          {cancelou ? "Pagamento cancelado" : "Cobrança expirada"}
+        </h1>
         <p className="mt-2 text-[0.875rem] text-cream-400">
-          O prazo desta cobrança acabou e nada foi debitado. É só começar de
-          novo.
+          {cancelou
+            ? "Você saiu do pagamento antes de concluir e nada foi cobrado. Pode retomar quando quiser."
+            : "O prazo desta cobrança acabou e nada foi debitado. É só começar de novo."}
         </p>
         <Botao
           tamanho="grande"
@@ -210,8 +225,17 @@ export function EstadoDoPagamento({
           className="mt-7"
           onClick={() => router.push("/planos")}
         >
-          Começar de novo
+          {cancelou ? "Escolher um plano" : "Começar de novo"}
         </Botao>
+        <BotaoLink
+          href={destino}
+          variante="fantasma"
+          tamanho="medio"
+          largura="cheia"
+          className="mt-2"
+        >
+          Voltar
+        </BotaoLink>
       </Moldura>
     );
   }

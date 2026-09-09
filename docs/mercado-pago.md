@@ -19,6 +19,7 @@ as credenciais de teste).
 | `MERCADOPAGO_ACCESS_TOKEN` | **sim** | Painel do Mercado Pago → Suas integrações → sua aplicação → Credenciais de produção → *Access token*. Começa com `APP_USR-`. |
 | `MERCADOPAGO_WEBHOOK_SECRET` | **sim** | Painel → sua aplicação → Webhooks → *Assinatura secreta*. Gerada no momento em que você cadastra a URL de notificação. |
 | `MERCADOPAGO_NOTIFICATION_URL` | recomendada | A URL pública do webhook (seção 3). Sem ela, o Mercado Pago usa a URL configurada no painel; com ela, cada cobrança carrega o endereço explicitamente — o que evita perder notificação se o painel for alterado. |
+| `MERCADOPAGO_TEST_PAYER_EMAIL` | só em teste | E-mail de um **Buyer Test User** criado no painel (Suas integrações → Contas de teste). Enquanto as credenciais forem de um usuário de teste, é este e-mail que vai no corpo enviado ao provedor — a conta real de quem clicou continua sendo a dona da tentativa, da compra e do direito. Ver seção 9. |
 | `MERCADOPAGO_PUBLIC_KEY` | **não** | Só seria necessária para montar o formulário de cartão dentro do nosso domínio (Checkout Transparente). A implementação atual usa checkout hospedado e Pix, que não expõem dados de cartão para nós — e é justamente por isso que ela não pede PCI. Se um dia quiser o formulário embutido, é esta a chave que entra. |
 
 ### Variáveis nossas, que eu não consigo gravar
@@ -59,11 +60,14 @@ O endpoint é uma rota da aplicação, no mesmo deploy do app:
 <origem>/api/pagamentos/webhook
 ```
 
-A origem é o domínio do projeto na Vercel. **Ainda não posso te dar a URL
-final**: não há deploy publicado desta fase, e a Vercel CLI não está instalada
-nesta máquina (`npm i -g vercel` resolve). Assim que houver um deploy, a URL
-exata sai de `vercel ls` ou do painel — e é ela que vai nos dois lugares:
-no cadastro de webhook do Mercado Pago e em `MERCADOPAGO_NOTIFICATION_URL`.
+Publicada e verificada externamente:
+
+```
+https://noveleiras-de-plantao.vercel.app/api/pagamentos/webhook
+```
+
+É ela que vai nos dois lugares: no cadastro de webhook do painel do Mercado
+Pago e em `MERCADOPAGO_NOTIFICATION_URL`.
 
 Teste (credenciais de teste) e produção usam **a mesma rota**; o que muda é o
 par de credenciais e, se você usar um preview, o domínio.
@@ -149,3 +153,64 @@ Mudar preço é mudar o código (revisão obrigatória) e rodar
 - **Assinatura**: **cartão apenas**. O Mercado Pago não faz débito automático
   por Pix, então uma assinatura por Pix nunca renovaria. A tentativa é
   recusada com mensagem clara em vez de criar algo quebrado.
+
+---
+
+## 9. Comprador de teste (`MERCADOPAGO_TEST_PAYER_EMAIL`)
+
+### Por que existe
+
+O Mercado Pago recusa cobranças em que pagador e recebedor são de naturezas
+diferentes:
+
+```
+HTTP 400
+{ "message": "Both payer and collector must be real or test users", "status": 400 }
+```
+
+Enquanto a operação roda com credenciais de um **usuário de teste**, o
+`payer_email` também precisa ser de um usuário de teste. Mandar o e-mail real
+de quem clicou — que é o correto em produção — derruba todo checkout com esse
+400.
+
+### O que a variável muda, e o que ela não muda
+
+Muda **apenas** o `payer_email` no corpo enviado ao Mercado Pago.
+
+Não muda nada nosso: `PaymentAttempt.userId`, `Purchase.userId` e o
+`Entitlement` continuam apontando para a conta real de quem clicou. Quem paga
+com o comprador de teste é quem recebe o acesso. A conta da pessoa não é
+alterada, e o e-mail nunca é enviado ao frontend.
+
+### As duas travas
+
+A substituição exige **as duas** condições ao mesmo tempo:
+
+1. `MERCADOPAGO_TEST_PAYER_EMAIL` configurada;
+2. a conta dona do access token confirmada como usuário de teste.
+
+A segunda é verificada em tempo de execução: prefixo `TEST-` no token, ou a
+tag `test_user` em `GET /users/me` — este último é o único sinal confiável,
+porque credenciais de usuário de teste vêm com o mesmo prefixo `APP_USR-` das
+de produção.
+
+**Falha fechada.** Se a consulta não responder, o sistema assume produção e
+usa o e-mail real. O erro seguro é o checkout falhar visivelmente num ambiente
+de teste; o inseguro seria cobrar um comprador de teste achando que é
+produção.
+
+### Ao migrar para produção real
+
+Não é preciso fazer nada. Trocando as credenciais, a conta deixa de ter a tag
+`test_user`, a segunda condição para de valer e o `payer_email` volta
+sozinho a ser o e-mail real — mesmo que a variável fique para trás. Nesse
+caso ela é ignorada e um aviso vai ao log do servidor pedindo a remoção.
+
+A memória do tipo de conta dura 10 minutos, então a virada acontece sem
+reinício.
+
+### Efeito no relatório financeiro
+
+Cobrança feita contra um comprador de teste nasce com `isDemo: true` — o mesmo
+campo que o painel já usa para separar receita real de vitrine. Sem isso,
+dinheiro fictício entraria no MRR.

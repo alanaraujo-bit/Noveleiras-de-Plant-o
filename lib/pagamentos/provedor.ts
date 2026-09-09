@@ -74,6 +74,14 @@ export type RespostaCheckout = {
   pixQrCode: string | null;
   pixQrCodeBase64: string | null;
   expiraEm: Date | null;
+  /**
+   * O pagador enviado ao provedor foi substituído por um comprador de teste.
+   *
+   * Existe para que a cobrança nasça marcada como demonstração: dinheiro de
+   * usuário de teste não é receita, e sem esta marca ele entraria no MRR do
+   * painel misturado com faturamento de verdade.
+   */
+  pagadorSubstituido?: boolean;
   /** Resposta crua, guardada para auditoria. */
   bruto: unknown;
 };

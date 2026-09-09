@@ -48,6 +48,7 @@ export async function GET(
       pixQrCode: true,
       expiresAt: true,
       failureMessage: true,
+      rawStatus: true,
     },
   });
 
@@ -95,6 +96,7 @@ export async function GET(
       pixQrCode: tentativa.pixQrCode,
       expiraEm: tentativa.expiresAt?.toISOString() ?? null,
       mensagem: tentativa.failureMessage,
+      motivoCru: tentativa.rawStatus,
     },
     { headers: { "Cache-Control": "no-store" } },
   );

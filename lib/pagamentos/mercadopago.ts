@@ -54,6 +54,104 @@ function lerCredenciais(): Credenciais {
   };
 }
 
+// ------------------------------------------------------ pagador de teste
+//
+// O Mercado Pago recusa `/preapproval` com 400 e a mensagem "Both payer and
+// collector must be real or test users" quando as credenciais pertencem a um
+// usuario de teste e o pagador e uma pessoa real. Enquanto a operacao roda com
+// credenciais de teste, o e-mail enviado ao provedor precisa ser o de um
+// comprador de teste — e so ele: a tentativa, a compra e o direito continuam
+// amarrados a conta real de quem clicou.
+
+type ModoConhecido = { valor: boolean; em: number };
+
+/**
+ * Memoria curta do tipo de conta.
+ *
+ * Sem cache, todo checkout gastaria uma ida extra ao provedor so para
+ * descobrir algo que muda no maximo quando alguem troca as credenciais.
+ * O TTL curto garante que a migracao para producao seja notada sozinha, sem
+ * ninguem precisar lembrar de reiniciar nada.
+ */
+let modoDeTesteConhecido: ModoConhecido | null = null;
+const TTL_MODO_MS = 10 * 60_000;
+
+/** Descarta a memoria do tipo de conta. Usado nos testes. */
+export function esquecerModoDeTeste(): void {
+  modoDeTesteConhecido = null;
+}
+
+/**
+ * A conta dona do access token e um usuario de teste?
+ *
+ * Duas fontes, nesta ordem:
+ *
+ * 1. Prefixo `TEST-`, que identifica as credenciais de teste classicas.
+ * 2. A tag `test_user` em `/users/me`. E o unico sinal confiavel para as
+ *    credenciais de um **usuario de teste**, que vem com prefixo `APP_USR-`
+ *    identico ao de producao — olhar so o prefixo daria producao como
+ *    resposta e a substituicao nunca aconteceria.
+ *
+ * **Falha fechada.** Se a consulta nao responder, devolve `false`, ou seja,
+ * "trate como producao". O erro seguro aqui e deixar de substituir o pagador
+ * num ambiente de teste (o checkout falha visivelmente, como hoje); o erro
+ * inseguro seria cobrar um comprador de teste achando que e producao.
+ */
+export async function contaEhDeTeste(): Promise<boolean> {
+  const { accessToken } = lerCredenciais();
+  if (accessToken.startsWith("TEST-")) return true;
+
+  const agora = Date.now();
+  if (modoDeTesteConhecido && agora - modoDeTesteConhecido.em < TTL_MODO_MS) {
+    return modoDeTesteConhecido.valor;
+  }
+
+  try {
+    const conta = await chamar<{ tags?: unknown }>("/users/me");
+    const tags = Array.isArray(conta.tags) ? conta.tags : [];
+    const teste = tags.includes("test_user");
+    modoDeTesteConhecido = { valor: teste, em: agora };
+    return teste;
+  } catch {
+    // Nao cacheia a duvida: a proxima tentativa consulta de novo.
+    return false;
+  }
+}
+
+export function emailDeTesteConfigurado(): string | null {
+  return process.env.MERCADOPAGO_TEST_PAYER_EMAIL?.trim() || null;
+}
+
+export type PagadorResolvido = { email: string; substituido: boolean };
+
+/**
+ * Decide qual e-mail vai no corpo enviado ao provedor.
+ *
+ * A substituicao exige **as duas** condicoes: a variavel configurada e a conta
+ * confirmada como de teste. Ao trocar para credenciais reais, a segunda deixa
+ * de valer sozinha — o e-mail real da pessoa volta a ser usado sem que
+ * ninguem precise remover a variavel.
+ */
+export async function resolverPagador(
+  emailReal: string,
+): Promise<PagadorResolvido> {
+  const deTeste = emailDeTesteConfigurado();
+  if (!deTeste) return { email: emailReal, substituido: false };
+
+  if (!(await contaEhDeTeste())) {
+    // Configuracao perigosa: alguem deixou a variavel para tras ao migrar.
+    // Ignorar em silencio esconderia isso, entao fica registrado no log do
+    // servidor — sem imprimir o endereco.
+    console.warn(
+      "[mercadopago] MERCADOPAGO_TEST_PAYER_EMAIL ignorado: as credenciais " +
+        "nao pertencem a um usuario de teste. Remova a variavel.",
+    );
+    return { email: emailReal, substituido: false };
+  }
+
+  return { email: deTeste, substituido: true };
+}
+
 export function credenciaisPresentes(): boolean {
   return Boolean(
     process.env.MERCADOPAGO_ACCESS_TOKEN?.trim() &&
@@ -173,11 +271,14 @@ export class MercadoPago implements ProvedorDePagamento {
     }
 
     const { notificationUrl } = lerCredenciais();
+    const pagador = await resolverPagador(entrada.usuario.email);
 
     const corpo = {
       reason: entrada.plano.nome,
       external_reference: entrada.referenciaExterna,
-      payer_email: entrada.usuario.email,
+      // Só o corpo enviado ao provedor muda. `PaymentAttempt.userId`, a
+      // assinatura e o direito continuam apontando para a conta real.
+      payer_email: pagador.email,
       back_url: entrada.urlRetorno,
       ...(notificationUrl ? { notification_url: notificationUrl } : {}),
       auto_recurring: {
@@ -211,6 +312,7 @@ export class MercadoPago implements ProvedorDePagamento {
       pixQrCode: null,
       pixQrCodeBase64: null,
       expiraEm: null,
+      pagadorSubstituido: pagador.substituido,
       bruto: resposta,
     };
   }
@@ -226,6 +328,7 @@ export class MercadoPago implements ProvedorDePagamento {
     entrada: CriarCompraEntrada,
   ): Promise<RespostaCheckout> {
     const { notificationUrl } = lerCredenciais();
+    const pagador = await resolverPagador(entrada.usuario.email);
 
     const resposta = await chamar<{
       id: number;
@@ -244,7 +347,7 @@ export class MercadoPago implements ProvedorDePagamento {
         external_reference: entrada.referenciaExterna,
         ...(notificationUrl ? { notification_url: notificationUrl } : {}),
         payer: {
-          email: entrada.usuario.email,
+          email: pagador.email,
           first_name: entrada.usuario.nome,
         },
       }),
@@ -261,6 +364,7 @@ export class MercadoPago implements ProvedorDePagamento {
       expiraEm: resposta.date_of_expiration
         ? new Date(resposta.date_of_expiration)
         : null,
+      pagadorSubstituido: pagador.substituido,
       bruto: resposta,
     };
   }
@@ -270,6 +374,7 @@ export class MercadoPago implements ProvedorDePagamento {
     entrada: CriarCompraEntrada,
   ): Promise<RespostaCheckout> {
     const { notificationUrl } = lerCredenciais();
+    const pagador = await resolverPagador(entrada.usuario.email);
 
     const resposta = await chamar<{
       id: string;
@@ -291,7 +396,7 @@ export class MercadoPago implements ProvedorDePagamento {
           },
         ],
         payer: {
-          email: entrada.usuario.email,
+          email: pagador.email,
           name: entrada.usuario.nome,
         },
         back_urls: {
@@ -310,6 +415,7 @@ export class MercadoPago implements ProvedorDePagamento {
       pixQrCode: null,
       pixQrCodeBase64: null,
       expiraEm: null,
+      pagadorSubstituido: pagador.substituido,
       bruto: resposta,
     };
   }
