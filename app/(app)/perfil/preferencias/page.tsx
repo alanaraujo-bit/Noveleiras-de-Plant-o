@@ -35,7 +35,11 @@ export default async function PreferenciasPage() {
 
       <PainelPreferencias
         inicial={viewer.preferences}
-        perfil={{ nome: viewer.name, avatarSeed: viewer.avatarSeed }}
+        perfil={{
+          nome: viewer.name,
+          avatarSeed: viewer.avatarSeed,
+          avatarUrl: viewer.avatarUrl,
+        }}
         generos={generos.map((genero) => ({
           id: genero.id,
           name: genero.name,

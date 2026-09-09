@@ -1,11 +1,75 @@
 import Link from "next/link";
 
-import { listGenres } from "@/lib/repositories/catalog";
+import {
+  listGenresWithHighlights,
+  type GenreWithHighlights,
+} from "@/lib/repositories/catalog";
 
 export const metadata = { title: "Gêneros" };
 
+function MontagemCapas({ genero }: { genero: GenreWithHighlights }) {
+  const [principal, secundaria, terceira] = genero.highlights;
+
+  if (!principal) {
+    return (
+      <img
+        src={genero.artUrl}
+        alt=""
+        loading="lazy"
+        className="size-full object-cover"
+      />
+    );
+  }
+
+  if (!secundaria) {
+    return (
+      <img
+        src={principal.posterUrl}
+        alt=""
+        loading="lazy"
+        className="size-full object-cover object-top transition-transform duration-500 group-hover:scale-[1.025]"
+      />
+    );
+  }
+
+  return (
+    <div className="flex size-full" aria-hidden="true">
+      <div className="relative w-3/5 overflow-hidden">
+        <img
+          src={principal.posterUrl}
+          alt=""
+          loading="lazy"
+          className="absolute inset-0 size-full object-cover object-top transition-transform duration-500 group-hover:scale-[1.025]"
+        />
+      </div>
+
+      <div className="flex min-w-0 flex-1 flex-col border-l border-white/10">
+        <div className="relative min-h-0 flex-1 overflow-hidden">
+          <img
+            src={secundaria.posterUrl}
+            alt=""
+            loading="lazy"
+            className="absolute inset-0 size-full object-cover object-top transition-transform duration-500 group-hover:scale-[1.025]"
+          />
+        </div>
+
+        {terceira ? (
+          <div className="relative min-h-0 flex-1 overflow-hidden border-t border-white/10">
+            <img
+              src={terceira.posterUrl}
+              alt=""
+              loading="lazy"
+              className="absolute inset-0 size-full object-cover object-top transition-transform duration-500 group-hover:scale-[1.025]"
+            />
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export default async function GenerosPage() {
-  const generos = await listGenres();
+  const generos = await listGenresWithHighlights();
 
   return (
     <div>
@@ -25,25 +89,26 @@ export default async function GenerosPage() {
           <li key={genero.id}>
             <Link
               href={`/generos/${genero.slug}`}
-              className="tap relative block overflow-hidden rounded-card border border-white/8"
-              style={{ aspectRatio: "4 / 5" }}
+              className="tap group block overflow-hidden rounded-card border border-white/8 bg-ink-850"
             >
-              <img
-                src={genero.artUrl}
-                alt=""
-                loading="lazy"
-                className="absolute inset-0 size-full object-cover"
-              />
-              <div className="absolute inset-0 bg-gradient-to-t from-ink-950/92 via-ink-950/25 to-transparent" />
-              <div className="absolute inset-x-0 bottom-0 p-3.5">
+              <div className="aspect-[4/3] overflow-hidden bg-ink-800">
+                <MontagemCapas genero={genero} />
+              </div>
+
+              <div className="border-t border-white/8 p-3.5">
                 <h2 className="text-[1.125rem] leading-tight">{genero.name}</h2>
-                <p className="mt-1 line-clamp-2 text-[0.75rem] leading-snug text-cream-400">
+                <p className="mt-1 min-h-8 line-clamp-2 text-[0.75rem] leading-snug text-cream-400">
                   {genero.tagline}
                 </p>
                 <p className="mt-1.5 text-[0.6875rem] font-semibold text-gold-400">
                   {genero.novelaCount}{" "}
                   {genero.novelaCount === 1 ? "novela" : "novelas"}
                 </p>
+                {genero.highlights.length > 0 ? (
+                  <span className="sr-only">
+                    Em destaque: {genero.highlights.map(({ title }) => title).join(", ")}.
+                  </span>
+                ) : null}
               </div>
             </Link>
           </li>

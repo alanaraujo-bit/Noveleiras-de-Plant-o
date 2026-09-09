@@ -18,7 +18,7 @@ use std::collections::VecDeque;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::config::Config;
 
@@ -67,13 +67,19 @@ struct Interno {
     estado: Estado,
     erro: Option<String>,
     log: VecDeque<String>,
-    filho: Option<tokio::process::Child>,
 }
 
 pub struct Agente {
     interno: Mutex<Interno>,
     parada: Arc<AtomicBool>,
     geracao: Arc<AtomicU32>,
+    /// Id do processo Node vivo agora, ou 0. É por ele que `parar` mata: quem
+    /// espera o filho é a tarefa de vigia, que não pode ceder o handle sem
+    /// deixar de saber quando ele morre.
+    pid: AtomicU32,
+    /// Enquanto verdadeiro há um processo no ar. `parar` espera virar falso
+    /// antes de voltar, para a porta de mídia estar livre quando religarem.
+    vivo: AtomicBool,
 }
 
 impl Default for Agente {
@@ -82,6 +88,8 @@ impl Default for Agente {
             interno: Mutex::new(Interno::default()),
             parada: Arc::new(AtomicBool::new(false)),
             geracao: Arc::new(AtomicU32::new(0)),
+            pid: AtomicU32::new(0),
+            vivo: AtomicBool::new(false),
         }
     }
 }
@@ -190,6 +198,11 @@ fn nascer(app: &tauri::AppHandle, c: &Config) -> anyhow::Result<tokio::process::
         // A configuração viaja por ambiente: o agente já lia daí quando era
         // comando de terminal, então nada nele precisou mudar de forma.
         .env("BIBLIOTECA_RAIZ", &c.biblioteca)
+        // O transcodificador lê a entrada e grava a saída a partir daqui, e o
+        // batimento mede o disco desta pasta. Sem passá-la, ambos caíam no
+        // diretório de instalação (`...\agente\scripts\public\media`) em vez da
+        // biblioteca. É a mesma raiz que servimos: entrada e saída convivem.
+        .env("AGENTE_MIDIA", &c.biblioteca)
         .env("MIDIA_PORTA", c.porta.to_string())
         .env("AGENTE_DESTINO", &c.painel)
         .env("AGENTE_SLUG", &c.slug)
@@ -240,15 +253,31 @@ pub fn iniciar(app: &tauri::AppHandle, agente: Arc<Agente>, c: Config, avisar: i
                     return;
                 }
             };
-            encaminhar(agente.clone(), filho.stdout.take());
-            encaminhar(agente.clone(), filho.stderr.take());
+            // Guarda o id antes de qualquer espera: é o que `parar` usa para
+            // matar. Sem isto o processo sobrevivia a cada troca de configuração
+            // e segurava a porta de mídia.
+            agente.pid.store(filho.id().unwrap_or(0), Ordering::SeqCst);
+            agente.vivo.store(true, Ordering::SeqCst);
+
+            // A parada pode ter chegado enquanto o filho nascia. Como o laço já
+            // trocou de geração, ninguém mais o vigia: então o próprio vigia o
+            // mata, senão ele ficaria órfão e vivo.
+            if agente.parada.load(Ordering::SeqCst)
+                || agente.geracao.load(Ordering::SeqCst) != geracao
             {
-                let mut i = agente.interno.lock().unwrap();
-                i.filho = None; // o filho vive nesta tarefa; `parar` mata pelo id
-                let _ = &mut i;
+                let _ = filho.start_kill();
+                let _ = filho.wait().await;
+                agente.vivo.store(false, Ordering::SeqCst);
+                agente.pid.store(0, Ordering::SeqCst);
+                return;
             }
 
+            encaminhar(agente.clone(), filho.stdout.take());
+            encaminhar(agente.clone(), filho.stderr.take());
+
             let saida = filho.wait().await;
+            agente.vivo.store(false, Ordering::SeqCst);
+            agente.pid.store(0, Ordering::SeqCst);
             if agente.parada.load(Ordering::SeqCst) {
                 return;
             }
@@ -285,13 +314,55 @@ pub fn iniciar(app: &tauri::AppHandle, agente: Arc<Agente>, c: Config, avisar: i
 
 pub async fn parar(agente: Arc<Agente>) {
     agente.parada.store(true, Ordering::SeqCst);
+    // Trocar a geração faz o laço de vigia desistir de renascer o filho.
     agente.geracao.fetch_add(1, Ordering::SeqCst);
-    let filho = agente.interno.lock().unwrap().filho.take();
-    if let Some(mut f) = filho {
-        let _ = f.kill().await;
-        let _ = f.wait().await;
+
+    // Mata o processo de agora — e qualquer um que ainda esteja nascendo na
+    // janela desta parada — até o vigia confirmar que morreu. Sem esperar a
+    // morte, o "salvar" e o "religar" subiam um agente novo enquanto o antigo
+    // ainda segurava a porta de mídia, e o novo caía com EADDRINUSE. O teto
+    // evita travar caso o processo escape do nosso alcance.
+    let limite = Instant::now() + Duration::from_secs(10);
+    loop {
+        let pid = agente.pid.swap(0, Ordering::SeqCst);
+        if pid != 0 {
+            matar_processo(pid).await;
+        }
+        if !agente.vivo.load(Ordering::SeqCst) || Instant::now() >= limite {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
     agente.marcar(Estado::Parado, None);
+}
+
+/// Mata um processo e a árvore abaixo dele.
+///
+/// Pelo id, e não pelo handle, porque quem espera o filho é a tarefa de vigia,
+/// que não pode cedê-lo sem deixar de saber quando ele morre. A árvore inteira
+/// (`/T`) porque o agente gera ffmpeg: matar só o pai deixaria a conversão
+/// rodando sozinha, segurando o arquivo e o disco.
+async fn matar_processo(pid: u32) {
+    let id = pid.to_string();
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = tokio::process::Command::new("taskkill");
+        cmd.args(["/PID", &id, "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        // CREATE_NO_WINDOW: sem isto um console preto pisca a cada parada.
+        cmd.as_std_mut().creation_flags(0x0800_0000);
+        let _ = cmd.status().await;
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = tokio::process::Command::new("kill")
+            .args(["-TERM", &id])
+            .status()
+            .await;
+    }
 }
 
 fn encaminhar<L>(agente: Arc<Agente>, saida: Option<L>)
@@ -350,6 +421,23 @@ mod tests {
     #[test]
     fn comeca_parado() {
         assert_eq!(Agente::default().estado(), Estado::Parado);
+    }
+
+    /// O conserto do `parar` repousa numa invariante: `vivo == false` quer dizer
+    /// "não há o que esperar". Um agente recém-criado nasce assim, e parar sobre
+    /// ele volta na hora — sem gastar o teto de 10s — e marca Parado. Sem fixar
+    /// isto, o defeito que deixava o Node órfão passaria de novo: o teste de
+    /// decisão continuava verde enquanto `parar` não matava nada.
+    #[test]
+    fn parar_sem_filho_volta_na_hora_e_marca_parado() {
+        let a = Arc::new(Agente::default());
+        assert_eq!(a.pid.load(Ordering::SeqCst), 0);
+        assert!(!a.vivo.load(Ordering::SeqCst));
+
+        let inicio = Instant::now();
+        tauri::async_runtime::block_on(parar(a.clone()));
+        assert!(inicio.elapsed() < Duration::from_secs(1));
+        assert_eq!(a.estado(), Estado::Parado);
     }
 
     /// O caminho estendido do Windows precisa virar caminho comum antes de ir

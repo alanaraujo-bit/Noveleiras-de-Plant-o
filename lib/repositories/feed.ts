@@ -2,6 +2,7 @@ import "server-only";
 
 import { db } from "@/lib/db";
 import { posterUrl } from "@/lib/media/resolver";
+import { avatarUrl } from "@/lib/media/avatars";
 
 /**
  * Feed da comunidade.
@@ -16,6 +17,7 @@ export type FeedAuthor = {
   name: string;
   handle: string;
   avatarSeed: string;
+  avatarUrl: string | null;
 };
 
 export type FeedComment = {
@@ -51,7 +53,24 @@ const AUTHOR_SELECT = {
   name: true,
   handle: true,
   avatarSeed: true,
+  avatarKey: true,
 } as const;
+
+function toFeedAuthor(author: {
+  id: string;
+  name: string;
+  handle: string;
+  avatarSeed: string;
+  avatarKey: string | null;
+}): FeedAuthor {
+  return {
+    id: author.id,
+    name: author.name,
+    handle: author.handle,
+    avatarSeed: author.avatarSeed,
+    avatarUrl: avatarUrl(author.id, author.avatarKey),
+  };
+}
 
 export async function getFeed(
   viewerId: string | null,
@@ -106,7 +125,7 @@ export async function getFeed(
     createdAt: row.createdAt.toISOString(),
     likedByViewer: Array.isArray(row.likes) ? row.likes.length > 0 : false,
     isOwn: row.userId === viewerId,
-    author: row.user,
+    author: toFeedAuthor(row.user),
     novela: row.novela
       ? {
           slug: row.novela.slug,
@@ -119,7 +138,7 @@ export async function getFeed(
       id: comment.id,
       body: comment.body,
       createdAt: comment.createdAt.toISOString(),
-      author: comment.user,
+      author: toFeedAuthor(comment.user),
     })),
   }));
 }
@@ -196,7 +215,7 @@ export async function addComment(input: {
       data: { commentCount: { increment: 1 } },
     }),
   ]);
-  return comment;
+  return { ...comment, user: toFeedAuthor(comment.user) };
 }
 
 /** Novelas que a pessoa pode marcar ao publicar. */

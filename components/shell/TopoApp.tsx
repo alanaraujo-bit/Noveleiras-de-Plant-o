@@ -20,9 +20,11 @@ function saudacaoDaHora(hora: number): string {
 export function TopoApp({
   nome,
   avatarSeed,
+  avatarUrl,
 }: {
   nome: string;
   avatarSeed: string;
+  avatarUrl?: string | null;
 }) {
   const [rolou, setRolou] = useState(false);
   // A saudação depende do relógio de quem está assistindo, não do servidor.
@@ -78,7 +80,7 @@ export function TopoApp({
             <IconeBusca tamanho={21} />
           </Link>
           <Link href="/perfil" aria-label="Sua conta" className="tap p-0.5">
-            <Avatar nome={nome} seed={avatarSeed} tamanho={34} />
+            <Avatar nome={nome} seed={avatarSeed} fotoUrl={avatarUrl} tamanho={34} />
           </Link>
         </div>
       </div>

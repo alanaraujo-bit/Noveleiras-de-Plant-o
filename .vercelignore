@@ -1,0 +1,26 @@
+# Dependências e saídas geradas localmente
+node_modules/
+.next/
+out/
+build/
+coverage/
+*.tsbuildinfo
+
+# Segredos e configuração exclusiva da máquina
+.env
+.env.*
+!.env.example
+.vercel/
+
+# Ferramentas e artefatos que não fazem parte do site Next.js
+.git/
+.impeccable/
+backups/
+capturas/
+desktop/
+
+# Logs locais
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*

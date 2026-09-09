@@ -23,6 +23,7 @@ export default async function FeedPage() {
         nome: viewer.name,
         handle: viewer.handle,
         avatarSeed: viewer.avatarSeed,
+        avatarUrl: viewer.avatarUrl,
       }}
       esconderSpoiler={viewer.preferences.spoilerGuard}
     />

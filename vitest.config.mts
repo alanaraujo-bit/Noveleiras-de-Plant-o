@@ -32,7 +32,7 @@ export default defineConfig({
         test: {
           name: "telas",
           environment: "jsdom",
-          include: ["components/**/*.test.tsx"],
+          include: ["components/**/*.test.{ts,tsx}"],
           setupFiles: ["./vitest.setup.ts"],
         },
       },

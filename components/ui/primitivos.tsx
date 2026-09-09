@@ -128,11 +128,13 @@ const AVATAR_TONS = [
 export function Avatar({
   nome,
   seed = "1",
+  fotoUrl,
   tamanho = 40,
   className = "",
 }: {
   nome: string;
   seed?: string;
+  fotoUrl?: string | null;
   tamanho?: number;
   className?: string;
 }) {
@@ -143,7 +145,7 @@ export function Avatar({
   return (
     <span
       aria-hidden
-      className={`inline-grid shrink-0 place-items-center rounded-full font-display font-semibold text-cream-50 ${className}`}
+      className={`inline-grid shrink-0 place-items-center overflow-hidden rounded-full font-display font-semibold text-cream-50 ${className}`}
       style={{
         width: tamanho,
         height: tamanho,
@@ -152,7 +154,16 @@ export function Avatar({
         boxShadow: "inset 0 0 0 1px rgb(255 255 255 / 0.18)",
       }}
     >
-      {letra}
+      {fotoUrl ? (
+        <img
+          src={fotoUrl}
+          alt=""
+          className="size-full object-cover"
+          draggable={false}
+        />
+      ) : (
+        letra
+      )}
     </span>
   );
 }

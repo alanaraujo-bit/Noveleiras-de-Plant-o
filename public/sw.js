@@ -8,7 +8,7 @@
  * do navegador.
  */
 
-const VERSAO = "v1";
+const VERSAO = "v2";
 const CACHE_CASCO = `plantao-casco-${VERSAO}`;
 const CACHE_ARTE = `plantao-arte-${VERSAO}`;
 

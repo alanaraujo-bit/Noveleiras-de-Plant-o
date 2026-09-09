@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 
 import {
   salvarGenerosPreferidos,
@@ -9,6 +10,8 @@ import {
 } from "@/lib/actions/conta";
 import { useToast } from "@/components/sistema/ToastProvider";
 import { Avatar, Chip } from "@/components/ui/primitivos";
+import { IconeCamera } from "@/components/ui/icones";
+import { prepararFotoPerfil } from "@/components/perfil/prepararFoto";
 
 /**
  * Preferências.
@@ -71,14 +74,87 @@ export function PainelPreferencias({
   generos,
 }: {
   inicial: Preferencias;
-  perfil: { nome: string; avatarSeed: string };
+  perfil: { nome: string; avatarSeed: string; avatarUrl: string | null };
   generos: { id: string; name: string; accent: string }[];
 }) {
   const { show } = useToast();
+  const router = useRouter();
   const [valores, setValores] = useState(inicial);
   const [nome, setNome] = useState(perfil.nome);
   const [avatarSeed, setAvatarSeed] = useState(perfil.avatarSeed);
+  const [fotoUrl, setFotoUrl] = useState(perfil.avatarUrl);
+  const [enviandoFoto, setEnviandoFoto] = useState(false);
+  const [erroFoto, setErroFoto] = useState<string | null>(null);
+  const inputFoto = useRef<HTMLInputElement>(null);
   const [, iniciar] = useTransition();
+
+  const enviarFoto = async (file: File) => {
+    const anterior = fotoUrl;
+    let previa: string | null = null;
+    setErroFoto(null);
+    setEnviandoFoto(true);
+
+    try {
+      const foto = await prepararFotoPerfil(file);
+      previa = URL.createObjectURL(foto);
+      setFotoUrl(previa);
+
+      const formData = new FormData();
+      formData.set("foto", foto);
+      const response = await fetch("/api/perfil/avatar", {
+        method: "POST",
+        body: formData,
+      });
+      const result = (await response.json()) as {
+        ok: boolean;
+        avatarUrl?: string;
+        message?: string;
+      };
+      if (!response.ok || !result.ok || !result.avatarUrl) {
+        throw new Error(result.message || "Não foi possível salvar a foto.");
+      }
+
+      setFotoUrl(result.avatarUrl);
+      show("Foto de perfil atualizada", "bom");
+      router.refresh();
+    } catch (error) {
+      setFotoUrl(anterior);
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Não foi possível salvar a foto agora.";
+      setErroFoto(message);
+      show(message, "ruim");
+    } finally {
+      if (previa) URL.revokeObjectURL(previa);
+      setEnviandoFoto(false);
+      if (inputFoto.current) inputFoto.current.value = "";
+    }
+  };
+
+  const removerFoto = async () => {
+    setErroFoto(null);
+    setEnviandoFoto(true);
+    try {
+      const response = await fetch("/api/perfil/avatar", { method: "DELETE" });
+      const result = (await response.json()) as { ok: boolean; message?: string };
+      if (!response.ok || !result.ok) {
+        throw new Error(result.message || "Não foi possível remover a foto.");
+      }
+      setFotoUrl(null);
+      show("Foto removida", "bom");
+      router.refresh();
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Não foi possível remover a foto agora.";
+      setErroFoto(message);
+      show(message, "ruim");
+    } finally {
+      setEnviandoFoto(false);
+    }
+  };
 
   const persistir = (proximos: Preferencias) => {
     iniciar(async () => {
@@ -130,8 +206,36 @@ export function PainelPreferencias({
       <section className="px-5">
         <p className="eyebrow mb-2.5">Seu perfil</p>
         <div className="surface-card rounded-panel p-4">
-          <div className="flex items-center gap-3.5">
-            <Avatar nome={nome || "N"} seed={avatarSeed} tamanho={52} />
+          <div className="flex items-start gap-3.5">
+            <div className="relative shrink-0">
+              <Avatar
+                nome={nome || "N"}
+                seed={avatarSeed}
+                fotoUrl={fotoUrl}
+                tamanho={64}
+              />
+              <button
+                type="button"
+                onClick={() => inputFoto.current?.click()}
+                disabled={enviandoFoto}
+                aria-label={
+                  fotoUrl ? "Trocar foto de perfil" : "Adicionar foto de perfil"
+                }
+                className="tap absolute -bottom-1 -right-1 grid size-8 place-items-center rounded-full border border-ink-950 bg-rose-600 text-cream-50 shadow-lift disabled:opacity-50"
+              >
+                <IconeCamera tamanho={16} />
+              </button>
+              <input
+                ref={inputFoto}
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+                className="sr-only"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void enviarFoto(file);
+                }}
+              />
+            </div>
             <div className="flex-1">
               <label
                 htmlFor="pref-nome"
@@ -146,6 +250,42 @@ export function PainelPreferencias({
                 maxLength={60}
                 className="h-11 w-full rounded-xl border border-white/12 bg-white/[0.04] px-3 text-[0.9375rem] text-cream-50 outline-none focus:border-rose-500/60"
               />
+
+              <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <button
+                  type="button"
+                  onClick={() => inputFoto.current?.click()}
+                  disabled={enviandoFoto}
+                  className="tap text-[0.8125rem] font-semibold text-rose-300 disabled:opacity-50"
+                >
+                  {enviandoFoto
+                    ? "Enviando…"
+                    : fotoUrl
+                      ? "Trocar foto"
+                      : "Adicionar foto"}
+                </button>
+                {fotoUrl && !enviandoFoto ? (
+                  <button
+                    type="button"
+                    onClick={() => void removerFoto()}
+                    className="tap text-[0.8125rem] font-semibold text-cream-600"
+                  >
+                    Remover
+                  </button>
+                ) : null}
+              </div>
+              <p className="mt-1.5 text-[0.6875rem] leading-relaxed text-cream-600">
+                Fotos de até 20 MB. O app reduz o arquivo antes de enviar e
+                ajusta o enquadramento para o formato quadrado.
+              </p>
+              {erroFoto ? (
+                <p
+                  role="alert"
+                  className="mt-2 text-[0.6875rem] leading-relaxed text-rose-300"
+                >
+                  {erroFoto}
+                </p>
+              ) : null}
             </div>
           </div>
 

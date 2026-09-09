@@ -41,7 +41,12 @@ const ROTULO_TIPO: Record<FeedPost["kind"], string> = {
 type Props = {
   posts: FeedPost[];
   novelas: { id: string; title: string; accent: string }[];
-  viewer: { nome: string; handle: string; avatarSeed: string };
+  viewer: {
+    nome: string;
+    handle: string;
+    avatarSeed: string;
+    avatarUrl: string | null;
+  };
   esconderSpoiler: boolean;
 };
 
@@ -195,7 +200,7 @@ function Publicacao({
   escondido: boolean;
   aoRevelar: () => void;
   aoCurtir: () => void;
-  autorAtual: { nome: string; avatarSeed: string };
+  autorAtual: { nome: string; avatarSeed: string; avatarUrl: string | null };
 }) {
   const [comentarios, setComentarios] = useState(post.comments);
   const [total, setTotal] = useState(post.commentCount);
@@ -219,7 +224,12 @@ function Publicacao({
   return (
     <article className="surface-card rounded-card p-4">
       <div className="flex items-center gap-2.5">
-        <Avatar nome={post.author.name} seed={post.author.avatarSeed} tamanho={36} />
+        <Avatar
+          nome={post.author.name}
+          seed={post.author.avatarSeed}
+          fotoUrl={post.author.avatarUrl}
+          tamanho={36}
+        />
         <div className="min-w-0 flex-1">
           <p className="truncate text-[0.875rem] font-semibold text-cream-50">
             {post.author.name}
@@ -318,6 +328,7 @@ function Publicacao({
                 <Avatar
                   nome={comentario.author.name}
                   seed={comentario.author.avatarSeed}
+                  fotoUrl={comentario.author.avatarUrl}
                   tamanho={26}
                 />
                 <div className="min-w-0 flex-1">
@@ -336,7 +347,12 @@ function Publicacao({
           )}
 
           <div className="flex items-end gap-2 pt-1">
-            <Avatar nome={autorAtual.nome} seed={autorAtual.avatarSeed} tamanho={26} />
+            <Avatar
+              nome={autorAtual.nome}
+              seed={autorAtual.avatarSeed}
+              fotoUrl={autorAtual.avatarUrl}
+              tamanho={26}
+            />
             <input
               value={texto}
               onChange={(evento) => setTexto(evento.target.value)}

@@ -61,6 +61,13 @@ export const IconePerfil = (p: Props) => (
   </Base>
 );
 
+export const IconeCamera = (p: Props) => (
+  <Base {...p}>
+    <path d="M8.2 6.5 9.5 4.7h5l1.3 1.8h1.8A2.4 2.4 0 0 1 20 8.9v7.7a2.4 2.4 0 0 1-2.4 2.4H6.4A2.4 2.4 0 0 1 4 16.6V8.9a2.4 2.4 0 0 1 2.4-2.4h1.8Z" />
+    <circle cx="12" cy="12.7" r="3.2" />
+  </Base>
+);
+
 export const IconePlay = ({ tamanho = 22, ...p }: Props) => (
   <svg
     width={tamanho}
@@ -162,6 +169,23 @@ export const IconeVolume = ({
       <path d="m15 9.6 4.2 4.8M19.2 9.6 15 14.4" />
     ) : (
       <path d="M15.2 9.2a4 4 0 0 1 0 5.6M17.8 6.8a7.4 7.4 0 0 1 0 10.4" />
+    )}
+  </Base>
+);
+
+export const IconeTelaCheia = ({
+  ativa = false,
+  ...p
+}: Props & { ativa?: boolean }) => (
+  <Base {...p}>
+    {ativa ? (
+      <>
+        <path d="M9.2 4.8v4.4H4.8M14.8 4.8v4.4h4.4M9.2 19.2v-4.4H4.8M14.8 19.2v-4.4h4.4" />
+      </>
+    ) : (
+      <>
+        <path d="M9.2 4.8H4.8v4.4M14.8 4.8h4.4v4.4M9.2 19.2H4.8v-4.4M14.8 19.2h4.4v-4.4" />
+      </>
     )}
   </Base>
 );
