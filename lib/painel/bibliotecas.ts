@@ -1,5 +1,7 @@
 import "server-only";
 
+import { randomUUID } from "node:crypto";
+
 import { Prisma } from "@prisma/client";
 
 import { db } from "@/lib/db";
@@ -97,19 +99,24 @@ export type ResultadoDaImportacao = {
 };
 
 /**
- * Importa a árvore varrida no catálogo.
+ * Importa um lote de novelas no catálogo.
  *
  * Idempotente por construção: a identidade de uma novela é o slug do título e
  * a de um episódio é o número dentro da temporada. Rodar duas vezes atualiza
- * e não duplica.
+ * e não duplica — é o que deixa um lote reenviado ser inofensivo.
  *
  * O que ela **não** faz: inventar sinopse, tagline ou elenco. Esses campos
  * nascem vazios e são preenchidos por quem sabe — um resumo adivinhado
  * enganaria quem lê o catálogo, e a tela de Catálogo mostra o que falta.
+ *
+ * Também não decide o que sumiu do disco: essa pergunta só tem resposta
+ * depois do último lote, e quem a faz é `reconciliarAusentes`. Cada arquivo
+ * escrito aqui sai carimbado com `scanId`, e é o carimbo que a separa.
  */
-export async function importarArvore(
+export async function importarLote(
   biblioteca: { id: string; serverId: string | null; autoImport: boolean; publishOnImport: boolean },
   novelas: NovelaVarrida[],
+  scanId: string,
 ): Promise<ResultadoDaImportacao> {
   const resultado: ResultadoDaImportacao = {
     novelasCriadas: 0,
@@ -125,7 +132,6 @@ export async function importarArvore(
   };
 
   const agora = new Date();
-  const chavesVistas = new Set<string>();
 
   for (const novela of novelas) {
     for (const aviso of novela.ignorados) {
@@ -287,7 +293,6 @@ export async function importarArvore(
     const porNumero = new Map(episodiosDaNovela.map((e) => [e.number, e.id]));
 
     for (const episodio of novela.episodios) {
-      chavesVistas.add(episodio.chave);
       resultado.bytesTotal += episodio.tamanhoBytes;
       resultado.arquivosIndexados += 1;
 
@@ -314,6 +319,7 @@ export async function importarArvore(
             : ("DISCOVERED" as const),
         stateNote: episodio.erro,
         lastProbedAt: agora,
+        lastScanId: scanId,
       };
 
       await db.mediaAsset.upsert({
@@ -326,68 +332,118 @@ export async function importarArvore(
     }
   }
 
-  // ---- o que sumiu -----------------------------------------------------
-  // Varrer é reconciliar com o disco nos dois sentidos: o que apareceu entra,
-  // o que sumiu sai. Enquanto um episódio sem arquivo continua no catálogo,
-  // quem abre o aplicativo vê uma novela que não toca.
-  if (biblioteca.serverId) {
-    // Inclui os já marcados MISSING de propósito. Filtrá-los prenderia num
-    // limbo tudo o que uma varredura anterior marcou: eles deixariam de ser
-    // "conhecidos", nunca mais apareceriam como sumidos e ficariam para
-    // sempre no catálogo — que é exatamente o defeito que isto conserta.
-    const conhecidos = await db.mediaAsset.findMany({
-      where: { serverId: biblioteca.serverId },
-      select: { id: true, mediaKey: true },
-    });
-    const sumidos = conhecidos.filter((a) => !chavesVistas.has(a.mediaKey));
+  return resultado;
+}
 
-    if (sumidos.length > 0) {
-      await db.mediaAsset.updateMany({
-        where: { id: { in: sumidos.map((a) => a.id) } },
-        data: {
-          state: "MISSING",
-          stateNote: "ausente na última varredura da biblioteca",
-          lastProbedAt: agora,
-        },
-      });
-      resultado.arquivosAusentes = sumidos.length;
+/**
+ * Reconcilia o catálogo com o disco no sentido inverso: o que sumiu, sai.
+ *
+ * Roda uma vez só, depois do último lote, porque a pergunta que ela faz — "o
+ * que este servidor tem e a varredura não viu?" — só tem resposta com a
+ * varredura inteira entregue. Quem responde é o carimbo `lastScanId`: um
+ * arquivo sem o carimbo desta varredura não estava na pasta.
+ *
+ * Enquanto um episódio sem arquivo continua no catálogo, quem abre o
+ * aplicativo vê uma novela que não toca.
+ */
+export async function reconciliarAusentes(
+  biblioteca: { serverId: string | null },
+  scanId: string,
+): Promise<Pick<
+  ResultadoDaImportacao,
+  "arquivosAusentes" | "episodiosRemovidos" | "novelasRemovidas" | "avisos"
+>> {
+  const resultado = {
+    arquivosAusentes: 0,
+    episodiosRemovidos: 0,
+    novelasRemovidas: 0,
+    avisos: [] as string[],
+  };
+  if (!biblioteca.serverId) return resultado;
 
-      // Marcar não basta: enquanto o episódio continua no catálogo, quem abre
-      // o aplicativo vê uma novela que não toca. Varrer é reconciliar com o
-      // disco, nos dois sentidos — o que apareceu entra, o que sumiu sai.
-      if (podeRemover(chavesVistas.size, conhecidos.length)) {
-        const chavesSumidas = sumidos.map((a) => a.mediaKey);
-        const removidos = await db.episode.deleteMany({
-          where: { mediaKey: { in: chavesSumidas } },
-        });
-        resultado.episodiosRemovidos = removidos.count;
+  const agora = new Date();
 
-        // Novela sem episódio nenhum é casca: não há o que assistir nela.
-        const vazias = await db.novela.findMany({
-          where: { seasons: { every: { episodes: { none: {} } } } },
-          select: { id: true, title: true },
-        });
-        if (vazias.length > 0) {
-          await db.novela.deleteMany({ where: { id: { in: vazias.map((n) => n.id) } } });
-          resultado.novelasRemovidas = vazias.length;
-          resultado.avisos.push(
-            `retiradas do catálogo: ${vazias.map((n) => n.title).join(", ")}`,
-          );
-        }
-        // O inventário guarda o histórico; o catálogo mostra o que existe.
-        await db.mediaAsset.deleteMany({ where: { mediaKey: { in: chavesSumidas } } });
-      } else {
-        // Nada encontrado com catálogo cheio: é disco fora do ar, não pasta
-        // esvaziada. Avisar e não tocar em nada.
-        resultado.avisos.push(
-          `${sumidos.length} arquivo(s) sumiram do disco e continuam no catálogo — ` +
-            "nenhum arquivo foi encontrado nesta varredura, então o catálogo foi preservado",
-        );
-      }
-    }
+  // Inclui os já marcados MISSING de propósito. Filtrá-los prenderia num
+  // limbo tudo o que uma varredura anterior marcou: eles deixariam de ser
+  // "conhecidos", nunca mais apareceriam como sumidos e ficariam para
+  // sempre no catálogo — que é exatamente o defeito que isto conserta.
+  const conhecidos = await db.mediaAsset.findMany({
+    where: { serverId: biblioteca.serverId },
+    select: { id: true, mediaKey: true, lastScanId: true },
+  });
+  const sumidos = conhecidos.filter((a) => a.lastScanId !== scanId);
+  const vistos = conhecidos.length - sumidos.length;
+
+  if (sumidos.length === 0) return resultado;
+
+  await db.mediaAsset.updateMany({
+    where: { id: { in: sumidos.map((a) => a.id) } },
+    data: {
+      state: "MISSING",
+      stateNote: "ausente na última varredura da biblioteca",
+      lastProbedAt: agora,
+    },
+  });
+  resultado.arquivosAusentes = sumidos.length;
+
+  // Marcar não basta: varrer é reconciliar com o disco nos dois sentidos — o
+  // que apareceu entra, o que sumiu sai.
+  if (!podeRemover(vistos, conhecidos.length)) {
+    // Nada encontrado com catálogo cheio: é disco fora do ar, não pasta
+    // esvaziada. Avisar e não tocar em nada.
+    resultado.avisos.push(
+      `${sumidos.length} arquivo(s) sumiram do disco e continuam no catálogo — ` +
+        "nenhum arquivo foi encontrado nesta varredura, então o catálogo foi preservado",
+    );
+    return resultado;
   }
 
+  const chavesSumidas = sumidos.map((a) => a.mediaKey);
+  const removidos = await db.episode.deleteMany({
+    where: { mediaKey: { in: chavesSumidas } },
+  });
+  resultado.episodiosRemovidos = removidos.count;
+
+  // Novela sem episódio nenhum é casca: não há o que assistir nela.
+  const vazias = await db.novela.findMany({
+    where: { seasons: { every: { episodes: { none: {} } } } },
+    select: { id: true, title: true },
+  });
+  if (vazias.length > 0) {
+    await db.novela.deleteMany({ where: { id: { in: vazias.map((n) => n.id) } } });
+    resultado.novelasRemovidas = vazias.length;
+    resultado.avisos.push(
+      `retiradas do catálogo: ${vazias.map((n) => n.title).join(", ")}`,
+    );
+  }
+  // O inventário guarda o histórico; o catálogo mostra o que existe.
+  await db.mediaAsset.deleteMany({ where: { mediaKey: { in: chavesSumidas } } });
+
   return resultado;
+}
+
+/**
+ * A árvore inteira de uma vez: importa e reconcilia.
+ *
+ * As duas metades juntas, para quem tem a árvore inteira em mãos e a importa
+ * de dentro do processo — sem agente e sem varredura na fila. O caminho do
+ * agente não passa por aqui: a árvore dele chega em lotes, e cada lote só
+ * conhece a primeira metade.
+ */
+export async function importarArvore(
+  biblioteca: { id: string; serverId: string | null; autoImport: boolean; publishOnImport: boolean },
+  novelas: NovelaVarrida[],
+  scanId: string = `avulsa-${randomUUID()}`,
+): Promise<ResultadoDaImportacao> {
+  const importado = await importarLote(biblioteca, novelas, scanId);
+  const faltantes = await reconciliarAusentes(biblioteca, scanId);
+  return {
+    ...importado,
+    arquivosAusentes: faltantes.arquivosAusentes,
+    episodiosRemovidos: faltantes.episodiosRemovidos,
+    novelasRemovidas: faltantes.novelasRemovidas,
+    avisos: [...importado.avisos, ...faltantes.avisos],
+  };
 }
 
 // ------------------------------------------------------------- consultas
@@ -512,14 +568,22 @@ export async function historicoDeVarreduras(
   }));
 }
 
-/** Varreduras presas em execução sem sinal voltam para a fila. */
+/**
+ * Varreduras presas em execução sem sinal voltam para a fila.
+ *
+ * O prazo conta do último sinal, não do início: uma biblioteca grande leva
+ * horas entre ler o disco e entregar dezenas de lotes, e cada progresso e cada
+ * lote renovam o `updatedAt`. Contar do início reciclaria a varredura no meio
+ * do trabalho — e o meio é o pior lugar para parar, porque a reconciliação do
+ * que sumiu do disco só acontece no fim.
+ */
 export const ABANDONO_DE_VARREDURA_MS = 15 * 60_000;
 
 export async function liberarVarredurasAbandonadas(): Promise<number> {
   const resultado = await db.libraryScan.updateMany({
     where: {
       state: "RUNNING",
-      startedAt: { lt: new Date(Date.now() - ABANDONO_DE_VARREDURA_MS) },
+      updatedAt: { lt: new Date(Date.now() - ABANDONO_DE_VARREDURA_MS) },
     },
     data: {
       state: "FAILED",

@@ -27,6 +27,23 @@ const DESTINO = (process.env.AGENTE_DESTINO ?? "http://localhost:3100").replace(
 const OCIOSO_MS = Math.max(5, Number(process.env.AGENTE_OCIOSO ?? 15)) * 1000;
 const UMA_VEZ = process.argv.includes("--uma-vez");
 
+/**
+ * Tamanho de um lote de entrega.
+ *
+ * A árvore inteira num POST só bate no teto de corpo da função no servidor:
+ * 8899 arquivos passam de 4 MB de JSON e a varredura morria em 413 sem tocar
+ * no banco. Um lote fecha ao cruzar qualquer um dos dois limites, e a unidade
+ * é a novela inteira — meia novela no catálogo é um estado que ninguém sabe
+ * interpretar.
+ *
+ * Os episódios contam junto com os bytes porque o custo do outro lado é o
+ * banco, não a rede: cada episódio são três idas ao Postgres, e o servidor
+ * tem 300s para responder.
+ */
+const EPISODIOS_POR_LOTE = 250;
+const BYTES_POR_LOTE = 1_000_000;
+const TENTATIVAS_POR_LOTE = 3;
+
 if (!SLUG || !SEGREDO) {
   console.error(
     "\n  AGENTE_SLUG e AGENTE_SEGREDO são obrigatórios." +
@@ -49,6 +66,70 @@ async function falar(corpo) {
     throw new Error(`${resposta.status} ${texto.slice(0, 300)}`);
   }
   return resposta.json();
+}
+
+/**
+ * Envia de novo quando a rede falha.
+ *
+ * Uma varredura destas lê o disco por vinte minutos e depois faz trinta
+ * requisições; uma piscada de rede na vigésima jogaria fora o trabalho todo.
+ * Repetir é seguro porque a importação é idempotente do outro lado: a novela é
+ * o slug do título e o episódio é o número na temporada, então um lote que
+ * chegou duas vezes atualiza e não duplica.
+ */
+async function falarComTeimosia(corpo) {
+  let ultimoErro;
+  for (let tentativa = 1; tentativa <= TENTATIVAS_POR_LOTE; tentativa += 1) {
+    try {
+      return await falar(corpo);
+    } catch (erro) {
+      ultimoErro = erro;
+      // 4xx é o servidor dizendo que o pedido está errado; repetir só demora
+      // mais para chegar à mesma resposta.
+      if (/^4dd /.test(erro.message)) throw erro;
+      if (tentativa === TENTATIVAS_POR_LOTE) break;
+      console.log(`  reenviando (${tentativa}/${TENTATIVAS_POR_LOTE}): ${erro.message}`);
+      await new Promise((r) => setTimeout(r, 2000 * tentativa));
+    }
+  }
+  throw ultimoErro;
+}
+
+/**
+ * Divide a árvore em lotes que cabem num envio.
+ *
+ * Uma novela nunca é partida ao meio: ela entra inteira no lote corrente ou
+ * abre o próximo.
+ */
+function dividirEmLotes(arvore) {
+  const lotes = [];
+  let atual = [];
+  let episodios = 0;
+  let bytes = 0;
+
+  for (const novela of arvore) {
+    const peso = JSON.stringify(novela).length;
+    const cheio =
+      atual.length > 0 &&
+      (episodios + novela.episodios.length > EPISODIOS_POR_LOTE ||
+        bytes + peso > BYTES_POR_LOTE);
+    if (cheio) {
+      lotes.push(atual);
+      atual = [];
+      episodios = 0;
+      bytes = 0;
+    }
+    atual.push(novela);
+    episodios += novela.episodios.length;
+    bytes += peso;
+  }
+
+  if (atual.length > 0) lotes.push(atual);
+  // Pasta vazia continua sendo uma entrega: é assim que o servidor descobre
+  // que o disco não tem nada e decide se foi a pasta que esvaziou ou o disco
+  // que saiu do ar. Sem lote nenhum, a varredura nunca fecharia.
+  if (lotes.length === 0) lotes.push([]);
+  return lotes;
 }
 
 /**
@@ -182,8 +263,33 @@ async function executar(varredura) {
     });
   }
 
-  await reportar("enviando ao servidor", totalArquivos, processados, true);
-  const resposta = await falar({ acao: "entregar", scanId, novelas: arvore });
+  const lotes = dividirEmLotes(arvore);
+  console.log(`  enviando em ${lotes.length} lote(s)`);
+
+  let resposta;
+  for (const [i, lote] of lotes.entries()) {
+    const ultimo = i === lotes.length - 1;
+    const seguir = await reportar(
+      `enviando ao servidor (${i + 1}/${lotes.length})`,
+      totalArquivos,
+      processados,
+      true,
+    );
+    // Cancelar no painel alcança a entrega, não só a leitura do disco: o que
+    // já entrou fica, e a varredura para onde está.
+    if (!seguir) {
+      console.log("  cancelada pelo painel");
+      return;
+    }
+    resposta = await falarComTeimosia({
+      acao: "entregar",
+      scanId,
+      lote: i + 1,
+      totalLotes: lotes.length,
+      ultimo,
+      novelas: lote,
+    });
+  }
   const r = resposta.resultado;
 
   console.log(

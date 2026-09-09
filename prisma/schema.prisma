@@ -807,6 +807,9 @@ model LibraryScan {
   processedFiles Int       @default(0)
 
   // O que a varredura produziu.
+  // Novelas que a arvore trouxe, importadas ou nao: com `autoImport` desligado
+  // as duas contagens abaixo ficam zeradas e esta continua sendo a verdadeira.
+  novelasSeen     Int    @default(0)
   novelasCreated  Int    @default(0)
   novelasUpdated  Int    @default(0)
   episodesCreated Int    @default(0)
@@ -825,6 +828,10 @@ model LibraryScan {
   queuedAt   DateTime  @default(now())
   startedAt  DateTime?
   finishedAt DateTime?
+  // Ultimo sinal de vida. E por ele que uma varredura vira abandonada, e nao
+  // por `startedAt`: a entrega leva dezenas de requisicoes agora, e uma
+  // varredura que comecou ha muito tempo continua viva enquanto reporta.
+  updatedAt  DateTime  @default(now()) @updatedAt
 
   @@index([state, queuedAt])
   @@index([libraryId, queuedAt])
@@ -911,6 +918,18 @@ model MediaAsset {
   stateNote    String?
   lastProbedAt DateTime?
 
+  /**
+   * Ultima varredura de biblioteca que carimbou este arquivo.
+   * E o que permite a arvore chegar em lotes. Sem ele, "sumiu do disco" seria
+   * "nao veio neste envio", e o primeiro lote marcaria como ausente tudo o que
+   * ainda estava por vir. Com ele, ausente e o que a varredura inteira nao
+   * carimbou — a mesma pergunta de antes, feita depois do ultimo lote.
+   * Nao reaproveita `lastProbedAt`: aquele campo tambem e escrito pelo
+   * inventario avulso, e um inventario rodando no meio de uma varredura
+   * apagaria a diferenca entre visto e ausente.
+   */
+  lastScanId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -920,6 +939,9 @@ model MediaAsset {
   @@index([episodeId])
   @@index([state])
   @@index([checksum])
+  // A reconciliacao pergunta exatamente isto: o que este servidor tem que a
+  // varredura corrente nao carimbou.
+  @@index([serverId, lastScanId])
 }
 
 // ------------------------------------------------------- transcodificacao

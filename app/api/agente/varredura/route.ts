@@ -3,8 +3,9 @@ import { z } from "zod";
 
 import { db } from "@/lib/db";
 import {
-  importarArvore,
+  importarLote,
   liberarVarredurasAbandonadas,
+  reconciliarAusentes,
   type NovelaVarrida,
 } from "@/lib/painel/bibliotecas";
 import { log } from "@/lib/painel/log";
@@ -17,13 +18,33 @@ import { CABECALHO_DO_SEGREDO, segredoConfere } from "@/lib/painel/servidor";
  * **pega** uma varredura, **reporta** progresso enquanto lê o disco e
  * **entrega** a árvore encontrada. O servidor importa e encerra.
  *
- * A árvore vem inteira num envio só, e não arquivo a arquivo, porque uma
- * importação parcial é pior que nenhuma: metade de uma novela no catálogo é um
- * estado que ninguém sabe interpretar. Ou entra tudo, ou a varredura falha e a
- * anterior continua valendo.
+ * A árvore chega em lotes de novelas inteiras, nunca arquivo a arquivo: metade
+ * de uma novela no catálogo é um estado que ninguém sabe interpretar. A novela
+ * é a unidade porque a maior delas cabe folgada num envio, e a biblioteca
+ * inteira não cabe — 8899 arquivos num POST só batem no teto de corpo da
+ * função, e a varredura morria em 413 antes de tocar no banco.
+ *
+ * O último lote vem marcado, e é ele que fecha a varredura: só aí o servidor
+ * sabe o que sumiu do disco, porque "ausente" é o que a varredura inteira não
+ * carimbou — não o que faltou num envio.
  */
 
 export const maxDuration = 300;
+
+/**
+ * Teto de avisos guardados na varredura.
+ *
+ * Cada novela pode render uma linha de lacunas e uma por arquivo ignorado; com
+ * 141 novelas o texto cresce sem que ninguém o leia — o painel mostra os
+ * primeiros. Guardar tudo só engorda a linha no banco.
+ */
+const LIMITE_DE_AVISOS = 200;
+
+function etapaDoLote(lote?: number, total?: number) {
+  return lote && total
+    ? `importando no catálogo (lote ${lote}/${total})`
+    : "importando no catálogo";
+}
 
 const pegarSchema = z.object({
   acao: z.literal("pegar"),
@@ -66,6 +87,12 @@ const entregarSchema = z.object({
   acao: z.literal("entregar"),
   slug: z.string().min(1),
   scanId: z.string().min(1),
+  // Só para o painel mostrar andamento durante os envios.
+  lote: z.number().int().positive().optional(),
+  totalLotes: z.number().int().positive().optional(),
+  // `true` por padrão de propósito: um agente mais antigo, que manda a árvore
+  // inteira e não conhece o campo, continua fechando a varredura como sempre.
+  ultimo: z.boolean().default(true),
   novelas: z
     .array(
       z.object({
@@ -229,8 +256,12 @@ export async function POST(requisicao: Request) {
 
   // ---- falhar ----------------------------------------------------------
   if (dados.acao === "falhar") {
+    // Só uma varredura ainda em execução pode falhar. Sem o `RUNNING`, uma
+    // resposta perdida no último lote pintaria de vermelho uma varredura que
+    // já terminou: o agente reenvia, leva 409 de quem já fechou, desiste e
+    // relata a falha — sobre uma importação que de fato aconteceu.
     const atual = await db.libraryScan.findFirst({
-      where: { id: dados.scanId, serverId: servidor.id },
+      where: { id: dados.scanId, serverId: servidor.id, state: "RUNNING" },
       select: { id: true, libraryId: true },
     });
     if (!atual) {
@@ -262,7 +293,7 @@ export async function POST(requisicao: Request) {
   // ---- entregar --------------------------------------------------------
   const atual = await db.libraryScan.findFirst({
     where: { id: dados.scanId, serverId: servidor.id },
-    select: { id: true, state: true, libraryId: true },
+    select: { id: true, state: true, libraryId: true, warnings: true },
   });
   if (!atual) {
     return NextResponse.json({ erro: "Varredura não é sua" }, { status: 404 });
@@ -289,14 +320,68 @@ export async function POST(requisicao: Request) {
 
   await db.libraryScan.update({
     where: { id: atual.id },
-    data: { phase: "importando no catálogo" },
+    data: { phase: etapaDoLote(dados.lote, dados.totalLotes) },
   });
 
   try {
-    const resultado = await importarArvore(
+    // O lote entra carimbado com o id da varredura: é o carimbo que, no fim,
+    // separa "não está mais no disco" de "ainda não chegou".
+    const resultado = await importarLote(
       biblioteca,
       dados.novelas as NovelaVarrida[],
+      atual.id,
     );
+
+    const anteriores = Array.isArray(atual.warnings)
+      ? (atual.warnings as string[])
+      : [];
+    const avisos = [...anteriores, ...resultado.avisos].slice(0, LIMITE_DE_AVISOS);
+
+    // Somar, não substituir: com a árvore em lotes, o número certo é o de
+    // todos eles — o último sozinho diria "60 episódios, 300 MB".
+    const acumulado = await db.libraryScan.update({
+      where: { id: atual.id },
+      data: {
+        novelasSeen: { increment: dados.novelas.length },
+        novelasCreated: { increment: resultado.novelasCriadas },
+        novelasUpdated: { increment: resultado.novelasAtualizadas },
+        episodesCreated: { increment: resultado.episodiosCriados },
+        episodesUpdated: { increment: resultado.episodiosAtualizados },
+        filesIndexed: { increment: resultado.arquivosIndexados },
+        bytesTotal: { increment: BigInt(Math.round(resultado.bytesTotal)) },
+        warnings: avisos as never,
+      },
+      select: {
+        novelasSeen: true,
+        novelasCreated: true,
+        novelasUpdated: true,
+        episodesCreated: true,
+        episodesUpdated: true,
+        filesIndexed: true,
+        bytesTotal: true,
+      },
+    });
+
+    // ---- ainda vem mais ------------------------------------------------
+    if (!dados.ultimo) {
+      await db.libraryScan.update({
+        where: { id: atual.id },
+        data: { processedFiles: acumulado.filesIndexed },
+      });
+      return NextResponse.json({ ok: true, parcial: true, resultado });
+    }
+
+    // ---- o último fecha a varredura ------------------------------------
+    await db.libraryScan.update({
+      where: { id: atual.id },
+      data: {
+        phase: "conferindo o que sumiu",
+        processedFiles: acumulado.filesIndexed,
+      },
+    });
+
+    const faltantes = await reconciliarAusentes(biblioteca, atual.id);
+    const avisosFinais = [...avisos, ...faltantes.avisos].slice(0, LIMITE_DE_AVISOS);
     const agora = new Date();
 
     await db.$transaction([
@@ -306,15 +391,8 @@ export async function POST(requisicao: Request) {
           state: "DONE",
           phase: null,
           finishedAt: agora,
-          novelasCreated: resultado.novelasCriadas,
-          novelasUpdated: resultado.novelasAtualizadas,
-          episodesCreated: resultado.episodiosCriados,
-          episodesUpdated: resultado.episodiosAtualizados,
-          filesIndexed: resultado.arquivosIndexados,
-          filesMissing: resultado.arquivosAusentes,
-          bytesTotal: BigInt(Math.round(resultado.bytesTotal)),
-          warnings: resultado.avisos as never,
-          processedFiles: resultado.arquivosIndexados,
+          filesMissing: faltantes.arquivosAusentes,
+          warnings: avisosFinais as never,
         },
       }),
       db.mediaLibrary.update({
@@ -322,16 +400,30 @@ export async function POST(requisicao: Request) {
         data: {
           lastScanAt: agora,
           lastScanState: "DONE",
-          lastNovelas: dados.novelas.length,
-          lastEpisodes:
-            resultado.episodiosCriados + resultado.episodiosAtualizados,
-          lastFiles: resultado.arquivosIndexados,
-          lastBytes: BigInt(Math.round(resultado.bytesTotal)),
+          lastNovelas: acumulado.novelasSeen,
+          lastEpisodes: acumulado.episodesCreated + acumulado.episodesUpdated,
+          lastFiles: acumulado.filesIndexed,
+          lastBytes: acumulado.bytesTotal,
         },
       }),
     ]);
 
-    return NextResponse.json({ ok: true, resultado });
+    return NextResponse.json({
+      ok: true,
+      resultado: {
+        ...resultado,
+        ...faltantes,
+        // Quem pergunta é o agente, e o que ele quer saber é o que a varredura
+        // fez — não o que coube no último lote dela.
+        novelasCriadas: acumulado.novelasCreated,
+        novelasAtualizadas: acumulado.novelasUpdated,
+        episodiosCriados: acumulado.episodesCreated,
+        episodiosAtualizados: acumulado.episodesUpdated,
+        arquivosIndexados: acumulado.filesIndexed,
+        bytesTotal: Number(acumulado.bytesTotal),
+        avisos: avisosFinais,
+      },
+    });
   } catch (erro) {
     const mensagem = erro instanceof Error ? erro.message : String(erro);
     await db.libraryScan.update({
