@@ -1,68 +1,87 @@
+/**
+ * Planos, na visão do painel.
+ *
+ * A tabela comercial em si mudou de casa: mora em `lib/pagamentos/planos.ts`,
+ * junto do resto da camada de cobrança. Este arquivo virou o adaptador que o
+ * painel consome — mantido porque várias telas de métricas o importam, e
+ * porque a pergunta que ele responde ("quanto isto vale por mês?") é de
+ * relatório, não de venda.
+ *
+ * A regra de sempre continua valendo: **o preço registrado na assinatura
+ * vence**. O catálogo só entra quando não há preço gravado, e o painel diz em
+ * tela quantas assinaturas estão sendo estimadas.
+ */
+
 import type { SubscriptionPlan } from "@prisma/client";
 
-/**
- * Catálogo de planos.
- *
- * Por que existe: a Fase 01 gravou `Subscription.priceCents` como nulo em
- * quase toda assinatura. Sem um preço de referência, receita e MRR seriam
- * literalmente inderiváveis — e a saída fácil (inventar um número) é o que
- * esta fase se recusa a fazer.
- *
- * A regra que adotamos: **o preço registrado na assinatura sempre vence**.
- * O catálogo só entra quando não há preço gravado, e nesse caso o painel diz
- * em tela quantas assinaturas estão sendo estimadas. Assim o número é útil
- * hoje e vira exato sozinho no dia em que um provedor de pagamento real
- * carimbar `priceCents` em cada cobrança.
- *
- * Fica em código, e não em tabela, porque preço é decisão de produto e precisa
- * de revisão de código para mudar. Plano novo é uma entrada aqui mais um valor
- * no enum — nenhuma tela muda.
- */
+import {
+  PLANOS as CATALOGO,
+  planoPorCodigo,
+  type DefinicaoDePlano as DefinicaoComercial,
+} from "@/lib/pagamentos/planos";
 
 export type DefinicaoDePlano = {
   plano: SubscriptionPlan;
   nome: string;
-  /** Preço mensal de tabela, em centavos. */
+  /** Preço de tabela do ciclo inteiro, em centavos. */
   precoCents: number;
   descricao: string;
   cor: string;
 };
 
+function adaptar(d: DefinicaoComercial): DefinicaoDePlano {
+  return {
+    plano: d.code,
+    nome: d.nome,
+    precoCents: d.precoCents,
+    descricao: d.descricao,
+    cor: d.cor,
+  };
+}
+
 export const PLANOS: Record<SubscriptionPlan, DefinicaoDePlano> = {
-  FREE: {
-    plano: "FREE",
-    nome: "Plantão Gratuito",
-    precoCents: 0,
-    descricao: "Catálogo aberto e os dois primeiros episódios de cada premium.",
-    cor: "#9d7f8b",
-  },
-  PREMIUM: {
-    plano: "PREMIUM",
-    nome: "Plantão Premium",
-    precoCents: 1990,
-    descricao: "Catálogo completo, sem limite de episódios.",
-    cor: "#e03a69",
-  },
-  VIP: {
-    plano: "VIP",
-    nome: "Plantão VIP",
-    precoCents: 3490,
-    descricao: "Tudo do Premium mais lançamentos antecipados.",
-    cor: "#d9a355",
-  },
+  FREE: adaptar(CATALOGO.FREE),
+  MONTHLY: adaptar(CATALOGO.MONTHLY),
+  ANNUAL: adaptar(CATALOGO.ANNUAL),
+  PREMIUM: adaptar(CATALOGO.PREMIUM),
+  VIP: adaptar(CATALOGO.VIP),
 };
 
-export const PLANOS_PAGOS: SubscriptionPlan[] = ["PREMIUM", "VIP"];
+/** Planos que geram receita. Inclui os nomes legados da Fase 01. */
+export const PLANOS_PAGOS: SubscriptionPlan[] = [
+  "MONTHLY",
+  "ANNUAL",
+  "PREMIUM",
+  "VIP",
+];
+
+/**
+ * Quantos meses cada ciclo cobre.
+ *
+ * Existe porque somar R$ 99,90 de um anual ao MRR inflaria a receita
+ * recorrente em doze vezes num único mês. O anual entra como R$ 8,32/mês, que
+ * é o que ele de fato representa.
+ */
+function mesesDoCiclo(plan: SubscriptionPlan): number {
+  const d = planoPorCodigo(plan);
+  return d.intervalo === "YEAR" ? 12 * d.intervaloCount : d.intervaloCount;
+}
 
 /** Preço mensal de uma assinatura. `registrado` diz se veio do fato ou do catálogo. */
 export function precoMensal(assinatura: {
   plan: SubscriptionPlan;
   priceCents: number | null;
 }): { cents: number; registrado: boolean } {
+  const meses = mesesDoCiclo(assinatura.plan);
+
   if (assinatura.priceCents != null) {
-    return { cents: assinatura.priceCents, registrado: true };
+    return { cents: Math.round(assinatura.priceCents / meses), registrado: true };
   }
-  return { cents: PLANOS[assinatura.plan].precoCents, registrado: false };
+
+  return {
+    cents: Math.round(PLANOS[assinatura.plan].precoCents / meses),
+    registrado: false,
+  };
 }
 
 /**

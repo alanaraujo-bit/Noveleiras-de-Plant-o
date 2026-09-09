@@ -126,8 +126,8 @@ export function PainelNovela({
             <Selo tom={novela.status === "COMPLETED" ? "jade" : "ouro"}>
               {STATUS_LABEL[novela.status]}
             </Selo>
-            {novela.accessTier === "PREMIUM" ? (
-              <Selo tom="carmim">Premium</Selo>
+            {novela.openAccess ? (
+              <Selo tom="jade">Grátis por inteiro</Selo>
             ) : null}
           </div>
           <h1 className="text-[2.125rem] leading-[1.04] text-balance-pt">
@@ -376,9 +376,9 @@ export function PainelNovela({
                   </p>
                   {bloqueado ? (
                     <p className="mt-1.5 text-[0.75rem] font-semibold text-gold-400">
-                      {episodio.lockReason === "needs-account"
+                      {episodio.lockReason === "precisa-conta"
                         ? "Entre para assistir"
-                        : "Disponível no Premium"}
+                        : "Assine ou compre esta novela"}
                     </p>
                   ) : null}
                 </div>
@@ -389,7 +389,7 @@ export function PainelNovela({
               <li key={episodio.id}>
                 {bloqueado ? (
                   <Link
-                    href="/perfil/assinatura"
+                    href={`/novela/${novela.slug}#desbloquear`}
                     className="tap flex items-start gap-3.5 px-5 py-3"
                   >
                     {conteudo}

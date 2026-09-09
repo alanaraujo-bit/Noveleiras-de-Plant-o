@@ -11,16 +11,20 @@ import {
   IconePausa,
   IconePlay,
   IconeProximo,
+  IconeTelaCheia,
   IconeVoltar,
   IconeVolume,
 } from "@/components/ui/icones";
+import type { MotivoBloqueado } from "@/lib/access/entitlements";
 import { formatClock } from "@/lib/format";
 
 /**
  * Player.
  *
  * A fonte do vídeo chega pronta da página, que já decidiu o acesso no servidor
- * — o player abre tocando, sem uma ida à rede antes do primeiro quadro. A rota
+ * — o player abre tocando imediatamente. Tela cheia fica disponível no
+ * controle explícito, porque o Android exibe um aviso nativo sempre que um
+ * site chama a Fullscreen API automaticamente. A rota
  * /api/midia continua sendo a autoridade e serve para renovar a fonte quando
  * ela expirar (URLs assinadas de CDN, mais adiante).
  *
@@ -55,7 +59,7 @@ type Fonte = {
   expiresAt?: string | null;
 };
 
-type Bloqueio = "needs-account" | "needs-subscription";
+type Bloqueio = MotivoBloqueado;
 
 type Estado =
   | { nome: "pronto"; fonte: Fonte }
@@ -64,6 +68,26 @@ type Estado =
 
 const OCULTAR_CONTROLES_MS = 2800;
 const INTERVALO_SALVAR_MS = 10_000;
+
+type DocumentoComWebkit = Document & {
+  webkitExitFullscreen?: () => void;
+  webkitFullscreenElement?: Element | null;
+};
+
+type VideoComWebkit = HTMLVideoElement & {
+  webkitDisplayingFullscreen?: boolean;
+  webkitEnterFullscreen?: () => void;
+  webkitExitFullscreen?: () => void;
+};
+
+type SentinelaTela = {
+  release: () => Promise<void>;
+  released: boolean;
+};
+
+type NavegadorComWakeLock = Navigator & {
+  wakeLock?: { request: (tipo: "screen") => Promise<SentinelaTela> };
+};
 
 export function Player({
   episodio,
@@ -84,12 +108,14 @@ export function Player({
 }) {
   const router = useRouter();
   const { track, sessionId } = useTelemetry();
+  const playerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const wakeLockRef = useRef<SentinelaTela | null>(null);
 
   const [estado, setEstado] = useState<Estado>(() =>
     fonte
       ? { nome: "pronto", fonte }
-      : { nome: "bloqueado", motivo: bloqueio ?? "needs-subscription" },
+      : { nome: "bloqueado", motivo: bloqueio ?? "precisa-pagar" },
   );
   const [tocando, setTocando] = useState(false);
   const [mudo, setMudo] = useState(false);
@@ -99,11 +125,115 @@ export function Player({
   const [controles, setControles] = useState(true);
   const [contagem, setContagem] = useState<number | null>(null);
   const [avisoRetomada, setAvisoRetomada] = useState(retomarEm > 5);
+  const [emTelaCheia, setEmTelaCheia] = useState(false);
 
   const assistidoMsRef = useRef(0);
   const ultimoTickRef = useRef(0);
   const salvoAteRef = useRef(0);
   const ocultarRef = useRef<number | null>(null);
+
+  const atualizarTelaCheia = useCallback(() => {
+    const documento = document as DocumentoComWebkit;
+    const video = videoRef.current as VideoComWebkit | null;
+    setEmTelaCheia(
+      Boolean(
+        document.fullscreenElement ||
+          documento.webkitFullscreenElement ||
+          video?.webkitDisplayingFullscreen,
+      ),
+    );
+  }, []);
+
+  const entrarTelaCheia = useCallback(() => {
+    const player = playerRef.current;
+    const video = videoRef.current as VideoComWebkit | null;
+    if (!player || document.fullscreenElement) return;
+
+    if (player.requestFullscreen) {
+      void player
+        .requestFullscreen({ navigationUI: "hide" })
+        .then(atualizarTelaCheia)
+        .catch(() => {
+          // Alguns navegadores móveis só aceitam tela cheia no elemento de vídeo.
+          video?.webkitEnterFullscreen?.();
+          atualizarTelaCheia();
+        });
+      return;
+    }
+
+    video?.webkitEnterFullscreen?.();
+    atualizarTelaCheia();
+  }, [atualizarTelaCheia]);
+
+  const sairTelaCheia = useCallback(() => {
+    const documento = document as DocumentoComWebkit;
+    const video = videoRef.current as VideoComWebkit | null;
+    if (document.fullscreenElement && document.exitFullscreen) {
+      void document.exitFullscreen().catch(() => {});
+    } else if (documento.webkitFullscreenElement) {
+      documento.webkitExitFullscreen?.();
+    } else if (video?.webkitDisplayingFullscreen) {
+      video.webkitExitFullscreen?.();
+    }
+  }, []);
+
+  const voltarDoEpisodio = useCallback(() => {
+    // Interrompe explicitamente antes de navegar para que o áudio/vídeo não
+    // continue vivo enquanto a tela anterior é renderizada.
+    videoRef.current?.pause();
+    sairTelaCheia();
+    router.back();
+  }, [router, sairTelaCheia]);
+
+  const liberarTelaAcordada = useCallback(() => {
+    const sentinela = wakeLockRef.current;
+    wakeLockRef.current = null;
+    if (sentinela && !sentinela.released) void sentinela.release().catch(() => {});
+  }, []);
+
+  const manterTelaAcordada = useCallback(() => {
+    const navegador = navigator as NavegadorComWakeLock;
+    if (wakeLockRef.current?.released) wakeLockRef.current = null;
+    if (!navegador.wakeLock || wakeLockRef.current || document.hidden) return;
+    void navegador.wakeLock
+      .request("screen")
+      .then((sentinela) => {
+        if (videoRef.current?.paused) {
+          void sentinela.release().catch(() => {});
+        } else {
+          wakeLockRef.current = sentinela;
+        }
+      })
+      .catch(() => {
+        // Economia de bateria ou política do aparelho pode negar o wake lock.
+      });
+  }, []);
+
+  useEffect(() => {
+    const video = videoRef.current as VideoComWebkit | null;
+    document.addEventListener("fullscreenchange", atualizarTelaCheia);
+    document.addEventListener("webkitfullscreenchange", atualizarTelaCheia);
+    video?.addEventListener("webkitbeginfullscreen", atualizarTelaCheia);
+    video?.addEventListener("webkitendfullscreen", atualizarTelaCheia);
+
+    const aoMudarVisibilidade = () => {
+      if (document.hidden) {
+        liberarTelaAcordada();
+      } else if (videoRef.current && !videoRef.current.paused) {
+        manterTelaAcordada();
+      }
+    };
+    document.addEventListener("visibilitychange", aoMudarVisibilidade);
+
+    return () => {
+      document.removeEventListener("fullscreenchange", atualizarTelaCheia);
+      document.removeEventListener("webkitfullscreenchange", atualizarTelaCheia);
+      video?.removeEventListener("webkitbeginfullscreen", atualizarTelaCheia);
+      video?.removeEventListener("webkitendfullscreen", atualizarTelaCheia);
+      document.removeEventListener("visibilitychange", aoMudarVisibilidade);
+      liberarTelaAcordada();
+    };
+  }, [atualizarTelaCheia, liberarTelaAcordada, manterTelaAcordada]);
 
   // Trocar de episódio pelo botão "próximo" reaproveita este componente:
   // o estado precisa acompanhar a nova fonte que a página entregou.
@@ -111,7 +241,7 @@ export function Player({
     setEstado(
       fonte
         ? { nome: "pronto", fonte }
-        : { nome: "bloqueado", motivo: bloqueio ?? "needs-subscription" },
+        : { nome: "bloqueado", motivo: bloqueio ?? "precisa-pagar" },
     );
   }, [fonte, bloqueio]);
 
@@ -130,7 +260,7 @@ export function Player({
       if (resposta.status === 401 || resposta.status === 402) {
         setEstado({
           nome: "bloqueado",
-          motivo: dados?.motivo ?? "needs-subscription",
+          motivo: dados?.motivo ?? "precisa-pagar",
         });
         return true;
       }
@@ -228,7 +358,7 @@ export function Player({
       video.pause();
     }
     mostrarControles();
-  }, [mostrarControles]);
+  }, [entrarTelaCheia, mostrarControles]);
 
   const pular = useCallback(
     (segundos: number) => {
@@ -259,11 +389,11 @@ export function Player({
       if (evento.code === "ArrowRight") pular(10);
       if (evento.code === "ArrowLeft") pular(-10);
       if (evento.code === "KeyM") setMudo((v) => !v);
-      if (evento.code === "Escape") router.back();
+      if (evento.code === "Escape") voltarDoEpisodio();
     };
     window.addEventListener("keydown", aoTeclar);
     return () => window.removeEventListener("keydown", aoTeclar);
-  }, [alternarPlay, pular, router]);
+  }, [alternarPlay, pular, voltarDoEpisodio]);
 
   // ------------------------------------------------------- autoplay do próximo
   useEffect(() => {
@@ -340,20 +470,20 @@ export function Player({
       <TelaMensagem
         episodio={episodio}
         titulo={
-          estado.motivo === "needs-account"
+          estado.motivo === "precisa-conta"
             ? "Entre para continuar assistindo"
-            : "Este episódio é do Plantão Premium"
+            : "Este episódio faz parte do catálogo pago"
         }
         // Um episódio bloqueado ainda mostra a arte da cena, desfocada: a
         // pessoa vê o que está perdendo, não uma tela vazia.
         texto={
-          estado.motivo === "needs-account"
+          estado.motivo === "precisa-conta"
             ? "Sua conta guarda o progresso e libera os episódios."
-            : "Assine para desbloquear a novela inteira, sem espera entre episódios."
+            : "Assine o catálogo inteiro, ou compre só esta novela e ela é sua para sempre."
         }
         icone={<IconeCadeado tamanho={26} />}
         acao={
-          estado.motivo === "needs-account" ? (
+          estado.motivo === "precisa-conta" ? (
             <Link
               href="/entrar"
               className="tap flex h-13 items-center justify-center rounded-2xl bg-cream-50 px-7 text-[0.9375rem] font-bold text-ink-950"
@@ -362,10 +492,10 @@ export function Player({
             </Link>
           ) : (
             <Link
-              href="/perfil/assinatura"
+              href={`/novela/${episodio.novela.slug}#desbloquear`}
               className="tap flex h-13 items-center justify-center rounded-2xl bg-gold-400 px-7 text-[0.9375rem] font-bold text-ink-950"
             >
-              Conhecer o Premium
+              Ver como desbloquear
             </Link>
           )
         }
@@ -393,7 +523,7 @@ export function Player({
   }
 
   return (
-    <div className="fixed inset-0 z-[60] bg-black">
+    <div ref={playerRef} className="fixed inset-0 z-[60] bg-black">
       {estado.nome === "pronto" ? (
         <video
           ref={videoRef}
@@ -412,6 +542,7 @@ export function Player({
           onPlaying={() => {
             setBufferando(false);
             setTocando(true);
+            manterTelaAcordada();
             ultimoTickRef.current = performance.now();
             agendarOcultar();
           }}
@@ -425,6 +556,8 @@ export function Player({
           onPause={() => {
             setTocando(false);
             setControles(true);
+            liberarTelaAcordada();
+            sairTelaCheia();
             enviarProgresso();
             track("PLAY_PAUSE", {
               episodeId: episodio.id,
@@ -435,6 +568,8 @@ export function Player({
           onEnded={() => {
             setTocando(false);
             setControles(true);
+            liberarTelaAcordada();
+            sairTelaCheia();
             enviarProgresso({ completo: true });
             track("PLAY_COMPLETE", {
               episodeId: episodio.id,
@@ -518,7 +653,7 @@ export function Player({
             >
               <button
                 type="button"
-                onClick={() => router.back()}
+                onClick={voltarDoEpisodio}
                 aria-label="Voltar"
                 className="tap grid size-10 shrink-0 place-items-center rounded-full bg-black/45 text-white backdrop-blur-sm"
               >
@@ -545,6 +680,17 @@ export function Player({
                 className="tap grid size-10 shrink-0 place-items-center rounded-full bg-black/45 text-white backdrop-blur-sm"
               >
                 <IconeVolume tamanho={19} mudo={mudo} />
+              </button>
+              <button
+                type="button"
+                onClick={emTelaCheia ? sairTelaCheia : entrarTelaCheia}
+                aria-label={
+                  emTelaCheia ? "Sair da tela cheia" : "Abrir em tela cheia"
+                }
+                aria-pressed={emTelaCheia}
+                className="tap grid size-10 shrink-0 place-items-center rounded-full bg-black/45 text-white backdrop-blur-sm"
+              >
+                <IconeTelaCheia tamanho={19} ativa={emTelaCheia} />
               </button>
             </div>
 

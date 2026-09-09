@@ -6,7 +6,7 @@ import {
   getCompletas,
   getEmBreve,
   getFeatured,
-  getGratuitas,
+  getComecePorAqui,
   getNovidades,
   getParaVoce,
   getPopulares,
@@ -43,7 +43,7 @@ export default async function InicioPage() {
     populares,
     generos,
     completas,
-    gratuitas,
+    comecePorAqui,
     emBreve,
     feed,
   ] = await Promise.all([
@@ -53,7 +53,7 @@ export default async function InicioPage() {
     getPopulares(12),
     listGenres(),
     getCompletas(10),
-    getGratuitas(10),
+    getComecePorAqui(10),
     getEmBreve(4),
     getFeed(viewer.id, { take: 2 }),
   ]);
@@ -68,7 +68,11 @@ export default async function InicioPage() {
 
   return (
     <>
-      <TopoApp nome={viewer.name} avatarSeed={viewer.avatarSeed} />
+      <TopoApp
+        nome={viewer.name}
+        avatarSeed={viewer.avatarSeed}
+        avatarUrl={viewer.avatarUrl}
+      />
 
       <div className="space-y-9 pt-1">
         <Destaques novelas={destaques} />
@@ -97,10 +101,11 @@ export default async function InicioPage() {
               Escolha a primeira
             </TituloSecao>
             <p className="mb-3.5 px-5 text-[0.875rem] leading-relaxed text-cream-400">
-              Episódios de dois minutos, histórias inteiras. Estas são grátis e
-              não pedem nada em troca.
+              Episódios de dois minutos, histórias inteiras. Os{" "}
+              {viewer.entitlement.freePreviewEpisodes} primeiros de qualquer uma
+              são grátis, sem cartão.
             </p>
-            <TrilhoCapas novelas={gratuitas} largura="larga" prioridade />
+            <TrilhoCapas novelas={comecePorAqui} largura="larga" prioridade />
           </section>
         )}
 
@@ -198,6 +203,7 @@ export default async function InicioPage() {
                     <Avatar
                       nome={post.author.name}
                       seed={post.author.avatarSeed}
+                      fotoUrl={post.author.avatarUrl}
                       tamanho={30}
                     />
                     <div className="min-w-0 flex-1">
@@ -261,21 +267,21 @@ export default async function InicioPage() {
                   "linear-gradient(165deg, rgb(217 163 85 / 0.14), rgb(42 21 35 / 0.9))",
               }}
             >
-              <p className="eyebrow">Plantão Premium</p>
+              <p className="eyebrow">Assine o Plantão</p>
               <h2 className="mt-1.5 text-[1.375rem] leading-tight">
-                Todos os episódios, sem esperar o próximo dia
+                Passou do {viewer.entitlement.freePreviewEpisodes}º episódio? Continue sem parar
               </h2>
               <p className="mx-auto mt-2 max-w-[20rem] text-[0.875rem] leading-relaxed text-cream-200">
-                Acesso ao catálogo inteiro, sem interrupção, em todos os seus
-                aparelhos.
+                Catálogo inteiro por R,99 por mês, ou R,90 no ano. Sem
+                fidelidade e em todos os seus aparelhos.
               </p>
               <BotaoLink
-                href="/perfil/assinatura"
+                href="/planos"
                 variante="ouro"
                 tamanho="grande"
                 className="mt-5"
               >
-                Conhecer o Premium
+                Ver os planos
               </BotaoLink>
             </div>
           </section>

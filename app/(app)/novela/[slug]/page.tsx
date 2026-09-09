@@ -8,6 +8,9 @@ import { getFeed } from "@/lib/repositories/feed";
 import { db } from "@/lib/db";
 import { TrilhoCapas } from "@/components/novela/cartoes";
 import { PainelNovela } from "@/components/novela/PainelNovela";
+import { Desbloquear } from "@/components/pagamento/Desbloquear";
+import { temNovelaCompleta } from "@/lib/access/entitlements";
+import { PLANO_MENSAL, PRECO_AVULSO_CENTS } from "@/lib/pagamentos/planos";
 import { Avatar, TituloSecao } from "@/components/ui/primitivos";
 import { IconeSeta } from "@/components/ui/icones";
 import { formatRelative } from "@/lib/format";
@@ -51,6 +54,25 @@ export default async function NovelaPage({ params }: Params) {
         esconderSpoiler={viewer?.preferences.spoilerGuard ?? true}
       />
 
+      {/*
+        O paywall só aparece para quem ainda não tem a obra. A decisão vem de
+        `temNovelaCompleta`, o mesmo módulo que a rota de mídia usa — se as
+        duas divergissem, a tela ofereceria comprar algo que a pessoa já tem,
+        ou esconderia a oferta de quem precisa dela.
+      */}
+      {viewer &&
+      !temNovelaCompleta(novela.id, viewer.entitlement, novela.openAccess) ? (
+        <Desbloquear
+          novelaId={novela.id}
+          novelaSlug={novela.slug}
+          novelaTitulo={novela.title}
+          precoAvulsoCents={novela.priceCents ?? PRECO_AVULSO_CENTS}
+          precoMensalCents={PLANO_MENSAL.precoCents}
+          episodiosGratis={viewer.entitlement.freePreviewEpisodes}
+          totalEpisodios={novela.totalEpisodes}
+        />
+      ) : null}
+
       {comentarios.length > 0 ? (
         <section className="mt-9">
           <TituloSecao
@@ -74,6 +96,7 @@ export default async function NovelaPage({ params }: Params) {
                   <Avatar
                     nome={post.author.name}
                     seed={post.author.avatarSeed}
+                    fotoUrl={post.author.avatarUrl}
                     tamanho={30}
                   />
                   <div className="min-w-0">

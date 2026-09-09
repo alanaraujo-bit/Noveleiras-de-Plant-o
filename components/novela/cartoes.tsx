@@ -9,9 +9,8 @@ import type { ContinueItem } from "@/lib/repositories/progresso";
 /**
  * Capa de novela.
  *
- * A arte é abstrata e o título vem em HTML por cima — nítido em qualquer tela,
- * legível para leitores de tela e pronto para receber arte fotográfica real sem
- * mudar o componente.
+ * A arte fica livre de texto da interface. O título aparece logo abaixo da
+ * imagem, preservando tanto a leitura quanto a composição original da capa.
  */
 export function Capa({
   novela,
@@ -27,11 +26,6 @@ export function Capa({
     larga: "w-[11.5rem]",
     cheia: "w-full",
   } as const;
-
-  // Em grade de três colunas a capa é estreita; o título precisa de um corpo
-  // menor para caber em duas linhas sem cortar palavra.
-  const corpoTitulo =
-    largura === "cheia" ? "text-[0.8125rem]" : "text-[0.9375rem]";
 
   return (
     <Link
@@ -50,18 +44,6 @@ export function Capa({
           className="absolute inset-0 size-full object-cover"
         />
 
-        <div className="absolute inset-x-0 bottom-0 p-2.5">
-          <span
-            className="mb-1.5 block h-px w-7 rounded-full"
-            style={{ background: "var(--color-gold-400)" }}
-          />
-          <h3
-            className={`line-clamp-2 font-display ${corpoTitulo} font-semibold leading-[1.15] text-cream-50 drop-shadow-[0_1px_6px_rgba(0,0,0,0.7)]`}
-          >
-            {novela.title}
-          </h3>
-        </div>
-
         <div className="absolute inset-x-2 top-2 flex items-start justify-between gap-1">
           {novela.isNew && novela.status !== "COMING_SOON" ? (
             <Selo tom="carmim">Novo</Selo>
@@ -70,18 +52,23 @@ export function Capa({
           ) : (
             <span />
           )}
-          {novela.accessTier === "PREMIUM" ? (
-            <span
-              className="grid size-6 place-items-center rounded-full bg-ink-950/70 text-gold-400 backdrop-blur-sm"
-              title="Conteúdo do plano Premium"
-            >
-              <IconeCadeado tamanho={13} />
-            </span>
+          {/*
+            O selo marca a obra ABERTA, nao a paga. Sob a regra atual toda
+            novela e parcialmente paga — um cadeado em cada capa seria ruido
+            sem informacao. Grátis por inteiro e que e excecao, e excecao e o
+            que merece selo.
+          */}
+          {novela.openAccess ? (
+            <Selo tom="jade">Grátis</Selo>
           ) : null}
         </div>
       </div>
 
-      <div className="mt-2 flex items-center gap-1.5 px-0.5 text-[0.6875rem] font-medium text-cream-600">
+      <h3 className="mt-2 min-h-[2.05rem] line-clamp-2 px-0.5 font-display text-[0.875rem] font-semibold leading-[1.15] text-cream-50">
+        {novela.title}
+      </h3>
+
+      <div className="mt-1 flex items-center gap-1.5 px-0.5 text-[0.6875rem] font-medium text-cream-600">
         {novela.rating > 0 ? (
           <>
             <span className="text-gold-400">★</span>
@@ -224,9 +211,9 @@ export function LinhaNovela({
               <span className="truncate">{novela.genres[0].name}</span>
             </>
           ) : null}
-          {novela.accessTier === "PREMIUM" ? (
-            <Selo tom="ouro" className="ml-0.5">
-              Premium
+          {novela.openAccess ? (
+            <Selo tom="jade" className="ml-0.5">
+              Grátis
             </Selo>
           ) : null}
         </div>

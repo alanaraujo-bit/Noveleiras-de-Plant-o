@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server";
 
+import {
+  ANONYMOUS_ENTITLEMENT,
+  canWatchEpisode,
+} from "@/lib/access/entitlements";
+import { track } from "@/lib/analytics/track";
+import { assinarUrl, segredoDeMidia } from "@/lib/media/assinatura";
+import { resolveMedia, type MediaProviderName } from "@/lib/media/resolver";
 import { getViewer } from "@/lib/auth/session";
 import { getEpisodeForPlayer } from "@/lib/repositories/catalog";
-import { resolveMedia, type MediaProviderName } from "@/lib/media/resolver";
-import { canWatchEpisode, ANONYMOUS_ENTITLEMENT } from "@/lib/access/entitlements";
-import { track } from "@/lib/analytics/track";
 
 /**
  * Entrega do descritor de mídia.
@@ -13,9 +17,17 @@ import { track } from "@/lib/analytics/track";
  * tomada aqui, no servidor, antes de qualquer URL existir. A interface pode
  * mostrar o cadeado, mas quem impede é esta rota.
  *
- * Quando as URLs passarem a ser assinadas (CDN/objeto), a assinatura entra em
- * `resolveMedia` e nada mais muda.
+ * O que mudou na fase comercial: a URL devolvida agora é **assinada e tem
+ * prazo**. Antes, autorizar uma vez entregava um link permanente — o paywall
+ * valia para o primeiro pedido e para mais nenhum, porque o link copiado
+ * seguia funcionando e podia ser repassado.
+ *
+ * `force-dynamic` é obrigatório. Sem isso o Next pode servir a mesma resposta
+ * em cache para pessoas diferentes, e um assinante acabaria financiando o
+ * acesso de todo mundo.
  */
+export const dynamic = "force-dynamic";
+
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ episodeId: string }> },
@@ -34,7 +46,11 @@ export async function GET(
   }
 
   const decision = canWatchEpisode(
-    { accessTier: episode.accessTier, episodeIndex: episode.episodeIndex },
+    {
+      novelaId: episode.novela.id,
+      episodeIndex: episode.episodeIndex,
+      openAccess: episode.novela.openAccess,
+    },
     viewer?.entitlement ?? ANONYMOUS_ENTITLEMENT,
     Boolean(viewer),
   );
@@ -49,15 +65,19 @@ export async function GET(
       payload: { motivo: decision.reason },
     });
 
+    const precisaConta = decision.reason === "precisa-conta";
+
     return NextResponse.json(
       {
-        erro:
-          decision.reason === "needs-account"
-            ? "Entre na sua conta para assistir."
-            : "Este episódio faz parte do Plantão Premium.",
+        erro: precisaConta
+          ? "Entre na sua conta para assistir."
+          : "Este episódio faz parte do catálogo pago.",
         motivo: decision.reason,
+        // A interface usa isto para escolher entre "assine" e "compre esta
+        // novela" sem precisar recalcular a regra do lado do cliente.
+        novelaSlug: episode.novela.slug,
       },
-      { status: decision.reason === "needs-account" ? 401 : 402 },
+      { status: precisaConta ? 401 : 402 },
     );
   }
 
@@ -69,15 +89,35 @@ export async function GET(
     durationSec: episode.durationSec,
   });
 
-  return NextResponse.json({
-    fonte: source,
-    acesso: decision.reason,
-    episodio: {
-      id: episode.id,
-      titulo: episode.title,
-      numero: episode.number,
-      temporada: episode.seasonNumber,
-      duracaoSec: episode.durationSec,
+  // Assina depois de autorizar, nunca antes: o link só existe para quem já
+  // passou pela decisão acima.
+  const assinado = assinarUrl(
+    source.url,
+    episode.mediaKey,
+    viewer?.id ?? "anonimo",
+    segredoDeMidia(),
+  );
+
+  return NextResponse.json(
+    {
+      fonte: {
+        ...source,
+        url: assinado.url,
+        expiresAt: assinado.expiraEm?.toISOString() ?? null,
+      },
+      acesso: decision.reason,
+      episodio: {
+        id: episode.id,
+        titulo: episode.title,
+        numero: episode.number,
+        temporada: episode.seasonNumber,
+        duracaoSec: episode.durationSec,
+      },
     },
-  });
+    {
+      // Nenhuma camada intermediária pode guardar um link assinado: ele é
+      // pessoal e tem prazo.
+      headers: { "Cache-Control": "private, no-store" },
+    },
+  );
 }

@@ -21,6 +21,7 @@ export type SearchHit = {
   posterUrl: string;
   year: number;
   accessTier: "FREE" | "PREMIUM";
+  openAccess: boolean;
   status: "ONGOING" | "COMPLETED" | "COMING_SOON";
   episodeCount: number;
   rating: number;
@@ -56,6 +57,7 @@ export async function searchCatalog(rawTerm: string): Promise<SearchOutcome> {
         posterKey: true,
         year: true,
         accessTier: true,
+        openAccess: true,
         status: true,
         rating: true,
         cast: true,
@@ -90,6 +92,7 @@ export async function searchCatalog(rawTerm: string): Promise<SearchOutcome> {
       posterUrl: posterUrl(row.posterKey),
       year: row.year,
       accessTier: row.accessTier,
+      openAccess: row.openAccess,
       status: row.status,
       episodeCount: row._count.episodes,
       rating: row.rating,

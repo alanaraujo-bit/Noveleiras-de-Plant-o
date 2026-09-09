@@ -244,8 +244,8 @@ export function PainelBusca({ populares, tags, buscados, generos }: Props) {
                               </span>
                             </>
                           ) : null}
-                          {hit.accessTier === "PREMIUM" ? (
-                            <Selo tom="ouro">Premium</Selo>
+                          {hit.openAccess ? (
+                            <Selo tom="jade">Grátis</Selo>
                           ) : null}
                         </div>
                       </div>

@@ -5,8 +5,9 @@ import { getViewer } from "@/lib/auth/session";
 import { getViewerStats } from "@/lib/repositories/progresso";
 import { planLabel } from "@/lib/access/entitlements";
 import { sair } from "@/lib/actions/conta";
-import { Avatar, Selo } from "@/components/ui/primitivos";
+import { Selo } from "@/components/ui/primitivos";
 import { BotaoInstalar } from "@/components/sistema/BotaoInstalar";
+import { EditorFotoCabecalho } from "@/components/perfil/EditorFotoCabecalho";
 import {
   IconeCoracao,
   IconeHistorico,
@@ -51,17 +52,12 @@ export default async function PerfilPage() {
         className="px-5 pb-6"
         style={{ paddingTop: "calc(var(--safe-t) + 1.5rem)" }}
       >
-        <div className="flex items-center gap-3.5">
-          <Avatar nome={viewer.name} seed={viewer.avatarSeed} tamanho={62} />
-          <div className="min-w-0 flex-1">
-            <h1 className="truncate text-[1.625rem] leading-tight">
-              {viewer.name}
-            </h1>
-            <p className="truncate text-[0.875rem] text-cream-600">
-              @{viewer.handle}
-            </p>
-          </div>
-        </div>
+        <EditorFotoCabecalho
+          nome={viewer.name}
+          handle={viewer.handle}
+          avatarSeed={viewer.avatarSeed}
+          avatarUrl={viewer.avatarUrl}
+        />
 
         <div className="mt-3.5 flex flex-wrap items-center gap-1.5">
           <Selo tom={entitlement.premium ? "ouro" : "neutro"}>
@@ -122,7 +118,7 @@ export default async function PerfilPage() {
               <p className="mt-1 text-[0.8125rem] leading-snug text-cream-400">
                 {entitlement.premium
                   ? "Gerenciar plano e forma de pagamento"
-                  : `No plano gratuito você vê ${entitlement.freePreviewEpisodes} episódios de cada novela premium.`}
+                  : `No plano gratuito você vê os ${entitlement.freePreviewEpisodes} primeiros episódios de cada novela.`}
               </p>
             </div>
             <span className="shrink-0 text-cream-400">

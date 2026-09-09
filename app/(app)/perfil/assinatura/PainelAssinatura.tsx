@@ -1,157 +1,300 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useTransition } from "react";
+import { useState } from "react";
 
-import { alternarPlano } from "@/lib/actions/conta";
-import { useToast } from "@/components/sistema/ToastProvider";
 import { useTelemetry } from "@/components/sistema/TelemetryProvider";
+import { useToast } from "@/components/sistema/ToastProvider";
 import { IconeCheck } from "@/components/ui/icones";
+import { Botao, BotaoLink, Divisoria } from "@/components/ui/primitivos";
 import { formatDate } from "@/lib/format";
 
 /**
- * Assinatura.
+ * Gestão da assinatura e histórico de compras.
  *
- * O estado do plano é real e gravado no banco — o que ainda não existe é a
- * cobrança. Trocar de plano aqui exercita de ponta a ponta o mesmo caminho que
- * um provedor de pagamento vai acionar depois, então dizemos isso na tela em
- * vez de fingir um checkout.
+ * A Fase 01 tinha aqui um botão que trocava o plano direto no banco, sem
+ * cobrança — honesto enquanto não havia o que cobrar, e um buraco no dia em
+ * que o paywall passou a valer. Agora **nenhum botão desta tela concede
+ * acesso**: assinar leva ao checkout, cancelar chama a rota que fala com o
+ * provedor. O estado mostrado vem sempre do servidor.
  */
 
-const BENEFICIOS_PREMIUM = [
-  "Catálogo inteiro liberado, sem espera entre episódios",
-  "Estreias no mesmo dia em que entram no ar",
-  "Sem limite de episódios por novela",
-  "Continua de onde parou em qualquer aparelho",
-];
+type Compra = {
+  id: string;
+  data: string;
+  valorCents: number;
+  status: string;
+  novela: { slug: string; titulo: string };
+};
 
-const BENEFICIOS_GRATIS = [
-  "Novelas gratuitas completas",
-  "Primeiros episódios das novelas premium",
-  "Minha lista, histórico e progresso",
-  "Plantão da comunidade",
-];
+type Pagamento = {
+  id: string;
+  data: string;
+  valorCents: number;
+  status: string;
+  metodo: string | null;
+  plano: string | null;
+  reembolsadoCents: number;
+};
+
+const ROTULO_STATUS: Record<string, string> = {
+  APPROVED: "Pago",
+  PENDING: "Pendente",
+  FAILED: "Recusado",
+  REFUNDED: "Reembolsado",
+  CHARGEBACK: "Estornado",
+  PAID: "Pago",
+  CANCELED: "Cancelado",
+};
+
+function reais(cents: number): string {
+  return (cents / 100).toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  });
+}
 
 export function PainelAssinatura({
-  plano,
+  planoNome,
   premium,
   episodiosGratis,
   renovaEm,
+  canceladaNoFim,
+  status,
+  compras,
+  pagamentos,
 }: {
-  plano: "FREE" | "PREMIUM" | "VIP";
+  planoNome: string;
   premium: boolean;
   episodiosGratis: number;
   renovaEm: string | null;
+  canceladaNoFim: boolean;
+  status: string;
+  compras: Compra[];
+  pagamentos: Pagamento[];
 }) {
   const router = useRouter();
   const { show } = useToast();
   const { track } = useTelemetry();
-  const [processando, iniciar] = useTransition();
+  const [cancelando, setCancelando] = useState(false);
+  const [confirmando, setConfirmando] = useState(false);
 
-  const trocar = (destino: "FREE" | "PREMIUM") => {
-    track("PAYWALL_CTA", { payload: { destino } });
-    iniciar(async () => {
-      await alternarPlano(destino);
+  async function cancelar() {
+    setCancelando(true);
+    try {
+      const resposta = await fetch("/api/pagamentos/assinatura", {
+        method: "DELETE",
+      });
+      const dados = await resposta.json();
+
+      if (!resposta.ok) {
+        show(dados.erro ?? "Não foi possível cancelar.", "ruim");
+        return;
+      }
+
+      track("SUBSCRIPTION_CANCEL");
       show(
-        destino === "PREMIUM"
-          ? "Premium ativado nesta conta"
-          : "Você voltou ao plano gratuito",
-        destino === "PREMIUM" ? "bom" : "neutro",
+        dados.ativoAte
+          ? `Cancelado. Você assiste até ${formatDate(dados.ativoAte)}.`
+          : "Assinatura cancelada.",
+        "neutro",
       );
       router.refresh();
-    });
-  };
+    } catch {
+      show("Sem conexão com o servidor.", "ruim");
+    } finally {
+      setCancelando(false);
+      setConfirmando(false);
+    }
+  }
 
   return (
-    <div className="space-y-4 px-5 pb-4">
+    <div className="px-5 pb-10">
+      {/* ---------------------------------------------------- estado atual */}
       <section
-        className="warm-glow overflow-hidden rounded-panel border p-5"
+        className="rounded-3xl border p-5"
         style={{
           borderColor: premium
-            ? "rgb(233 189 120 / 0.3)"
+            ? "rgb(233 189 120 / 0.28)"
             : "rgb(255 255 255 / 0.1)",
           background: premium
-            ? "linear-gradient(160deg, rgb(217 163 85 / 0.18), rgb(42 21 35 / 0.9))"
-            : "linear-gradient(160deg, rgb(255 255 255 / 0.05), rgb(42 21 35 / 0.6))",
+            ? "linear-gradient(160deg, rgb(233 189 120 / 0.1), transparent 65%)"
+            : "rgb(255 255 255 / 0.03)",
         }}
       >
-        <p className="eyebrow">
-          {premium ? "Seu plano atual" : "Recomendado para maratonar"}
-        </p>
-        <h2 className="mt-1.5 text-[1.625rem] leading-tight">Plantão Premium</h2>
-        <p className="mt-1.5 text-[0.9375rem] text-cream-200">
-          <span className="font-display text-[1.75rem] font-semibold text-cream-50">
-            R$ 19,90
-          </span>{" "}
-          por mês
-        </p>
-
-        <ul className="mt-4 space-y-2">
-          {BENEFICIOS_PREMIUM.map((item) => (
-            <li key={item} className="flex items-start gap-2.5">
-              <span className="mt-0.5 grid size-5 shrink-0 place-items-center rounded-full bg-gold-400/20 text-gold-300">
-                <IconeCheck tamanho={12} />
-              </span>
-              <span className="text-[0.875rem] leading-snug text-cream-200">
-                {item}
-              </span>
-            </li>
-          ))}
-        </ul>
+        <p className="eyebrow">{premium ? "Seu plano" : "Plano atual"}</p>
+        <h2 className="mt-0.5 text-[1.375rem] leading-tight">{planoNome}</h2>
 
         {premium ? (
-          <div className="mt-5">
-            {renovaEm ? (
-              <p className="mb-3 text-[0.8125rem] text-cream-400">
-                Ativo até {formatDate(renovaEm)}.
+          <p className="mt-2 text-[0.875rem] text-cream-400">
+            {canceladaNoFim
+              ? `Cancelada. Você continua assistindo até ${formatDate(renovaEm ?? "")} — o período já foi pago.`
+              : renovaEm
+                ? `Renova automaticamente em ${formatDate(renovaEm)}.`
+                : "Catálogo inteiro liberado."}
+          </p>
+        ) : (
+          <p className="mt-2 text-[0.875rem] text-cream-400">
+            Você vê os {episodiosGratis} primeiros episódios de cada novela.
+            {status === "EXPIRED"
+              ? " Sua assinatura anterior venceu."
+              : ""}
+          </p>
+        )}
+
+        {premium && !canceladaNoFim ? (
+          confirmando ? (
+            <div className="mt-5 rounded-2xl border border-white/10 bg-black/25 p-4">
+              <p className="text-[0.875rem] text-cream-200">
+                Cancelar a renovação? Você continua assistindo até{" "}
+                {formatDate(renovaEm ?? "")}, e nada é cobrado depois disso.
               </p>
-            ) : null}
+              <p className="mt-1.5 text-[0.75rem] text-cream-600">
+                Novelas que você comprou avulso continuam suas de qualquer jeito.
+              </p>
+              <div className="mt-4 flex gap-2">
+                <Botao
+                  variante="secundario"
+                  tamanho="pequeno"
+                  className="flex-1"
+                  onClick={() => setConfirmando(false)}
+                >
+                  Manter
+                </Botao>
+                <Botao
+                  tamanho="pequeno"
+                  className="flex-1"
+                  disabled={cancelando}
+                  onClick={cancelar}
+                >
+                  {cancelando ? "Cancelando…" : "Cancelar assinatura"}
+                </Botao>
+              </div>
+            </div>
+          ) : (
             <button
               type="button"
-              onClick={() => trocar("FREE")}
-              disabled={processando}
-              className="tap flex h-12 w-full items-center justify-center rounded-2xl border border-white/14 bg-white/6 text-[0.9375rem] font-semibold text-cream-200 disabled:opacity-50"
+              onClick={() => setConfirmando(true)}
+              className="tap mt-5 text-[0.8125rem] text-cream-600 underline underline-offset-4"
             >
-              Voltar ao plano gratuito
+              Cancelar renovação
             </button>
-          </div>
+          )
         ) : (
-          <button
-            type="button"
-            onClick={() => trocar("PREMIUM")}
-            disabled={processando}
-            className="tap mt-5 flex h-13 w-full items-center justify-center rounded-2xl bg-gold-400 text-[0.9375rem] font-bold text-ink-950 disabled:opacity-60"
+          <BotaoLink
+            href="/planos"
+            tamanho="grande"
+            largura="cheia"
+            variante={premium ? "secundario" : "principal"}
+            className="mt-5"
           >
-            {processando ? "Ativando…" : "Ativar Premium"}
-          </button>
+            {premium ? "Ver planos" : "Assinar o Plantão"}
+          </BotaoLink>
         )}
       </section>
 
-      <section className="rounded-panel border border-white/9 bg-white/[0.025] p-5">
-        <p className="eyebrow">{plano === "FREE" ? "Seu plano atual" : "Alternativa"}</p>
-        <h2 className="mt-1.5 text-[1.25rem] leading-tight">Plantão Gratuito</h2>
-        <p className="mt-1 text-[0.875rem] text-cream-400">
-          Sem custo, sem cartão. Você vê os {episodiosGratis} primeiros episódios
-          de cada novela premium.
-        </p>
-        <ul className="mt-3.5 space-y-2">
-          {BENEFICIOS_GRATIS.map((item) => (
-            <li key={item} className="flex items-start gap-2.5">
-              <span className="mt-0.5 grid size-5 shrink-0 place-items-center rounded-full bg-white/8 text-cream-400">
-                <IconeCheck tamanho={12} />
-              </span>
-              <span className="text-[0.875rem] leading-snug text-cream-400">
-                {item}
-              </span>
-            </li>
-          ))}
-        </ul>
+      {/* ------------------------------------------------ novelas compradas */}
+      {compras.length > 0 ? (
+        <section className="mt-8">
+          <p className="eyebrow">Suas para sempre</p>
+          <h3 className="mt-0.5 text-[1.125rem] leading-tight">
+            Novelas compradas
+          </h3>
+          <p className="mt-1 text-[0.8125rem] text-cream-600">
+            Não dependem de assinatura. Continuam liberadas mesmo se você
+            cancelar, incluindo episódios novos.
+          </p>
+
+          <ul className="mt-3 space-y-2">
+            {compras.map((compra) => {
+              const perdida =
+                compra.status === "REFUNDED" || compra.status === "CHARGEBACK";
+              return (
+                <li key={compra.id}>
+                  <Link
+                    href={`/novela/${compra.novela.slug}`}
+                    className="tap flex items-center gap-3 rounded-2xl border border-white/8 bg-white/[0.02] p-3.5"
+                  >
+                    <span
+                      className={`grid size-8 shrink-0 place-items-center rounded-full ${
+                        perdida
+                          ? "bg-white/6 text-cream-600"
+                          : "bg-jade-400/15 text-jade-400"
+                      }`}
+                    >
+                      <IconeCheck tamanho={15} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[0.875rem] font-semibold text-cream-50">
+                        {compra.novela.titulo}
+                      </span>
+                      <span className="block text-[0.75rem] text-cream-600">
+                        {formatDate(compra.data)} · {reais(compra.valorCents)}
+                        {perdida
+                          ? ` · ${ROTULO_STATUS[compra.status] ?? compra.status}`
+                          : ""}
+                      </span>
+                    </span>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
+
+      {/* --------------------------------------------------------- extrato */}
+      <section className="mt-8">
+        <p className="eyebrow">Transparência</p>
+        <h3 className="mt-0.5 text-[1.125rem] leading-tight">
+          Histórico de cobranças
+        </h3>
+
+        {pagamentos.length === 0 ? (
+          <p className="mt-3 rounded-2xl border border-white/8 bg-white/[0.02] p-4 text-[0.8125rem] text-cream-600">
+            Nenhuma cobrança até agora. Quando houver, cada uma aparece aqui com
+            data, valor e situação.
+          </p>
+        ) : (
+          <ul className="mt-3 overflow-hidden rounded-2xl border border-white/8">
+            {pagamentos.map((pagamento, indice) => (
+              <li key={pagamento.id}>
+                {indice > 0 ? <Divisoria /> : null}
+                <div className="flex items-center justify-between gap-3 bg-white/[0.02] px-4 py-3">
+                  <div className="min-w-0">
+                    <p className="text-[0.875rem] text-cream-50">
+                      {reais(pagamento.valorCents)}
+                      {pagamento.reembolsadoCents > 0 ? (
+                        <span className="ml-1.5 text-[0.75rem] text-cream-600">
+                          (−{reais(pagamento.reembolsadoCents)})
+                        </span>
+                      ) : null}
+                    </p>
+                    <p className="text-[0.75rem] text-cream-600">
+                      {formatDate(pagamento.data)}
+                      {pagamento.metodo ? ` · ${pagamento.metodo}` : ""}
+                    </p>
+                  </div>
+                  <span
+                    className={`shrink-0 rounded-full px-2.5 py-1 text-[0.6875rem] font-semibold ${
+                      pagamento.status === "APPROVED"
+                        ? "bg-jade-400/15 text-jade-400"
+                        : "bg-white/8 text-cream-400"
+                    }`}
+                  >
+                    {ROTULO_STATUS[pagamento.status] ?? pagamento.status}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
-      <p className="px-2 text-center text-[0.75rem] leading-relaxed text-cream-600">
-        A troca de plano é imediata e ainda não há cobrança: nenhum provedor de pagamento está conectado.
-        O ponto de integração com o provedor de pagamento já está preparado no
-        produto.
+      <p className="mt-6 text-center text-[0.75rem] leading-relaxed text-cream-600">
+        Perdeu o acesso depois de trocar de aparelho? É só entrar na sua conta —
+        assinatura e compras ficam ligadas ao seu login, não ao dispositivo.
       </p>
     </div>
   );

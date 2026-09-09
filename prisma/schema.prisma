@@ -33,6 +33,7 @@ model User {
   name         String
   handle       String     @unique
   avatarSeed   String     @default("1")
+  avatarKey    String?
   role         Role       @default(USER)
   status       UserStatus @default(ACTIVE)
 
@@ -63,6 +64,12 @@ model User {
   postLikes    PostLike[]
   comments     Comment[]
 
+  entitlements       Entitlement[]
+  purchases          Purchase[]
+  paymentAttempts    PaymentAttempt[]
+  refunds            Refund[]
+  subscriptionEvents SubscriptionEvent[]
+
   @@index([createdAt])
   @@index([lastSeenAt])
 }
@@ -88,6 +95,12 @@ model Preference {
 
 enum SubscriptionPlan {
   FREE
+  MONTHLY
+  ANNUAL
+
+  // Nomes da Fase 01. Postgres nao renomeia nem remove valor de enum sem
+  // trocar o tipo inteiro, e as assinaturas gravadas ainda os referenciam.
+  // Ficam como historico; `lib/pagamentos/planos.ts` mapeia os antigos.
   PREMIUM
   VIP
 }
@@ -120,7 +133,28 @@ model Subscription {
   canceledAt         DateTime?
   updatedAt          DateTime  @updatedAt
 
+  // Assinatura recorrente no provedor (preapproval, no Mercado Pago). Guardado
+  // separado de `externalId` porque a cobranca de um ciclo e a assinatura que
+  // a gerou sao objetos diferentes do lado deles.
+  externalPreapprovalId String?
+
+  // Ciclo atual. `currentPeriodEnd` sozinho nao diz desde quando vale, e sem
+  // isso um reembolso nao sabe qual ciclo esta desfazendo.
+  currentPeriodStart DateTime?
+
+  // Falha de cobranca: quantos ciclos seguidos falharam e ate quando a
+  // tolerancia (grace period) mantem o acesso de pe.
+  failedCharges Int       @default(0)
+  graceUntil    DateTime?
+
+  entitlements Entitlement[]
+  attempts     PaymentAttempt[]
+  events       SubscriptionEvent[]
+  refunds      Refund[]
+
   @@index([plan, status])
+  @@index([status, currentPeriodEnd])
+  @@index([externalPreapprovalId])
 }
 
 // ------------------------------------------------ sessoes e dispositivos
@@ -187,11 +221,25 @@ model Novela {
   tagline  String
   synopsis String
 
-  status     NovelaStatus @default(ONGOING)
-  accessTier AccessTier   @default(FREE)
-  ageRating  String       @default("14")
+  status NovelaStatus @default(ONGOING)
+
+  // Legado da Fase 01. Nao decide mais acesso: a regra oficial passou a ser
+  // "os N primeiros episodios de qualquer novela sao gratuitos". Mantido
+  // porque as linhas gravadas o referenciam e o painel ainda o exibe.
+  accessTier AccessTier @default(FREE)
+
+  // Libera a obra inteira, de proposito, para quem nao assina.
+  //
+  // Campo novo em vez de reaproveitar `accessTier`: toda novela gravada esta
+  // como FREE, entao reusar aquele campo abriria o catalogo inteiro no exato
+  // dia em que o paywall entrasse em vigor — o oposto do pretendido.
+  openAccess Boolean @default(false)
+
+  // Preco da compra avulsa quando esta obra foge da tabela.
+  priceCents Int?
+  ageRating  String @default("14")
   year       Int
-  country    String       @default("Brasil")
+  country    String @default("Brasil")
 
   // Arte: chaves opacas resolvidas pela camada de midia.
   posterKey  String
@@ -206,7 +254,7 @@ model Novela {
   // tags: e o que a busca compara. Preenchido no seed/ingestao.
   searchText String @default("")
 
-  featuredRank  Int?
+  featuredRank Int?
 
   cast        Json     @default("[]")
   tags        String[] @default([])
@@ -228,6 +276,9 @@ model Novela {
   favorites Favorite[]
   progress  WatchProgress[]
   posts     Post[]
+
+  entitlements Entitlement[]
+  purchases    Purchase[]
 
   @@index([status, releasedAt])
   @@index([viewCount])
@@ -454,6 +505,16 @@ enum EventType {
   POST_COMMENT
   PAYWALL_VIEW
   PAYWALL_CTA
+
+  // Funil comercial. Separados de PAYWALL_CTA porque a pergunta que importa
+  // nao e "clicou?" e sim onde a pessoa parou: abriu o checkout e sumiu,
+  // teve o cartao recusado, ou pagou.
+  CHECKOUT_START
+  CHECKOUT_APPROVED
+  CHECKOUT_REJECTED
+  PURCHASE_COMPLETE
+  SUBSCRIPTION_CANCEL
+
   PREFERENCES_UPDATE
   PWA_INSTALLED
   CLIENT_ERROR
@@ -565,7 +626,7 @@ model AppLog {
   level   LogLevel   @default(INFO)
   channel LogChannel @default(APP)
 
-  message String
+  message       String
   // Correlaciona linhas de canais diferentes que pertencem ao mesmo problema.
   correlationId String?
 
@@ -605,10 +666,10 @@ model Alert {
   severity AlertSeverity @default(WARNING)
   status   AlertStatus   @default(OPEN)
 
-  title  String
-  detail String?
+  title     String
+  detail    String?
   // Chave de deduplicacao: o mesmo problema reabrindo nao vira ruido novo.
-  dedupeKey String @unique
+  dedupeKey String  @unique
 
   entityType String?
   entityId   String?
@@ -649,7 +710,7 @@ model MediaServer {
   kind String @default("LOCAL") // LOCAL | REMOTE | CLOUD
 
   // Endereco de controle (opcional: um servidor pode so enviar batimentos).
-  baseUrl String?
+  baseUrl   String?
   // Hash do segredo compartilhado que autentica os batimentos do agente.
   tokenHash String?
 
@@ -675,13 +736,11 @@ model MediaServer {
 
 /**
  * Uma pasta de conteudo declarada pela operacao.
- *
  * A diferenca estrutural em relacao a um servidor de midia tradicional: aqui
  * quem tem o disco nao e quem roda a aplicacao. O painel **declara** a
  * biblioteca (nome, caminho, regras); o agente na maquina do disco a
  * **varre**; o servidor **importa** o resultado. Por isso `path` e um caminho
  * na maquina do agente, e nao algo que a aplicacao consiga abrir.
- *
  * Plural desde o comeco pelo mesmo motivo dos servidores: uma pasta hoje,
  * varias amanha, sem reescrever tela.
  */
@@ -694,20 +753,20 @@ model MediaLibrary {
   serverId String?
   server   MediaServer? @relation(fields: [serverId], references: [id], onDelete: SetNull)
 
-  enabled Boolean @default(true)
+  enabled         Boolean @default(true)
   // Criar novela/temporada/episodio a partir das pastas, ou so inventariar
   // arquivos. Quem so quer conferir integridade desliga isto.
-  autoImport Boolean @default(true)
+  autoImport      Boolean @default(true)
   // Novelas criadas por esta biblioteca nascem publicadas ou em rascunho.
   publishOnImport Boolean @default(false)
 
-  lastScanAt     DateTime?
-  lastScanState  String?
+  lastScanAt    DateTime?
+  lastScanState String?
   // Contagens da ultima varredura, para a tela nao precisar reagregar.
-  lastNovelas    Int @default(0)
-  lastEpisodes   Int @default(0)
-  lastFiles      Int @default(0)
-  lastBytes      BigInt @default(0)
+  lastNovelas   Int       @default(0)
+  lastEpisodes  Int       @default(0)
+  lastFiles     Int       @default(0)
+  lastBytes     BigInt    @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -728,7 +787,6 @@ enum ScanState {
 
 /**
  * Uma varredura pedida pelo painel e executada pelo agente.
- *
  * Existe como linha para que a operacao veja o progresso enquanto acontece e
  * o historico depois. Uma varredura que so aparece no terminal de quem a
  * rodou nao e observavel.
@@ -741,28 +799,28 @@ model LibraryScan {
   serverId String?
   server   MediaServer? @relation(fields: [serverId], references: [id], onDelete: SetNull)
 
-  state ScanState @default(QUEUED)
+  state          ScanState @default(QUEUED)
   // Etapa corrente em palavras: "varrendo", "lendo metadados", "importando".
-  phase String?
+  phase          String?
   // Progresso bruto; a tela deriva o percentual.
-  totalFiles     Int @default(0)
-  processedFiles Int @default(0)
+  totalFiles     Int       @default(0)
+  processedFiles Int       @default(0)
 
   // O que a varredura produziu.
-  novelasCreated  Int @default(0)
-  novelasUpdated  Int @default(0)
-  episodesCreated Int @default(0)
-  episodesUpdated Int @default(0)
-  filesIndexed    Int @default(0)
-  filesMissing    Int @default(0)
+  novelasCreated  Int    @default(0)
+  novelasUpdated  Int    @default(0)
+  episodesCreated Int    @default(0)
+  episodesUpdated Int    @default(0)
+  filesIndexed    Int    @default(0)
+  filesMissing    Int    @default(0)
   bytesTotal      BigInt @default(0)
   // Arquivos que nao casaram com o padrao de nome, para alguem olhar.
-  warnings Json @default("[]")
+  warnings        Json   @default("[]")
 
   error       String?
   requestedBy String?
   // Varredura completa relê metadados e checksum de tudo.
-  full Boolean @default(false)
+  full        Boolean @default(false)
 
   queuedAt   DateTime  @default(now())
   startedAt  DateTime?
@@ -794,9 +852,9 @@ model MediaServerBeat {
   netUpKbps   Float?
   netDownKbps Float?
 
-  activeStreams Int   @default(0)
-  transcodes    Int   @default(0)
-  queueDepth    Int   @default(0)
+  activeStreams Int    @default(0)
+  transcodes    Int    @default(0)
+  queueDepth    Int    @default(0)
   uptimeSec     Int?
   loadAvg       Float?
 
@@ -912,6 +970,11 @@ model TranscodeJob {
 
 // ------------------------------------------------------------- financeiro
 
+enum PaymentKind {
+  SUBSCRIPTION
+  TITLE_PURCHASE
+}
+
 enum PaymentStatus {
   PENDING
   APPROVED
@@ -931,7 +994,17 @@ model Payment {
   userId String
 
   subscriptionId String?
-  plan           SubscriptionPlan @default(PREMIUM)
+
+  // Nulo numa compra avulsa: ela nao pertence a plano nenhum.
+  //
+  // Era `@default(PREMIUM)` e nao-nulo, o que fazia toda venda de novela
+  // entrar no relatorio como se fosse assinatura — e o painel nao teria como
+  // separar R$ 4,99 de titulo de R$ 9,99 de mensalidade.
+  plan SubscriptionPlan?
+
+  // O que foi vendido. Uma coluna explicita, em vez de inferir de `plan` ser
+  // nulo: relatorio que depende de inferencia envelhece mal.
+  kind PaymentKind @default(SUBSCRIPTION)
 
   amountCents Int
   currency    String        @default("BRL")
@@ -948,12 +1021,35 @@ model Payment {
   periodEnd     DateTime?
 
   // Marca dado de demonstracao: o painel separa receita real de receita fake.
+  // O modo mock da fase comercial grava tudo com isto ligado.
   isDemo    Boolean  @default(false)
   createdAt DateTime @default(now())
 
+  // Compra avulsa que originou o movimento. Nulo quando e assinatura.
+  purchaseId String?
+  purchase   Purchase? @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
+
+  // Tentativa que originou este pagamento: liga o que o usuario iniciou ao
+  // que o provedor confirmou.
+  //
+  // Deliberadamente **nao** e unico. Uma assinatura recorrente nasce de uma
+  // tentativa so e gera um pagamento por ciclo — com unicidade aqui, a
+  // primeira renovacao violaria a constraint, a transacao do webhook cairia e
+  // o provedor reentregaria em laco.
+  attemptId String?
+  attempt   PaymentAttempt? @relation(fields: [attemptId], references: [id], onDelete: SetNull)
+
+  refunds Refund[]
+
+  // Idempotencia do lado de ca: dois webhooks para a mesma cobranca nao podem
+  // virar duas linhas de receita. Parcial (nulo permitido) porque os
+  // pagamentos da Fase 01 nao tem referencia externa.
+  @@unique([provider, externalId])
   @@index([userId, createdAt])
   @@index([status, createdAt])
   @@index([createdAt])
+  @@index([purchaseId])
+  @@index([attemptId])
 }
 
 // -------------------------------------------------------------- moderacao
@@ -990,4 +1086,384 @@ model Report {
 
   @@index([state, createdAt])
   @@index([targetType, targetId])
+}
+
+// ============================================================ monetizacao
+//
+// A regra comercial inteira mora aqui. Tres decisoes estruturais explicam o
+// formato:
+//
+// 1. **Entitlement e a fonte de verdade, nao a assinatura.** Perguntar "esta
+//    pessoa pode ver este episodio?" nunca consulta status de cobranca. Um
+//    reembolso revoga o direito; a linha financeira permanece como fato. Sem
+//    essa separacao, "assinatura cancelada mas novela comprada continua
+//    liberada" viraria um `if` espalhado por cada tela.
+//
+// 2. **Fatos financeiros sao imutaveis e datados.** `PaymentAttempt` registra
+//    o que a pessoa tentou, `Payment` o que o provedor confirmou, `Refund` o
+//    que voltou. Nada e sobrescrito — receita de um mes fechado nao muda
+//    porque alguem cancelou hoje.
+//
+// 3. **Duplicidade e barrada pelo banco, nao pelo codigo.** `WebhookEvent`
+//    tem chave unica por evento do provedor e `Entitlement` tem indices
+//    unicos parciais (criados no `migration.sql`, que o Prisma nao expressa).
+//    Um webhook reentregue esbarra numa constraint, nao numa condicao de
+//    corrida entre dois processos.
+
+enum PlanInterval {
+  MONTH
+  YEAR
+}
+
+/**
+ * Catalogo de planos vendaveis.
+ * Em tabela, e nao so em codigo, porque preco e periodo precisam ficar
+ * gravados no momento da venda: mudar a tabela amanha nao pode reescrever
+ * quanto alguem pagou ontem. `lib/pagamentos/planos.ts` mantem os valores de
+ * referencia e o seed reconcilia.
+ */
+model Plan {
+  id   String           @id @default(cuid())
+  code SubscriptionPlan @unique
+
+  name          String
+  description   String
+  priceCents    Int
+  currency      String       @default("BRL")
+  interval      PlanInterval
+  // Quantos `interval` cada ciclo dura. Anual = 1 YEAR; um futuro trimestral
+  // seria 3 MONTH, sem enum novo.
+  intervalCount Int          @default(1)
+
+  entitlementKind EntitlementKind
+  active          Boolean         @default(true)
+  sortOrder       Int             @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([active, sortOrder])
+}
+
+enum EntitlementKind {
+  SUBSCRIPTION_MONTHLY
+  SUBSCRIPTION_ANNUAL
+  TITLE_PURCHASE
+}
+
+enum EntitlementStatus {
+  ACTIVE
+  EXPIRED
+  REVOKED
+}
+
+enum EntitlementSource {
+  SUBSCRIPTION
+  PURCHASE
+  // Concedido a mao pelo painel (suporte, cortesia). Auditavel como o resto.
+  MANUAL
+  PROMO
+}
+
+/**
+ * Um direito de acesso concreto.
+ * `endsAt` nulo significa perpetuo — e o caso da compra avulsa, que segue
+ * valendo para episodios publicados depois. A assinatura sempre carrega data
+ * de fim; quem renova estende a linha, quem cancela deixa expirar.
+ */
+model Entitlement {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  kind   EntitlementKind
+  status EntitlementStatus @default(ACTIVE)
+  source EntitlementSource
+
+  // Preenchido apenas em TITLE_PURCHASE.
+  novelaId String?
+  novela   Novela? @relation(fields: [novelaId], references: [id], onDelete: Cascade)
+
+  subscriptionId String?
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  purchaseId String?
+  purchase   Purchase? @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
+
+  startsAt DateTime  @default(now())
+  endsAt   DateTime?
+
+  revokedAt DateTime?
+  // Por que foi revogado ou concedido a mao. Vira linha de auditoria no painel.
+  reason    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, status])
+  @@index([userId, novelaId, status])
+  @@index([status, endsAt])
+  @@index([subscriptionId])
+}
+
+enum PurchaseStatus {
+  PENDING
+  PAID
+  FAILED
+  CANCELED
+  REFUNDED
+  CHARGEBACK
+}
+
+/**
+ * Compra avulsa de uma novela. Paga uma vez, vale para sempre.
+ */
+model Purchase {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  novelaId String
+  novela   Novela @relation(fields: [novelaId], references: [id], onDelete: Cascade)
+
+  status      PurchaseStatus @default(PENDING)
+  amountCents Int
+  currency    String         @default("BRL")
+
+  provider             String?
+  externalId           String?
+  // Preferencia/checkout criado no provedor antes de existir pagamento.
+  externalPreferenceId String?
+  method               String?
+
+  // Chave que o cliente manda para que dois cliques no botao nao virem duas
+  // cobrancas. Unica no banco: a segunda tentativa reencontra a primeira.
+  idempotencyKey String @unique
+
+  failureCode    String?
+  failureMessage String?
+  refundedCents  Int     @default(0)
+
+  paidAt     DateTime?
+  canceledAt DateTime?
+  isDemo     Boolean   @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  entitlements Entitlement[]
+  payments     Payment[]
+  attempts     PaymentAttempt[]
+  refunds      Refund[]
+
+  @@unique([provider, externalId])
+  @@index([userId, status])
+  @@index([novelaId, status])
+  @@index([status, createdAt])
+}
+
+enum PaymentAttemptKind {
+  SUBSCRIPTION
+  PURCHASE
+}
+
+enum PaymentAttemptStatus {
+  CREATED
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+  ERROR
+}
+
+/**
+ * O que a pessoa tentou pagar.
+ * Separado de `Payment` porque a maioria das tentativas nunca vira receita —
+ * cartao recusado, Pix que expirou, aba fechada no meio. Jogar tudo em
+ * `Payment` contaminaria qualquer soma de faturamento; jogar fora apagaria
+ * exatamente o dado que explica por que a conversao caiu.
+ */
+model PaymentAttempt {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  kind   PaymentAttemptKind
+  status PaymentAttemptStatus @default(CREATED)
+
+  plan     SubscriptionPlan?
+  novelaId String?
+
+  subscriptionId String?
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  purchaseId String?
+  purchase   Purchase? @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
+
+  amountCents Int
+  currency    String  @default("BRL")
+  method      String?
+
+  provider   String
+  externalId String?
+  // Como o provedor descreveu o estado, cru. O enum acima e a nossa leitura;
+  // isto e o que ele disse, para quando as duas divergirem.
+  rawStatus  String?
+
+  idempotencyKey String @unique
+
+  failureCode    String?
+  failureMessage String?
+
+  // Para onde mandar a pessoa (checkout hospedado, QR do Pix).
+  checkoutUrl String?
+  pixQrCode   String?
+  expiresAt   DateTime?
+
+  isDemo Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  payments Payment[]
+
+  @@unique([provider, externalId])
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+}
+
+enum WebhookEventStatus {
+  RECEIVED
+  PROCESSED
+  // Evento legitimo que nao muda nada nosso (topico que nao tratamos).
+  IGNORED
+  FAILED
+}
+
+/**
+ * Toda notificacao recebida de um provedor, valida ou nao.
+ * A unicidade `(provider, eventId)` e o mecanismo de idempotencia: reentrega
+ * esbarra no banco antes de qualquer efeito. Assinatura invalida tambem e
+ * gravada — tentativa de forjar webhook e justamente o que se quer auditar
+ * depois, e descartar em silencio apagaria a evidencia.
+ */
+model WebhookEvent {
+  id       String @id @default(cuid())
+  provider String
+
+  // Identificador do evento no provedor. Quando ele nao manda um, derivamos
+  // de forma estavel a partir de topico + recurso.
+  eventId String
+  topic   String
+  action  String?
+
+  signatureValid Boolean
+  status         WebhookEventStatus @default(RECEIVED)
+
+  // Recurso citado (id do pagamento, da assinatura) para reconsulta.
+  resourceId String?
+
+  payload          Json
+  // O que o provedor respondeu quando reconsultamos. E isto, e nao o corpo do
+  // webhook, que autoriza mudanca de estado.
+  providerSnapshot Json?
+
+  attempts    Int       @default(0)
+  error       String?
+  processedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([provider, eventId])
+  @@index([status, createdAt])
+  @@index([resourceId])
+}
+
+enum RefundKind {
+  REFUND
+  CHARGEBACK
+}
+
+enum RefundStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+}
+
+/**
+ * Dinheiro que voltou. Reembolso pedido por nos, chargeback imposto a nos.
+ */
+model Refund {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  kind   RefundKind   @default(REFUND)
+  status RefundStatus @default(REQUESTED)
+
+  paymentId String?
+  payment   Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  purchaseId String?
+  purchase   Purchase? @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
+
+  subscriptionId String?
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  amountCents Int
+  currency    String  @default("BRL")
+  reason      String?
+
+  provider   String?
+  externalId String?
+
+  processedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@unique([provider, externalId])
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+}
+
+enum SubscriptionEventType {
+  CREATED
+  ACTIVATED
+  RENEWED
+  PAYMENT_FAILED
+  PAST_DUE
+  CANCEL_REQUESTED
+  CANCELED
+  EXPIRED
+  REACTIVATED
+  REFUNDED
+  CHARGEBACK
+}
+
+/**
+ * Historico da assinatura.
+ * `Subscription.userId` e unico — uma linha por pessoa, sobrescrita a cada
+ * mudanca. Sem esta tabela, "quando cancelou", "quantas vezes renovou" e
+ * "quando a cobranca falhou" seriam perguntas sem resposta.
+ */
+model SubscriptionEvent {
+  id String @id @default(cuid())
+
+  subscriptionId String
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type       SubscriptionEventType
+  fromStatus SubscriptionStatus?
+  toStatus   SubscriptionStatus?
+  periodEnd  DateTime?
+
+  payload Json @default("{}")
+
+  createdAt DateTime @default(now())
+
+  @@index([subscriptionId, createdAt])
+  @@index([type, createdAt])
 }

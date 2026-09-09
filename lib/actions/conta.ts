@@ -285,36 +285,14 @@ export async function salvarPerfil(input: { nome: string; avatarSeed: string }) 
 }
 
 /**
- * Troca de plano. Hoje grava o estado localmente — o ponto de integração com
- * um provedor de pagamento real é este, sem mudar nada acima.
+ * A troca de plano por ação do cliente foi REMOVIDA nesta fase.
+ *
+ * `alternarPlano` gravava `plan: "PREMIUM"` direto no banco a pedido do
+ * navegador, sem cobrança nenhuma — na Fase 01 isso era uma demonstração
+ * honesta, porque não havia o que cobrar. Com o paywall valendo, virou uma
+ * ação de servidor que qualquer pessoa autenticada podia invocar para liberar
+ * o catálogo inteiro de graça.
+ *
+ * O caminho agora é `/api/pagamentos/checkout`, e só um pagamento confirmado
+ * pelo provedor concede direito. Cancelar é `DELETE /api/pagamentos/assinatura`.
  */
-export async function alternarPlano(plano: "FREE" | "PREMIUM") {
-  const viewer = await getViewer();
-  if (!viewer) redirect("/entrar");
-
-  const periodEnd =
-    plano === "PREMIUM" ? new Date(Date.now() + 30 * 86_400_000) : null;
-  const shared = {
-    plan: plano,
-    status: "ACTIVE" as const,
-    provider: "interno",
-    priceCents: plano === "PREMIUM" ? 1990 : null,
-    currentPeriodEnd: periodEnd,
-  };
-
-  await db.subscription.upsert({
-    where: { userId: viewer.id },
-    create: { userId: viewer.id, ...shared },
-    update: { ...shared, canceledAt: plano === "FREE" ? new Date() : null },
-  });
-
-  await track({
-    type: "PAYWALL_CTA",
-    userId: viewer.id,
-    sessionId: viewer.appSessionId,
-    payload: { plano },
-  });
-
-  revalidatePath("/", "layout");
-  return { ok: true as const, plano };
-}

@@ -291,8 +291,13 @@ export default async function PaginaFinanceira({
               opcoes={[
                 { valor: "", rotulo: "Todo plano" },
                 { valor: "FREE", rotulo: "Gratuito" },
-                { valor: "PREMIUM", rotulo: "Premium" },
-                { valor: "VIP", rotulo: "VIP" },
+                { valor: "MONTHLY", rotulo: "Mensal" },
+                { valor: "ANNUAL", rotulo: "Anual" },
+                // Nomes da Fase 01. Ficam na lista porque ainda existem
+                // assinaturas gravadas com eles: tirar a opcao esconderia
+                // linhas reais do relatorio.
+                { valor: "PREMIUM", rotulo: "Premium (legado)" },
+                { valor: "VIP", rotulo: "VIP (legado)" },
               ]}
             />
             <Seletor
@@ -447,7 +452,8 @@ export default async function PaginaFinanceira({
                       {pagamento.usuario?.nome ?? "conta removida"}
                     </span>
                   </Td>
-                  <Td>{pagamento.plano.toLowerCase()}</Td>
+                  {/* Sem plano = compra avulsa de novela. */}
+                  <Td>{pagamento.plano?.toLowerCase() ?? "avulso"}</Td>
                   <Td alinhar="direita" className="whitespace-nowrap">
                     {fmtMoeda(pagamento.valorCents)}
                     {pagamento.reembolsadoCents > 0 ? (

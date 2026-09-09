@@ -286,7 +286,7 @@ export function FormularioDaNovela({
               <AcaoProtegida
                 rotulo="Tornar premium"
                 titulo="Cobrar por esta novela?"
-                descricao={`Os ${novela.episodios} episódios passam a exigir assinatura, com os dois primeiros abertos para quem quiser experimentar a história.`}
+                descricao={`Marca a obra como paga no catálogo. A regra de acesso nao muda: os primeiros episódios de qualquer novela seguem abertos, e o resto pede assinatura ou a compra da obra.`}
                 confirmar="Aplicar"
                 variante="sutil"
                 acao={async () =>

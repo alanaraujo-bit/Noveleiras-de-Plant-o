@@ -35,9 +35,13 @@
     "agente:biblioteca": "node --env-file=.env.agente scripts/agente-biblioteca.mjs",
     "painel:provar-biblioteca": "node --env-file=.env scripts/provar-biblioteca.mjs",
     "limpar:ficcao": "node --env-file=.env scripts/limpar-ficcao.ts",
-    "midia:converter": "node scripts/converter-para-mp4.mjs"
+    "midia:converter": "node scripts/converter-para-mp4.mjs",
+    "planos:semear": "node --env-file=.env scripts/semear-planos.ts",
+    "pagamentos:provar": "node --env-file=.env --env-file=.env.local --env-file=.env.development.local scripts/provar-pagamentos.mjs",
+    "backup:financeiro": "node --env-file=.env scripts/backup-financeiro.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1127.0",
     "@prisma/client": "^6.19.3",
     "bcryptjs": "^3.0.3",
     "hls.js": "^1.7.2",
@@ -47,6 +51,7 @@
     "prisma": "^6.19.3",
     "react": "19.2.8",
     "react-dom": "19.2.8",
+    "sharp": "^0.35.4",
     "zod": "^4.5.4"
   },
   "devDependencies": {

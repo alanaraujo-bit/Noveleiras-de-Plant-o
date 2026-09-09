@@ -315,7 +315,8 @@ export async function listarAssinaturas(filtro: {
 export type LinhaDePagamento = {
   id: string;
   usuario: { id: string; nome: string; email: string } | null;
-  plano: string;
+  /** Nulo numa compra avulsa: ela nao pertence a plano nenhum. */
+  plano: string | null;
   valorCents: number;
   reembolsadoCents: number;
   moeda: string;

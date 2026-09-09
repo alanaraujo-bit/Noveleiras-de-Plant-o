@@ -7,10 +7,12 @@ import { SignJWT, jwtVerify } from "jose";
 import { db } from "@/lib/db";
 import {
   ANONYMOUS_ENTITLEMENT,
-  entitlementFrom,
+  carteiraDe,
+  type Direito,
   type Entitlement,
 } from "@/lib/access/entitlements";
 import type { Role } from "@prisma/client";
+import { avatarUrl } from "@/lib/media/avatars";
 
 const COOKIE = "nvl_sessao";
 export const DEVICE_COOKIE = "nvl_dispositivo";
@@ -70,6 +72,7 @@ export type Viewer = {
   handle: string;
   email: string;
   avatarSeed: string;
+  avatarUrl: string | null;
   role: Role;
   onboardedAt: Date | null;
   appSessionId: string;
@@ -94,11 +97,39 @@ export const getViewer = cache(async (): Promise<Viewer | null> => {
   const claims = await readClaims();
   if (!claims) return null;
 
+  const agora = new Date();
+
   const user = await db.user.findFirst({
     where: { id: claims.sub, status: "ACTIVE" },
-    include: { subscription: true, preference: true },
+    include: {
+      subscription: true,
+      preference: true,
+      // Os direitos vêm na mesma consulta, filtrados por vigência no SQL.
+      // Buscar depois custaria uma segunda ida ao banco em toda página, e a
+      // decisão de acesso não pode depender de uma consulta que talvez falhe.
+      entitlements: {
+        where: {
+          status: "ACTIVE",
+          startsAt: { lte: agora },
+          OR: [{ endsAt: null }, { endsAt: { gt: agora } }],
+        },
+        select: {
+          kind: true,
+          novelaId: true,
+          startsAt: true,
+          endsAt: true,
+        },
+      },
+    },
   });
   if (!user) return null;
+
+  const direitos: Direito[] = user.entitlements.map((e) => ({
+    kind: e.kind,
+    novelaId: e.novelaId,
+    startsAt: e.startsAt,
+    endsAt: e.endsAt,
+  }));
 
   return {
     id: user.id,
@@ -106,10 +137,11 @@ export const getViewer = cache(async (): Promise<Viewer | null> => {
     handle: user.handle,
     email: user.email,
     avatarSeed: user.avatarSeed,
+    avatarUrl: avatarUrl(user.id, user.avatarKey),
     role: user.role,
     onboardedAt: user.onboardedAt,
     appSessionId: claims.sid,
-    entitlement: entitlementFrom(user.subscription),
+    entitlement: carteiraDe(user.subscription, direitos, agora),
     preferences: {
       favoriteGenreIds: user.preference?.favoriteGenreIds ?? [],
       autoplayNext: user.preference?.autoplayNext ?? true,

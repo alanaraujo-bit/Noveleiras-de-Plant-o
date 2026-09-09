@@ -6,8 +6,14 @@ import {
   resolveMedia,
   type MediaSource,
 } from "@/lib/media/resolver";
-import { canWatchEpisode, type Entitlement } from "@/lib/access/entitlements";
+import {
+  ANONYMOUS_ENTITLEMENT,
+  canWatchEpisode,
+  type Entitlement,
+  type MotivoBloqueado,
+} from "@/lib/access/entitlements";
 import type { Viewer } from "@/lib/auth/session";
+import { normalizeText } from "@/lib/text";
 import type { AccessTier, NovelaStatus, Prisma } from "@prisma/client";
 
 /**
@@ -27,6 +33,10 @@ export type NovelaCard = {
   posterUrl: string;
   heroUrl: string;
   accessTier: AccessTier;
+  /** Obra liberada inteira de proposito. */
+  openAccess: boolean;
+  /** Preco da compra avulsa desta obra, quando foge da tabela. */
+  priceCents: number | null;
   status: NovelaStatus;
   year: number;
   ageRating: string;
@@ -43,16 +53,20 @@ const CARD_SELECT = {
   slug: true,
   title: true,
   tagline: true,
+  synopsis: true,
   accent: true,
   posterKey: true,
   heroKey: true,
   accessTier: true,
+  openAccess: true,
+  priceCents: true,
   status: true,
   year: true,
   ageRating: true,
   rating: true,
   ratingCount: true,
   editorialNote: true,
+  searchText: true,
   releasedAt: true,
   genres: { select: { genre: { select: { slug: true, name: true } } } },
   _count: { select: { episodes: true } },
@@ -72,6 +86,8 @@ function toCard(row: CardRow): NovelaCard {
     posterUrl: posterUrl(row.posterKey),
     heroUrl: posterUrl(row.heroKey),
     accessTier: row.accessTier,
+    openAccess: row.openAccess,
+    priceCents: row.priceCents,
     status: row.status,
     year: row.year,
     ageRating: row.ageRating,
@@ -136,10 +152,21 @@ export async function getEmBreve(limit = 6): Promise<NovelaCard[]> {
   return rows.map(toCard);
 }
 
-export async function getGratuitas(limit = 12): Promise<NovelaCard[]> {
+/**
+ * Obras para quem está começando.
+ *
+ * Era `getGratuitas`, e filtrava por `accessTier: "FREE"` — o que, com o
+ * catálogo inteiro gravado como FREE, devolvia tudo sob o título "estas são
+ * grátis". Verdadeiro na Fase 01, falso desde que o paywall passou a valer:
+ * nenhuma obra é gratuita por inteiro, só os primeiros episódios de cada uma.
+ *
+ * Agora devolve as mais vistas, e a tela diz a regra certa. As obras abertas
+ * de propósito (`openAccess`) vêm primeiro, quando existirem.
+ */
+export async function getComecePorAqui(limit = 12): Promise<NovelaCard[]> {
   const rows = await db.novela.findMany({
-    where: { ...PUBLISHED, accessTier: "FREE" },
-    orderBy: { viewCount: "desc" },
+    where: PUBLISHED,
+    orderBy: [{ openAccess: "desc" }, { viewCount: "desc" }],
     take: limit,
     select: CARD_SELECT,
   });
@@ -176,6 +203,94 @@ export type GenreSummary = {
   novelaCount: number;
 };
 
+export type GenreWithHighlights = GenreSummary & {
+  highlights: {
+    id: string;
+    title: string;
+    posterUrl: string;
+  }[];
+};
+
+const GENRE_SIGNALS: Record<string, readonly string[]> = {
+  "romance-proibido": [
+    " amor ",
+    " amante ",
+    " traid",
+    " marido ",
+    " ex ",
+    " engravid",
+  ],
+  vinganca: [
+    " vinganca ",
+    " vinga",
+    " traid",
+    " humilh",
+    " rejeita",
+    " cruel ",
+    " descart",
+  ],
+  "heranca-e-poder": [
+    " herdeir",
+    " heranca ",
+    " linhagem ",
+    " alfa ",
+    " rei dragao ",
+    " influente ",
+    " dono ",
+  ],
+  "segredos-de-familia": [
+    " familia ",
+    " filha ",
+    " irmao ",
+    " bebe ",
+    " avo ",
+    " marido ",
+    " impostora ",
+  ],
+  "comedia-romantica": [
+    " comedia ",
+    " divertido",
+    " engracad",
+    " confusao ",
+  ],
+  "suspense-passional": [
+    " incriminad",
+    " desaparecid",
+    " misterio",
+    " sangue ",
+    " abismo ",
+    " louco ",
+    " verdade enterrada ",
+  ],
+  "segundo-amor": [
+    " recomeco ",
+    " primeiro amor acabou ",
+    " protetor ",
+    " nova vida ",
+    " deixa la ir ",
+    " ex ",
+  ],
+  reencontro: [
+    " anos depois ",
+    " cruza o caminho ",
+    " mais uma vez ",
+    " reencontro ",
+    " reencontra",
+  ],
+};
+
+function belongsToGenre(
+  novela: { title: string; synopsis: string; searchText: string },
+  genreSlug: string,
+): boolean {
+  const signals = GENRE_SIGNALS[genreSlug] ?? [];
+  const normalized = novela.searchText.trim()
+    ? novela.searchText
+    : normalizeText(`${novela.title} ${novela.synopsis}`);
+  const document = ` ${normalized} `;
+  return signals.some((signal) => document.includes(signal));
+}
+
 export async function listGenres(): Promise<GenreSummary[]> {
   const rows = await db.genre.findMany({
     orderBy: { sort: "asc" },
@@ -199,14 +314,98 @@ export async function listGenres(): Promise<GenreSummary[]> {
   }));
 }
 
+/**
+ * Gêneros acompanhados das três capas mais populares de cada grupo.
+ *
+ * A ordenação principal segue visualizações; a nota só desempata. A seleção
+ * acontece no repositório para não transportar o catálogo inteiro até a página.
+ */
+export async function listGenresWithHighlights(): Promise<GenreWithHighlights[]> {
+  const [rows, catalog] = await Promise.all([
+    db.genre.findMany({
+      orderBy: { sort: "asc" },
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        tagline: true,
+        accent: true,
+        _count: { select: { novelas: true } },
+        novelas: {
+          orderBy: [
+            { novela: { viewCount: "desc" } },
+            { novela: { rating: "desc" } },
+          ],
+          select: {
+            novela: {
+              select: {
+                id: true,
+                title: true,
+                posterKey: true,
+              },
+            },
+          },
+        },
+      },
+    }),
+    db.novela.findMany({
+      where: PUBLISHED,
+      orderBy: [{ viewCount: "desc" }, { rating: "desc" }],
+      select: {
+        id: true,
+        title: true,
+        synopsis: true,
+        searchText: true,
+        posterKey: true,
+      },
+    }),
+  ]);
+
+  return rows.map((row) => {
+    const linked = row.novelas.map(({ novela }) => novela);
+    const inferred = linked.length
+      ? []
+      : catalog.filter((novela) => belongsToGenre(novela, row.slug));
+    const references = linked.length ? linked : inferred;
+
+    return {
+      id: row.id,
+      slug: row.slug,
+      name: row.name,
+      tagline: row.tagline,
+      accent: row.accent,
+      artUrl: `/api/arte/genero/${row.slug}`,
+      novelaCount: linked.length ? row._count.novelas : inferred.length,
+      highlights: references.slice(0, 3).map((novela) => ({
+        id: novela.id,
+        title: novela.title,
+        posterUrl: posterUrl(novela.posterKey),
+      })),
+    };
+  });
+}
+
 export async function getGenreWithNovelas(slug: string) {
   const genre = await db.genre.findUnique({ where: { slug } });
   if (!genre) return null;
-  const rows = await db.novela.findMany({
+  let rows = await db.novela.findMany({
     where: { genres: { some: { genreId: genre.id } } },
     orderBy: [{ viewCount: "desc" }],
     select: CARD_SELECT,
   });
+
+  // Bibliotecas importadas antes da classificação editorial podem não ter
+  // relações de gênero. Nesse caso, a mesma leitura semântica usada nos cards
+  // mantém a vitrine e a página de destino consistentes.
+  if (rows.length === 0) {
+    const catalog = await db.novela.findMany({
+      where: PUBLISHED,
+      orderBy: [{ viewCount: "desc" }, { rating: "desc" }],
+      select: CARD_SELECT,
+    });
+    rows = catalog.filter((novela) => belongsToGenre(novela, slug));
+  }
+
   return { genre, novelas: rows.map(toCard) };
 }
 
@@ -223,7 +422,7 @@ export type EpisodeItem = {
   accessTier: AccessTier;
   releasedAt: string;
   locked: boolean;
-  lockReason: "needs-account" | "needs-subscription" | null;
+  lockReason: MotivoBloqueado | null;
   progress: { positionSec: number; percent: number; completed: boolean } | null;
 };
 
@@ -340,16 +539,15 @@ export async function getNovelaDetail(
     episodes: season.episodes.map((episode) => {
       absoluteIndex += 1;
       const decision = canWatchEpisode(
-        { accessTier: episode.accessTier, episodeIndex: absoluteIndex },
-        entitlement ?? {
-          plan: "FREE",
-          status: "ACTIVE",
-          active: true,
-          premium: false,
-          trialEndsAt: null,
-          currentPeriodEnd: null,
-          freePreviewEpisodes: 2,
+        {
+          novelaId: row.id,
+          episodeIndex: absoluteIndex,
+          openAccess: row.openAccess,
         },
+        // A carteira anônima vem do módulo de regra, e não de um literal
+        // montado aqui: o literal antigo trazia `freePreviewEpisodes: 2`
+        // gravado à mão e teria sobrevivido silenciosamente à mudança para 5.
+        entitlement ?? ANONYMOUS_ENTITLEMENT,
         Boolean(viewer),
       );
       const progress = progressByEpisode.get(episode.id);
@@ -445,6 +643,7 @@ export type PlayerEpisode = {
     slug: string;
     title: string;
     accent: string;
+    openAccess: boolean;
   };
 };
 
@@ -470,7 +669,15 @@ export async function getEpisodeForPlayer(
       mediaFormat: true,
       thumbKey: true,
       season: { select: { number: true } },
-      novela: { select: { id: true, slug: true, title: true, accent: true } },
+      novela: {
+        select: {
+          id: true,
+          slug: true,
+          title: true,
+          accent: true,
+          openAccess: true,
+        },
+      },
     },
   });
   if (!episode) return null;

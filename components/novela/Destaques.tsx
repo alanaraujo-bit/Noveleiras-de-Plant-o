@@ -73,11 +73,15 @@ export function Destaques({ novelas }: { novelas: NovelaCard[] }) {
                       ? "Estreia em breve"
                       : "Destaque do plantão"}
                   </Selo>
-                  {novela.accessTier === "PREMIUM" ? (
-                    <Selo tom="carmim">Premium</Selo>
-                  ) : (
-                    <Selo tom="jade">Grátis</Selo>
-                  )}
+                  {/*
+                    Antes: "Grátis" para tudo que nao fosse PREMIUM. Como o
+                    catalogo inteiro esta gravado como FREE, o selo aparecia em
+                    toda novela e afirmava algo falso — a obra inteira nao e
+                    gratuita, so os primeiros episodios sao.
+                  */}
+                  {novela.openAccess ? (
+                    <Selo tom="jade">Grátis por inteiro</Selo>
+                  ) : null}
                 </div>
 
                 <h2 className="text-[1.875rem] leading-[1.05] text-balance-pt">

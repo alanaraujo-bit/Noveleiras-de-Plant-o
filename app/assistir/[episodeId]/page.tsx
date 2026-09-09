@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import { getViewer } from "@/lib/auth/session";
 import { getEpisodeForPlayer, getNextEpisode } from "@/lib/repositories/catalog";
 import { posterUrl, resolveMedia, type MediaProviderName } from "@/lib/media/resolver";
+import { assinarUrl, segredoDeMidia } from "@/lib/media/assinatura";
 import { canWatchEpisode } from "@/lib/access/entitlements";
 import { track } from "@/lib/analytics/track";
 import { db } from "@/lib/db";
@@ -41,7 +42,11 @@ export default async function AssistirPage({ params }: Params) {
   // a página. O player não precisa de nenhuma ida à rede para começar: é a
   // diferença entre abrir tocando e abrir girando um carregador.
   const decisao = canWatchEpisode(
-    { accessTier: episode.accessTier, episodeIndex: episode.episodeIndex },
+    {
+      novelaId: episode.novela.id,
+      episodeIndex: episode.episodeIndex,
+      openAccess: episode.novela.openAccess,
+    },
     viewer.entitlement,
     true,
   );
@@ -57,14 +62,31 @@ export default async function AssistirPage({ params }: Params) {
     });
   }
 
+  // A fonte é assinada aqui também, e não só na rota de mídia: esta página
+  // entrega o descritor junto com o HTML para o player abrir tocando. Sem
+  // assinar nos dois caminhos, um deles serviria um link que o servidor de
+  // mídia recusa — e o bug apareceria só em produção, com o segredo ligado.
   const fonte = decisao.allowed
-    ? resolveMedia({
-        mediaKey: episode.mediaKey,
-        provider: episode.mediaProvider as MediaProviderName,
-        format: episode.mediaFormat,
-        thumbKey: episode.thumbKey,
-        durationSec: episode.durationSec,
-      })
+    ? (() => {
+        const bruta = resolveMedia({
+          mediaKey: episode.mediaKey,
+          provider: episode.mediaProvider as MediaProviderName,
+          format: episode.mediaFormat,
+          thumbKey: episode.thumbKey,
+          durationSec: episode.durationSec,
+        });
+        const assinada = assinarUrl(
+          bruta.url,
+          episode.mediaKey,
+          viewer.id,
+          segredoDeMidia(),
+        );
+        return {
+          ...bruta,
+          url: assinada.url,
+          expiresAt: assinada.expiraEm?.toISOString() ?? null,
+        };
+      })()
     : null;
 
   return (
