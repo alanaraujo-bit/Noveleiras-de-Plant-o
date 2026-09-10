@@ -250,15 +250,15 @@ describe("retorno seguido de webhook duplicado", () => {
 describe("polling seguido de webhook", () => {
   it("converge para o mesmo estado, em qualquer ordem", async () => {
     await reconciliarAssinatura(PREAPPROVAL); // tela de espera
-    const fimDoPolling = ativos()[0]!.endsAt;
+    const fimDoPolling = (ativos()[0]!.endsAt as Date).getTime();
 
     await reconciliarAssinatura(PREAPPROVAL); // webhook
 
     expect(ativos()).toHaveLength(1);
-    // Reconciliar de novo não pode encurtar o que já foi pago.
-    expect(
-      (ativos()[0]!.endsAt as Date).getTime(),
-    ).toBeGreaterThanOrEqual((fimDoPolling as Date).getTime());
+    // Igualdade exata, e não ">=": estender o ciclo a cada releitura da mesma
+    // autorização daria um mês de graça por webhook reentregue. Foi assim que
+    // o defeito passou despercebido na primeira versão deste teste.
+    expect((ativos()[0]!.endsAt as Date).getTime()).toBe(fimDoPolling);
   });
 });
 
@@ -277,19 +277,21 @@ describe("a pessoa fecha a aba antes de voltar do checkout", () => {
 });
 
 describe("assinatura já ativa", () => {
-  it("renovar estende o ciclo em vez de criar um segundo direito", async () => {
+  it("reler a mesma autorização não regala um mês", async () => {
     await reconciliarAssinatura(PREAPPROVAL);
     const primeiroFim = (ativos()[0]!.endsAt as Date).getTime();
     const idDoDireito = ativos()[0]!.id;
 
-    // Ciclo seguinte cobrado: o provedor responde autorizado de novo.
+    // Três releituras: retorno reaberto, webhook reentregue, tela de espera.
+    await reconciliarAssinatura(PREAPPROVAL);
+    await reconciliarAssinatura(PREAPPROVAL);
     await reconciliarAssinatura(PREAPPROVAL);
 
     expect(ativos()).toHaveLength(1);
     expect(ativos()[0]!.id).toBe(idDoDireito);
-    expect((ativos()[0]!.endsAt as Date).getTime()).toBeGreaterThanOrEqual(
-      primeiroFim,
-    );
+    expect((ativos()[0]!.endsAt as Date).getTime()).toBe(primeiroFim);
+    // E nenhum evento de renovação inventado por releitura.
+    expect(tabelas.subscriptionEvent).toHaveLength(1);
   });
 });
 

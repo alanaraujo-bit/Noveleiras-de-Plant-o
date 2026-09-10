@@ -482,6 +482,33 @@ export async function reconciliarAssinatura(
     case "APPROVED": {
       const plano = planoPorCodigo(tentativa.plan ?? "MONTHLY");
 
+      // Reconciliar de novo o **mesmo** preapproval não é uma renovação: é a
+      // mesma autorização sendo relida — o webhook reentregue, o retorno
+      // reaberto, a tela de espera consultando. `ativarAssinatura` estende o
+      // ciclo a partir do fim vigente, então deixar passar daria um mês de
+      // graça a cada releitura.
+      //
+      // A renovação de verdade não chega por aqui: um ciclo cobrado vem como
+      // `subscription_authorized_payment`, que é um pagamento e segue por
+      // `reconciliarPagamento`.
+      const jaAtivaPorEste =
+        tentativa.status === "APPROVED" &&
+        assinatura?.status === "ACTIVE" &&
+        assinatura.plan === plano.code &&
+        assinatura.externalPreapprovalId === externalId;
+
+      if (jaAtivaPorEste) {
+        // `mudou: true` de propósito: o evento foi reconhecido e tratado, e
+        // gravá-lo como IGNORED faria a auditoria mentir sobre a reentrega.
+        return {
+          mudou: true,
+          motivo: "assinatura já ativa por este preapproval",
+          attemptId: tentativa.id,
+          status: consulta.status,
+          snapshot: consulta,
+        };
+      }
+
       await db.$transaction(async (tx) => {
         await tx.paymentAttempt.update({
           where: { id: tentativa.id },
