@@ -341,6 +341,31 @@ h4 {
   display: none;
 }
 
+/* Imersão: passado um tempo assistindo sem tocar em nada, tudo sai de cena e
+   fica só o episódio.
+
+   A barra de abas mora no layout do aplicativo, longe da lâmina que decide
+   entrar em imersão. Em vez de atravessar três componentes com um callback só
+   para apagá-la, a lâmina marca o elemento raiz e o CSS resolve — o mesmo
+   caminho que `data-superficie` já usava.
+
+   `visibility` junto da opacidade tira a barra da navegação por teclado e dos
+   leitores de tela enquanto ela está invisível; sem isso o foco cairia num
+   destino que ninguém consegue ver. */
+:root[data-imersivo="1"] nav[aria-label="Navegação principal"] {
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 0.3s var(--ease-out-soft),
+    visibility 0s linear 0.3s;
+}
+
+nav[aria-label="Navegação principal"] {
+  transition:
+    opacity 0.25s var(--ease-out-soft),
+    visibility 0s;
+}
+
 /* ------------------------------------------------------------- animações */
 
 @keyframes rise {

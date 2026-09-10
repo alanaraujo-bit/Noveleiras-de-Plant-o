@@ -5,12 +5,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 
 import { AcoesLaterais } from "@/components/reel/AcoesLaterais";
+import { BarraDeProgresso } from "@/components/reel/BarraDeProgresso";
+import { useTelemetry } from "@/components/sistema/TelemetryProvider";
 import {
   IconeCadeado,
   IconeCoracaoCheio,
   IconePlay,
+  IconeSeta,
   IconeVolume,
 } from "@/components/ui/icones";
+import { useGestosDoReel } from "@/lib/player/gestos";
 import {
   renovarFonte,
   useRegistroDeProgresso,
@@ -32,6 +36,14 @@ import type { LaminaReel } from "@/lib/repositories/reel";
  * uma lâmina em branco não é um erro isolado — é a fila inteira parecendo
  * quebrada.
  */
+
+/**
+ * Tempo assistindo sem tocar em nada antes da interface sair de cena.
+ *
+ * Quatro segundos e meio: curto o bastante para a tela limpar durante uma cena
+ * comum, longo o bastante para não apagar os botões no meio de uma decisão.
+ */
+const ESPERA_PARA_IMERGIR_MS = 4500;
 
 type Props = {
   lamina: LaminaReel;
@@ -73,14 +85,47 @@ export function Lamina({
   aoAbrirComentarios,
   aoEnviar,
 }: Props) {
+  const { track } = useTelemetry();
   const videoRef = useRef<HTMLVideoElement>(null);
   const [fonte, setFonte] = useState<Fonte | null>(lamina.fonte);
   const [falhou, setFalhou] = useState(false);
   const [tocando, setTocando] = useState(false);
   const [pausadaPelaPessoa, setPausadaPelaPessoa] = useState(false);
-  const [progresso, setProgresso] = useState(0);
+  // Posição e duração em segundos, não em porcentagem: a barra navegável
+  // precisa converter um ponto da tela em um instante do episódio, e uma
+  // porcentagem já perdeu a informação necessária para isso.
+  const [posicaoSec, setPosicaoSec] = useState(lamina.retomarEm);
+  const [duracaoSec, setDuracaoSec] = useState(lamina.episodio.duracaoSec);
+  const [arrastandoBarra, setArrastandoBarra] = useState(false);
   const [sinopseAberta, setSinopseAberta] = useState(false);
   const [estouroDeCoracao, setEstouroDeCoracao] = useState(0);
+
+  // ------------------------------------------------------------ imersão
+  //
+  // Depois de um tempo assistindo sem tocar em nada, a interface sai de cena e
+  // fica só o episódio. É o gesto que o conteúdo pede: o texto e os botões
+  // servem para decidir o que ver, e quem já decidiu não precisa mais deles.
+  //
+  // A regra que faz isso não irritar é uma só: **o primeiro toque depois da
+  // imersão apenas traz a interface de volta, nunca pausa.** Sem ela, quem
+  // quisesse ver as ações pausaria o episódio sem querer, toda vez.
+  const [imersivo, setImersivo] = useState(false);
+  const imersivoRef = useRef(false);
+  imersivoRef.current = imersivo;
+  const relogioDeImersaoRef = useRef<number | null>(null);
+
+  const sairDaImersao = useCallback(() => {
+    setImersivo(false);
+  }, []);
+
+  /** Reinicia a contagem. Toda interação passa por aqui. */
+  const adiarImersao = useCallback(() => {
+    if (relogioDeImersaoRef.current) {
+      window.clearTimeout(relogioDeImersaoRef.current);
+      relogioDeImersaoRef.current = null;
+    }
+    setImersivo(false);
+  }, []);
 
   const { manterTelaAcordada, liberarTelaAcordada } = useTelaAcordada();
 
@@ -243,49 +288,98 @@ export function Lamina({
     }
   }, [fonte, tentarTocar]);
 
+  // ------------------------------------------------------- render
+
+  const bloqueada = lamina.bloqueio !== null;
+  const podeMostrarVideo = montada && fonte !== null && !falhou;
+
+
+  // O relógio da imersão só corre quando há o que assistir: lâmina em cena,
+  // vídeo andando, nenhum painel aberto e nenhum arrasto em curso. Qualquer
+  // uma dessas condições caindo devolve a interface — inclusive pausar, que é
+  // o momento em que a pessoa mais precisa dos controles.
+  useEffect(() => {
+    const podeImergir =
+      ativa && tocando && !recuada && !arrastandoBarra && !bloqueada && !falhou;
+
+    if (!podeImergir) {
+      if (relogioDeImersaoRef.current) {
+        window.clearTimeout(relogioDeImersaoRef.current);
+        relogioDeImersaoRef.current = null;
+      }
+      setImersivo(false);
+      return;
+    }
+
+    if (imersivo) return;
+
+    relogioDeImersaoRef.current = window.setTimeout(() => {
+      relogioDeImersaoRef.current = null;
+      setImersivo(true);
+    }, ESPERA_PARA_IMERGIR_MS);
+
+    return () => {
+      if (relogioDeImersaoRef.current) {
+        window.clearTimeout(relogioDeImersaoRef.current);
+        relogioDeImersaoRef.current = null;
+      }
+    };
+  }, [ativa, tocando, recuada, arrastandoBarra, bloqueada, falhou, imersivo]);
+
+  // A barra de abas vive no layout do aplicativo, fora desta árvore. O sinal
+  // vai pelo elemento raiz — o mesmo caminho que `data-superficie` já usa — e
+  // o CSS decide o resto. Passar um callback por três níveis de componente só
+  // para apagar uma barra seria acoplamento sem retorno.
+  useEffect(() => {
+    if (!ativa) return;
+    const raiz = document.documentElement;
+    if (imersivo) raiz.dataset.imersivo = "1";
+    else delete raiz.dataset.imersivo;
+    return () => {
+      delete raiz.dataset.imersivo;
+    };
+  }, [ativa, imersivo]);
+
   // ------------------------------------------------------- toque na tela
   //
-  // Um toque pausa, dois curtem. Distinguir os dois exige uma espera curta, e
-  // é por isso que o adiamento existe: sem ele, o primeiro toque de um toque
-  // duplo pausaria o vídeo no meio do coração.
-  const toqueRef = useRef<{ ultimo: number; timer: number | null }>({
-    ultimo: 0,
-    timer: null,
-  });
-
-  const aoTocarNaTela = useCallback(() => {
-    const agora = Date.now();
-    const estado = toqueRef.current;
-
-    if (agora - estado.ultimo < 280) {
-      if (estado.timer) window.clearTimeout(estado.timer);
-      estado.timer = null;
-      estado.ultimo = 0;
+  // O reconhecimento de gesto mora em `lib/player/gestos`, porque as quatro
+  // intenções que dividem esta superfície — pausar, saltar para trás, saltar
+  // para frente, curtir — só se distinguem por tempo e posição, e cada
+  // fronteira entre elas tem um jeito próprio de dar errado.
+  const { turbo, aviso, manipuladores } = useGestosDoReel({
+    videoRef,
+    duracaoPadraoSec: lamina.episodio.duracaoSec,
+    // Arrastar a barra desliga os gestos de tela: o dedo que navega passa
+    // por cima da área de toque, e sem esta porta soltar a alça contaria como
+    // toque e pausaria o episódio que a pessoa acabou de posicionar.
+    habilitado:
+      ativa && !bloqueada && !falhou && fonte !== null && !arrastandoBarra,
+    aoAlternarPlay: () => {
+      // O primeiro toque depois da imersão só traz a interface de volta. Sem
+      // esta porta, quem quisesse ver as ações pausaria o episódio sem querer.
+      if (imersivoRef.current) {
+        sairDaImersao();
+        return;
+      }
+      adiarImersao();
+      alternarPlay();
+    },
+    aoCurtir: () => {
+      adiarImersao();
       setEstouroDeCoracao((n) => n + 1);
       // Toque duplo só curte, nunca descurte: quem bate duas vezes está
       // aplaudindo. Tirar a curtida exige o botão, que é explícito.
       if (!lamina.social.curtido) aoCurtir();
-      return;
-    }
-
-    estado.ultimo = agora;
-    estado.timer = window.setTimeout(() => {
-      estado.timer = null;
-      alternarPlay();
-    }, 280);
-  }, [alternarPlay, aoCurtir, lamina.social.curtido]);
-
-  useEffect(
-    () => () => {
-      if (toqueRef.current.timer) window.clearTimeout(toqueRef.current.timer);
     },
-    [],
-  );
-
-  // ------------------------------------------------------------- render
-
-  const bloqueada = lamina.bloqueio !== null;
-  const podeMostrarVideo = montada && fonte !== null && !falhou;
+    aoSaltar: (segundos) => {
+      adiarImersao();
+      track("PLAY_SEEK", {
+        episodeId: lamina.episodio.id,
+        novelaId: lamina.novela.id,
+        payload: { segundos, origem: "reel" },
+      });
+    },
+  });
 
   return (
     <section
@@ -320,16 +414,26 @@ export function Lamina({
           // nem isso: quem pediu para economizar não quer três vídeos na fila.
           preload={ativa ? "auto" : economiaDeDados ? "none" : "metadata"}
           className="absolute inset-0 size-full object-cover"
-          onLoadedMetadata={posicionar}
+          onLoadedMetadata={() => {
+            // Um elemento de vídeo remontado por troca de fonte reinicia em 1x,
+            // mas um que só recarregou os metadados mantém o `playbackRate`
+            // anterior. Sem esta linha, uma renovação de URL assinada no meio
+            // de uma pressão longa deixaria o episódio em 2x sem selo e sem
+            // dedo na tela — e nada devolveria a velocidade.
+            const video = videoRef.current;
+            if (video && !turbo && video.playbackRate !== 1) {
+              video.playbackRate = 1;
+            }
+            posicionar();
+          }}
           onTimeUpdate={() => {
             aoAtualizarTempo();
             const video = videoRef.current;
             if (!video) return;
-            const total =
-              Number.isFinite(video.duration) && video.duration > 0
-                ? video.duration
-                : lamina.episodio.duracaoSec;
-            setProgresso(total > 0 ? (video.currentTime / total) * 100 : 0);
+            if (Number.isFinite(video.duration) && video.duration > 0) {
+              setDuracaoSec(video.duration);
+            }
+            setPosicaoSec(video.currentTime);
           }}
           onPlaying={() => {
             setTocando(true);
@@ -357,16 +461,95 @@ export function Lamina({
         />
       ) : null}
 
-      {/* Camada de toque. Fica sob os controles laterais e sob o texto, para
-          que tocar num link não pause o vídeo por acidente. */}
+      {/* Camada de gesto. Fica sob os controles laterais e sob o texto, para
+          que tocar num link não pause o vídeo por acidente.
+
+          `touch-action: pan-y` cede a rolagem vertical ao trilho — sem isso o
+          swipe entre lâminas morreria aqui — e retém o resto, que é o que
+          impede o navegador de aplicar o próprio zoom de toque duplo por cima
+          do nosso.
+
+          Não é `<button>`: um botão dispara clique ao soltar a barra de espaço
+          e ao pressionar Enter, e a pressão longa do teclado repetiria o
+          disparo dezenas de vezes. O papel e o `tabIndex` mantêm o acesso por
+          teclado com a semântica que este elemento realmente tem. */}
       {!bloqueada && !falhou ? (
-        <button
-          type="button"
+        <div
+          role="button"
+          tabIndex={0}
           aria-label={tocando ? "Pausar" : "Tocar"}
-          onClick={aoTocarNaTela}
-          className="absolute inset-0 z-10 cursor-default"
+          {...manipuladores}
+          onKeyDown={(evento) => {
+            if (evento.key !== "Enter" && evento.key !== " ") return;
+            evento.preventDefault();
+            if (evento.repeat) return;
+            alternarPlay();
+          }}
+          className="absolute inset-0 z-10 cursor-default touch-pan-y select-none"
         />
       ) : null}
+
+      {/* Aviso de salto. Nasce do lado tocado e soma toques seguidos: quatro
+          toques à direita mostram "20s", não quatro vezes "5s". */}
+      <AnimatePresence>
+        {aviso ? (
+          <motion.div
+            key={aviso.chave}
+            initial={{ opacity: 0, scale: 0.86 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.94 }}
+            transition={{ duration: 0.16 }}
+            aria-hidden
+            className={`pointer-events-none absolute top-1/2 z-20 grid size-[5.5rem] -translate-y-1/2 place-items-center rounded-full bg-black/45 backdrop-blur-[2px] ${
+              aviso.lado === "tras" ? "left-[8%]" : "right-[8%]"
+            }`}
+          >
+            <span className="flex items-center gap-0.5 text-white">
+              <IconeSeta
+                tamanho={15}
+                className={aviso.lado === "tras" ? "rotate-180" : ""}
+              />
+              <IconeSeta
+                tamanho={15}
+                className={`-ml-2.5 ${aviso.lado === "tras" ? "rotate-180" : ""}`}
+              />
+            </span>
+            <span className="mt-0.5 text-[0.8125rem] font-bold tabular-nums text-white">
+              {aviso.segundos}s
+            </span>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
+      {/* Selo do 2x. Precisa existir: sem ele, quem encostou o dedo sem querer
+          não entende por que a novela acelerou. */}
+      <AnimatePresence>
+        {turbo ? (
+          <motion.div
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.14 }}
+            aria-hidden
+            className="pointer-events-none absolute left-1/2 z-30 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-black/60 px-3.5 py-1.5 backdrop-blur-md"
+            style={{ top: "calc(var(--safe-t) + 3.25rem)" }}
+          >
+            <span className="flex text-white">
+              <IconeSeta tamanho={13} />
+              <IconeSeta tamanho={13} className="-ml-2" />
+            </span>
+            <span className="text-[0.8125rem] font-bold text-white">
+              2x
+            </span>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
+      {/* O 2x é anunciado por texto, e não só pelo selo: quem usa leitor de
+          tela precisa saber que a velocidade mudou. */}
+      <span aria-live="polite" className="sr-only">
+        {turbo ? "Velocidade dobrada" : ""}
+      </span>
 
       {/* Coração do toque duplo */}
       {estouroDeCoracao > 0 ? (
@@ -485,8 +668,8 @@ export function Lamina({
           isso, uma camada de tela inteira cobriria a área de tocar/pausar, que
           vive logo abaixo — e o vídeo pararia de responder ao toque. */}
       <div
-        className={`pointer-events-none absolute inset-0 z-20 transition-opacity duration-200 ${
-          recuada ? "opacity-0" : "opacity-100"
+        className={`pointer-events-none absolute inset-0 z-20 transition-opacity duration-300 ${
+          recuada || imersivo ? "opacity-0" : "opacity-100"
         }`}
       >
         <AcoesLaterais
@@ -523,35 +706,42 @@ export function Lamina({
           </span>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setSinopseAberta((v) => !v)}
-          aria-expanded={sinopseAberta}
-          className="mt-1.5 block w-full text-left"
-        >
-          {/* Sem `block` junto de `line-clamp-2`: as duas utilidades escrevem
-              `display`, e a última na folha de estilo vence. Com `block` no
-              caminho, a sinopse da novela abria em nove linhas e cobria a cena
-              inteira — o oposto de uma lâmina. */}
-          {/* Aberta, a sinopse ganha teto e rolagem própria: algumas passam de
-              dez linhas, e sem teto elas subiriam além do véu de leitura, com
-              texto branco caindo direto sobre a cena clara. `overscroll-contain`
-              impede que rolar a sinopse até o fim vire um swipe de lâmina. */}
-          <span
-            className={`text-[0.875rem] leading-snug text-white/85 ${
-              sinopseAberta
-                ? "block max-h-[40dvh] overflow-y-auto overscroll-contain pr-1"
-                : "line-clamp-2"
-            }`}
+        {/* O bloco de texto some inteiro quando não há texto — em vez de
+            reservar um espaço vazio ou repetir a sinopse da obra num episódio
+            que ela não descreve. Da segunda lâmina em diante isso é o normal
+            enquanto a ingestão não escrever sinopse por episódio, e o título
+            com "Ep 4 de 72" já dá o contexto que importa ali. */}
+        {lamina.episodio.gancho ? (
+          <button
+            type="button"
+            onClick={() => setSinopseAberta((v) => !v)}
+            aria-expanded={sinopseAberta}
+            className="mt-1.5 block w-full text-left"
           >
-            {lamina.episodio.gancho}
-          </span>
-          {!sinopseAberta && lamina.episodio.gancho.length > 90 ? (
-            <span className="mt-0.5 inline-block text-[0.75rem] font-semibold text-white/55">
-              mais
+            {/* Sem `block` junto de `line-clamp-2`: as duas utilidades escrevem
+                `display`, e a última na folha de estilo vence. Com `block` no
+                caminho, o texto abria em nove linhas e cobria a cena inteira —
+                o oposto de uma lâmina. */}
+            {/* Aberto, o texto ganha teto e rolagem própria: alguns passam de
+                dez linhas, e sem teto subiriam além do véu de leitura, com
+                letra branca caindo direto sobre a cena clara.
+                `overscroll-contain` impede que rolar até o fim vire um swipe. */}
+            <span
+              className={`text-[0.875rem] leading-snug text-white/85 ${
+                sinopseAberta
+                  ? "block max-h-[40dvh] overflow-y-auto overscroll-contain pr-1"
+                  : "line-clamp-2"
+              }`}
+            >
+              {lamina.episodio.gancho}
             </span>
-          ) : null}
-        </button>
+            {!sinopseAberta && lamina.episodio.gancho.length > 90 ? (
+              <span className="mt-0.5 inline-block text-[0.75rem] font-semibold text-white/55">
+                mais
+              </span>
+            ) : null}
+          </button>
+        ) : null}
 
         {lamina.novela.tags.length > 0 ? (
           <p className="mt-2 truncate text-[0.75rem] font-medium text-white/50">
@@ -560,21 +750,37 @@ export function Lamina({
         ) : null}
       </div>
 
-        {/* Linha de progresso: fina, sem alça, encostada na barra de abas. Um
-            reel não tem barra de busca — arrastar aqui competiria com o swipe. */}
-        <div
-          className="absolute inset-x-0 h-[2px] bg-white/12"
-          style={{ bottom: "calc(var(--tabbar-h) + var(--safe-b))" }}
-        >
-          <div
-            className="h-full origin-left transition-[width] duration-200 ease-linear"
-            style={{
-              width: `${Math.min(100, Math.max(0, progresso))}%`,
-              background: lamina.novela.accent,
-            }}
-          />
-        </div>
       </div>
+
+      {/* A barra fica fora do invólucro do cromo: aquele bloco é
+          `pointer-events-none` e some quando um painel sobe, e uma barra que
+          não recebe toque é apenas uma linha decorativa. */}
+      {!bloqueada && !falhou ? (
+        <BarraDeProgresso
+          posicaoSec={posicaoSec}
+          duracaoSec={duracaoSec}
+          accent={lamina.novela.accent}
+          // Some junto com o cromo na imersão, e volta ao primeiro toque.
+          habilitada={ativa && !recuada && !imersivo}
+          recuada={recuada || imersivo}
+          aoArrastarMudar={setArrastandoBarra}
+          aoNavegar={(segundos) => {
+            const video = videoRef.current;
+            if (!video) return;
+            video.currentTime = segundos;
+            setPosicaoSec(segundos);
+            // O progresso sobe na hora: sem isso, sair da lâmina logo após
+            // navegar gravaria a posição antiga, e a retomada mandaria a
+            // pessoa de volta para onde ela acabou de sair.
+            enviar();
+            track("PLAY_SEEK", {
+              episodeId: lamina.episodio.id,
+              novelaId: lamina.novela.id,
+              payload: { destinoSec: Math.round(segundos), origem: "barra" },
+            });
+          }}
+        />
+      ) : null}
     </section>
   );
 }

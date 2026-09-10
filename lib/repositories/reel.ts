@@ -199,17 +199,24 @@ function montarLamina({
 
   // Cadeia de queda do gancho.
   //
-  // Não é zelo teórico: no catálogo importado hoje, os 8.899 episódios têm
-  // `synopsis` vazio e nenhuma novela tem `tagline`. Parar na sinopse do
-  // episódio deixaria toda lâmina sem uma linha sequer de texto — um vídeo
-  // mudo, sem contexto, que ninguém sabe por que está vendo. A sinopse da
-  // novela existe para todas as 141 e é o que sustenta a tela até a ingestão
-  // passar a escrever ganchos por episódio.
-  const gancho =
-    episodio.hookText?.trim() ||
-    episodio.synopsis.trim() ||
-    novela.tagline.trim() ||
-    novela.synopsis.trim();
+  // Texto próprio do episódio — gancho escrito ou sinopse — vale sempre: ele
+  // fala do que está na tela.
+  //
+  // A sinopse da **novela** é outra coisa. Ela apresenta a obra, e apresentar
+  // a obra só faz sentido em quem ainda não a conhece: na abertura. Repetida
+  // no episódio 40, ela conta de novo um começo que a pessoa já viu, e ocupa
+  // duas linhas sobre a cena dizendo nada de novo. Fica, portanto, restrita à
+  // primeira posição.
+  //
+  // A consequência é deliberada e visível: enquanto a ingestão não escrever
+  // sinopse por episódio — hoje os 8.899 estão vazios —, do segundo em diante
+  // a lâmina fica sem texto. É o resultado correto. Uma linha que não descreve
+  // o episódio é pior do que nenhuma, porque parece informação.
+  const textoDoEpisodio =
+    episodio.hookText?.trim() || episodio.synopsis.trim();
+  const apresentacaoDaNovela =
+    posicao === 1 ? novela.tagline.trim() || novela.synopsis.trim() : "";
+  const gancho = textoDoEpisodio || apresentacaoDaNovela;
 
   return {
     chave: episodio.id,

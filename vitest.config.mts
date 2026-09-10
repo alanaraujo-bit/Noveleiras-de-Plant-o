@@ -14,6 +14,11 @@ const alias = { "@": resolve(process.cwd()) };
  *
  * `scripts/fluxo.mjs` continua valendo — ele prova o app inteiro de pé. Estes
  * testes provam o componente isolado, e são os que rodam em cada commit.
+ *
+ * Um hook de cliente cai no meio dessa divisão: mora em `lib/`, mas precisa de
+ * DOM para ser montado. O sufixo `.dom.test.ts` é o que decide — sem ele, o
+ * teste rodaria no ambiente `node` e falharia com "document is not defined",
+ * que não diz nada sobre o código sendo testado.
  */
 export default defineConfig({
   resolve: { alias },
@@ -27,6 +32,7 @@ export default defineConfig({
           // Os scripts entram junto: o guarda do agente empacotado mora lá,
           // e é justamente o tipo de regra que ninguém lembra de rodar à mão.
           include: ["lib/**/*.test.ts", "scripts/**/*.test.ts"],
+          exclude: ["lib/**/*.dom.test.ts"],
         },
       },
       {
@@ -34,7 +40,7 @@ export default defineConfig({
         test: {
           name: "telas",
           environment: "jsdom",
-          include: ["components/**/*.test.{ts,tsx}"],
+          include: ["components/**/*.test.{ts,tsx}", "lib/**/*.dom.test.ts"],
           setupFiles: ["./vitest.setup.ts"],
         },
       },
