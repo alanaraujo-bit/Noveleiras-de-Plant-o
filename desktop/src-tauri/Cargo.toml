@@ -1,6 +1,6 @@
 [package]
 name = "noveleiras-agente"
-version = "1.0.0"
+version = "1.0.1"
 description = "Mantem a biblioteca do Noveleiras no ar nesta maquina"
 authors = ["Alan Araujo"]
 edition = "2021"
