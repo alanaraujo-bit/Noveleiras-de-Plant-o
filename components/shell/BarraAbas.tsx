@@ -8,7 +8,6 @@ import { avisarAbaReativada } from "@/lib/shell/aba-reativada";
 import {
   IconeBusca,
   IconeCatalogo,
-  IconeFeed,
   IconePerfil,
   IconePlantao,
 } from "@/components/ui/icones";
@@ -16,10 +15,12 @@ import {
 /**
  * Barra de abas.
  *
- * A ordem mudou junto com o fluxo: Plantão é a primeira porque é onde o
- * aplicativo abre e onde se assiste. Gêneros saiu da barra — continua a um
- * toque dentro do Catálogo, e cinco destinos já é o teto do que se alcança com
- * o polegar sem olhar.
+ * A ordem segue o fluxo: Plantão é a primeira porque é onde o aplicativo abre
+ * e onde se assiste. Quatro destinos cobrem o fluxo principal com o polegar
+ * sem olhar.
+ *
+ * A aba de Comunidade saiu junto com o feed público. A conversa não acabou —
+ * ela mudou de lugar: agora acontece dentro do episódio, onde o assunto está.
  *
  * Sobre o reel a barra fica sem fundo: uma faixa opaca cortando o rodapé de um
  * vídeo em tela cheia devolve a moldura de site que o reel existe para tirar.
@@ -33,7 +34,6 @@ const ABAS = [
   { href: "/plantao", rotulo: "Plantão", Icone: IconePlantao },
   { href: "/inicio", rotulo: "Catálogo", Icone: IconeCatalogo },
   { href: "/buscar", rotulo: "Buscar", Icone: IconeBusca },
-  { href: "/feed", rotulo: "Comunidade", Icone: IconeFeed },
   { href: "/perfil", rotulo: "Perfil", Icone: IconePerfil },
 ] as const;
 

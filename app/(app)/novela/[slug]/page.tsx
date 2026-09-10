@@ -3,8 +3,8 @@ import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 
 import { getViewer } from "@/lib/auth/session";
-import { getNovelaDetail, getParaVoce } from "@/lib/repositories/catalog";
-import { getFeed } from "@/lib/repositories/feed";
+import { getNovelaDetail } from "@/lib/repositories/catalog";
+import { comentariosRecentesDaNovela } from "@/lib/repositories/episodio-social";
 import { db } from "@/lib/db";
 import { TrilhoCapas } from "@/components/novela/cartoes";
 import { PainelNovela } from "@/components/novela/PainelNovela";
@@ -33,19 +33,11 @@ export default async function NovelaPage({ params }: Params) {
   const novela = await getNovelaDetail(slug, viewer);
   if (!novela) notFound();
 
-  const generoIds = await db.novelaGenre.findMany({
-    where: { novelaId: novela.id },
-    select: { genreId: true },
-  });
-
-  const [semelhantes, comentarios] = await Promise.all([
-    getParaVoce(
-      generoIds.map((row) => row.genreId),
-      [novela.id],
-      8,
-    ),
-    getFeed(viewer?.id ?? null, { novelaId: novela.id, take: 4 }),
-  ]);
+  const comentarios = await comentariosRecentesDaNovela(
+    novela.id,
+    viewer?.id ?? null,
+    4,
+  );
 
   return (
     <div className="pb-4">
@@ -76,22 +68,17 @@ export default async function NovelaPage({ params }: Params) {
       {comentarios.length > 0 ? (
         <section className="mt-9">
           <TituloSecao
-            sobretitulo="O que estão dizendo"
-            acao={
-              <Link
-                href="/feed"
-                className="tap -my-2 inline-flex items-center gap-1 py-2 text-[0.8125rem] font-semibold text-cream-400"
-              >
-                Plantão
-                <IconeSeta tamanho={14} />
-              </Link>
-            }
+            sobretitulo="O que estão dizendo nos episódios"
           >
             Comentários
           </TituloSecao>
           <div className="space-y-2.5 px-5">
             {comentarios.map((post) => (
-              <article key={post.id} className="surface-card rounded-card p-3.5">
+              <Link
+                key={post.id}
+                href={`/assistir/${post.episodio.id}`}
+                className="tap surface-card block rounded-card p-3.5"
+              >
                 <div className="flex items-center gap-2.5">
                   <Avatar
                     nome={post.author.name}
@@ -104,7 +91,7 @@ export default async function NovelaPage({ params }: Params) {
                       {post.author.name}
                     </p>
                     <p className="truncate text-[0.6875rem] text-cream-600">
-                      @{post.author.handle} · {formatRelative(post.createdAt)}
+                      {formatRelative(post.createdAt)}
                     </p>
                   </div>
                 </div>
@@ -122,20 +109,15 @@ export default async function NovelaPage({ params }: Params) {
                     Escondido pelo seu antispoiler
                   </p>
                 ) : null}
-              </article>
+                <p className="mt-2 text-[0.6875rem] font-semibold text-cream-600">
+                  T{post.episodio.temporada} · Episódio {post.episodio.numero}
+                </p>
+              </Link>
             ))}
           </div>
         </section>
       ) : null}
 
-      {semelhantes.length > 0 ? (
-        <section className="mt-9">
-          <TituloSecao sobretitulo="Se você gostou desta">
-            Continue por aqui
-          </TituloSecao>
-          <TrilhoCapas novelas={semelhantes} />
-        </section>
-      ) : null}
     </div>
   );
 }

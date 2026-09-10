@@ -4,12 +4,11 @@ import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import {
-  salvarGenerosPreferidos,
   salvarPerfil,
   salvarPreferencias,
 } from "@/lib/actions/conta";
 import { useToast } from "@/components/sistema/ToastProvider";
-import { Avatar, Chip } from "@/components/ui/primitivos";
+import { Avatar } from "@/components/ui/primitivos";
 import { IconeCamera } from "@/components/ui/icones";
 import { prepararFotoPerfil } from "@/components/perfil/prepararFoto";
 
@@ -28,7 +27,6 @@ type Preferencias = {
   notifyReleases: boolean;
   notifyCommunity: boolean;
   preferredQuality: string;
-  favoriteGenreIds: string[];
 };
 
 const INTERRUPTORES = [
@@ -71,11 +69,9 @@ const INTERRUPTORES = [
 export function PainelPreferencias({
   inicial,
   perfil,
-  generos,
 }: {
   inicial: Preferencias;
   perfil: { nome: string; avatarSeed: string; avatarUrl: string | null };
-  generos: { id: string; name: string; accent: string }[];
 }) {
   const { show } = useToast();
   const router = useRouter();
@@ -178,16 +174,6 @@ export function PainelPreferencias({
     const proximos = { ...valores, [chave]: !valores[chave] } as Preferencias;
     setValores(proximos);
     persistir(proximos);
-  };
-
-  const alternarGenero = (id: string) => {
-    const lista = valores.favoriteGenreIds.includes(id)
-      ? valores.favoriteGenreIds.filter((item) => item !== id)
-      : [...valores.favoriteGenreIds, id].slice(0, 8);
-    setValores({ ...valores, favoriteGenreIds: lista });
-    iniciar(async () => {
-      await salvarGenerosPreferidos(lista);
-    });
   };
 
   const salvarIdentidade = () => {
@@ -371,24 +357,6 @@ export function PainelPreferencias({
         notificações forem ligadas no aplicativo.
       </p>
 
-      {/* Gêneros ----------------------------------------------------------- */}
-      <section className="px-5">
-        <p className="eyebrow mb-1">Gêneros favoritos</p>
-        <p className="mb-2.5 text-[0.8125rem] text-cream-600">
-          Guiam a seção “Escolhidas para você” na Home.
-        </p>
-        <div className="flex flex-wrap gap-1.5">
-          {generos.map((genero) => (
-            <Chip
-              key={genero.id}
-              ativo={valores.favoriteGenreIds.includes(genero.id)}
-              onClick={() => alternarGenero(genero.id)}
-            >
-              {genero.name}
-            </Chip>
-          ))}
-        </div>
-      </section>
     </div>
   );
 }

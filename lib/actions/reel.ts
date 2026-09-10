@@ -261,7 +261,6 @@ export async function carregarMaisLaminas(novelasNaFila: string[]) {
   const laminas = await maisGanchos({
     viewerId: viewer?.id ?? null,
     entitlement: viewer?.entitlement ?? ANONYMOUS_ENTITLEMENT,
-    generosPreferidos: viewer?.preferences.favoriteGenreIds ?? [],
     novelasNaFila,
     // A semente vem do tamanho da fila: páginas diferentes sorteiam ordens
     // diferentes dentro das faixas de empate, em vez de repetir a mesma cauda.
@@ -296,7 +295,6 @@ export async function recarregarFila() {
   const { laminas, retomando } = await filaInicial({
     viewerId: viewer.id,
     entitlement: viewer.entitlement,
-    generosPreferidos: viewer.preferences.favoriteGenreIds,
     semente,
   });
 

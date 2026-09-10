@@ -532,7 +532,6 @@ function escolherComExploracao<T extends { id: string }>({
 export async function ganchosDeDescoberta({
   viewerId,
   entitlement,
-  generosPreferidos,
   excluirNovelas,
   excluirEpisodios = new Set<string>(),
   quantidade = LOTE_GANCHOS,
@@ -540,7 +539,6 @@ export async function ganchosDeDescoberta({
 }: {
   viewerId: string | null;
   entitlement: Entitlement;
-  generosPreferidos: string[];
   excluirNovelas: Set<string>;
   excluirEpisodios?: Set<string>;
   quantidade?: number;
@@ -578,14 +576,12 @@ export async function ganchosDeDescoberta({
     },
   });
 
-  const escolhidos = new Set(generosPreferidos);
   const perfilDecide = perfil !== null && perfil.forca >= FORCA_MINIMA;
 
   const pontuadas = candidatas.map((novela) => ({
     novela,
     pontuacao: perfil
       ? pontuar(novela.id, perfil, corpus, {
-          generosEscolhidos: escolhidos,
           popularidade: novela.viewCount,
         })
       : { valor: Math.log1p(novela.viewCount), motivo: "popular" as const },
@@ -653,12 +649,10 @@ export type FilaInicial = {
 export async function filaInicial({
   viewerId,
   entitlement,
-  generosPreferidos,
   semente,
 }: {
   viewerId: string | null;
   entitlement: Entitlement;
-  generosPreferidos: string[];
   /** Varia a ordem entre recargas. Ausente na abertura, presente ao recarregar. */
   semente?: number;
 }): Promise<FilaInicial> {
@@ -699,7 +693,6 @@ export async function filaInicial({
   const ganchos = await ganchosDeDescoberta({
     viewerId,
     entitlement,
-    generosPreferidos,
     excluirNovelas: novelasUsadas,
     excluirEpisodios: episodiosUsados,
     semente,
@@ -717,13 +710,11 @@ export async function filaInicial({
 export async function maisGanchos({
   viewerId,
   entitlement,
-  generosPreferidos,
   novelasNaFila,
   semente,
 }: {
   viewerId: string | null;
   entitlement: Entitlement;
-  generosPreferidos: string[];
   novelasNaFila: string[];
   /** Varia a ordem entre páginas, para a fila não repetir a mesma cauda. */
   semente?: number;
@@ -731,7 +722,6 @@ export async function maisGanchos({
   return ganchosDeDescoberta({
     viewerId,
     entitlement,
-    generosPreferidos,
     excluirNovelas: new Set(novelasNaFila),
     semente,
   });

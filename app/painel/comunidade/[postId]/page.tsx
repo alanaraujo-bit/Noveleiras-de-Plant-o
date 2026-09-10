@@ -52,8 +52,8 @@ export default async function PaginaDaPublicacao({
   return (
     <>
       <Cabecalho
-        titulo="Publicação"
-        descricao={`${ROTULO_DE_TIPO[post.kind] ?? post.kind.toLowerCase()} · ${fmtDataHora(post.createdAt)}`}
+        titulo="Conversa"
+        descricao={`${post.novela.title} · T${post.episode.season.number} · Episódio ${post.episode.number} · ${fmtDataHora(post.createdAt)}`}
         acoes={
           <AcoesDoPost
             postId={post.id}
@@ -124,24 +124,13 @@ export default async function PaginaDaPublicacao({
               />
               <LinhaRazao rotulo="Curtidas" valor={fmtNumero(post._count.likes)} />
               <LinhaRazao
-                rotulo="Comentários"
-                valor={fmtNumero(post._count.comments)}
+                rotulo="Respostas"
+                valor={fmtNumero(post._count.replies)}
+                nota="ocultar a raiz tira a conversa inteira de vista"
               />
-              {post.rating !== null ? (
-                <LinhaRazao
-                  rotulo="Nota dada"
-                  valor={`${post.rating}`}
-                  nota="avaliação que acompanha a resenha"
-                />
-              ) : null}
               <LinhaRazao
                 rotulo="Publicado"
                 valor={fmtDataHora(post.createdAt)}
-                nota={
-                  post.updatedAt.getTime() !== post.createdAt.getTime()
-                    ? `editado em ${fmtDataHora(post.updatedAt)}`
-                    : undefined
-                }
               />
             </Razao>
           </Bloco>

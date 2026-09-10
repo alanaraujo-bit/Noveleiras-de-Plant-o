@@ -38,15 +38,6 @@ export const IconeBusca = (p: Props) => (
   </Base>
 );
 
-export const IconeGeneros = (p: Props) => (
-  <Base {...p}>
-    <rect x="3.4" y="3.4" width="7.2" height="7.2" rx="2.2" />
-    <rect x="13.4" y="3.4" width="7.2" height="7.2" rx="2.2" />
-    <rect x="3.4" y="13.4" width="7.2" height="7.2" rx="2.2" />
-    <rect x="13.4" y="13.4" width="7.2" height="7.2" rx="2.2" />
-  </Base>
-);
-
 export const IconeFeed = (p: Props) => (
   <Base {...p}>
     <path d="M4 6.6A2.6 2.6 0 0 1 6.6 4h10.8A2.6 2.6 0 0 1 20 6.6v7.2a2.6 2.6 0 0 1-2.6 2.6H10l-4.2 3.4a.6.6 0 0 1-.98-.47V6.6Z" />

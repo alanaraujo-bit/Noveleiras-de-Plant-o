@@ -2,9 +2,8 @@ import { redirect } from "next/navigation";
 
 import { getViewer } from "@/lib/auth/session";
 import { ROTA_INICIAL } from "@/lib/auth/destino";
-import { listGenres } from "@/lib/repositories/catalog";
 import { Apresentacao } from "./Apresentacao";
-import { EscolhaDeGeneros } from "./EscolhaDeGeneros";
+import { ConcluirBoasVindas } from "./ConcluirBoasVindas";
 
 export const metadata = { title: "Bem-vinda ao plantão" };
 
@@ -13,10 +12,9 @@ export default async function BemVindoPage() {
   if (viewer?.onboardedAt) redirect(ROTA_INICIAL);
 
   // Mesma rota, dois momentos: quem não tem conta conhece o produto;
-  // quem acabou de criar escolhe por onde começar.
+  // quem acabou de criar entra direto no Plantão.
   if (viewer) {
-    const generos = await listGenres();
-    return <EscolhaDeGeneros nome={viewer.name} generos={generos} />;
+    return <ConcluirBoasVindas nome={viewer.name} />;
   }
 
   return <Apresentacao />;

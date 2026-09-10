@@ -70,7 +70,6 @@ export default async function PaginaDaComunidade({
     listarPosts({
       periodo,
       termo: params.q,
-      tipo: params.tipo,
       situacao: params.situacao,
       pagina: Number(params.pagina ?? 1),
     }),
@@ -340,9 +339,12 @@ export default async function PaginaDaComunidade({
                       className="block max-w-[26rem]"
                     >
                       <span className="flex flex-wrap items-center gap-1.5">
-                        <span className="text-[0.6875rem] text-[var(--p-fraco)]">
-                          {ROTULO_DE_TIPO[post.tipo] ?? post.tipo.toLowerCase()}
-                        </span>
+                        {post.episodio ? (
+                          <span className="text-[0.6875rem] text-[var(--p-fraco)]">
+                            T{post.episodio.temporada} · ep{" "}
+                            {post.episodio.numero}
+                          </span>
+                        ) : null}
                         {post.spoiler ? <Selo tom="atencao">spoiler</Selo> : null}
                         {post.oculto ? <Selo tom="neutro">oculto</Selo> : null}
                         {post.denunciasAbertas > 0 ? (

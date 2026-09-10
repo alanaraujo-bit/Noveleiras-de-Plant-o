@@ -113,7 +113,6 @@ export async function POST(request: Request) {
   revalidatePath("/inicio");
   revalidatePath("/perfil");
   revalidatePath("/perfil/preferencias");
-  revalidatePath("/feed");
 
   return Response.json({ ok: true, avatarUrl: avatarUrl(viewer.id, key) });
 }
@@ -144,7 +143,6 @@ export async function DELETE(request: Request) {
   revalidatePath("/inicio");
   revalidatePath("/perfil");
   revalidatePath("/perfil/preferencias");
-  revalidatePath("/feed");
 
   return Response.json({ ok: true });
 }

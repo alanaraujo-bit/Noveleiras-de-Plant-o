@@ -24,7 +24,6 @@ type Props = {
   populares: { slug: string; title: string; accent: string }[];
   tags: string[];
   buscados: string[];
-  generos: { slug: string; name: string; accent: string }[];
 };
 
 function lerRecentes(): string[] {
@@ -36,7 +35,7 @@ function lerRecentes(): string[] {
   }
 }
 
-export function PainelBusca({ populares, tags, buscados, generos }: Props) {
+export function PainelBusca({ populares, tags, buscados }: Props) {
   const { track } = useTelemetry();
   const campoRef = useRef<HTMLInputElement>(null);
   const [termo, setTermo] = useState("");
@@ -185,19 +184,6 @@ export function PainelBusca({ populares, tags, buscados, generos }: Props) {
               icone={<IconeBusca tamanho={24} />}
               titulo={`Nada por “${termo.trim()}”`}
               descricao="Tente o nome da novela, um tema como “vingança” ou o nome de alguém do elenco."
-              acao={
-                <div className="flex flex-wrap justify-center gap-1.5">
-                  {generos.slice(0, 4).map((genero) => (
-                    <Link
-                      key={genero.slug}
-                      href={`/generos/${genero.slug}`}
-                      className="tap rounded-full border border-white/12 bg-white/6 px-3.5 py-2 text-[0.8125rem] font-semibold text-cream-200"
-                    >
-                      {genero.name}
-                    </Link>
-                  ))}
-                </div>
-              }
             />
           ) : resultado ? (
             <>
@@ -253,23 +239,6 @@ export function PainelBusca({ populares, tags, buscados, generos }: Props) {
                   </li>
                 ))}
               </ul>
-
-              {resultado.genres.length > 0 ? (
-                <div className="mt-5 px-5">
-                  <p className="eyebrow mb-2">Gêneros relacionados</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {resultado.genres.map((genero) => (
-                      <Link
-                        key={genero.slug}
-                        href={`/generos/${genero.slug}`}
-                        className="tap rounded-full border border-white/12 bg-white/6 px-3.5 py-2 text-[0.8125rem] font-semibold text-cream-200"
-                      >
-                        {genero.name}
-                      </Link>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
             </>
           ) : null}
         </div>

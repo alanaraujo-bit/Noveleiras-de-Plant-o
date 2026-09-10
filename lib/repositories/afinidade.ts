@@ -389,7 +389,7 @@ export const FORCA_MINIMA = 8;
 export type Pontuacao = {
   valor: number;
   /** Por que esta obra subiu. Alimenta o painel e a depuração, nunca a tela. */
-  motivo: "gosto" | "genero-escolhido" | "popular";
+  motivo: "gosto" | "popular";
 };
 
 /**
@@ -404,7 +404,7 @@ export function pontuar(
   novelaId: string,
   perfil: PerfilDeGosto,
   corpus: Corpus,
-  contexto: { generosEscolhidos: Set<string>; popularidade: number },
+  contexto: { popularidade: number },
 ): Pontuacao {
   const termos = corpus.porNovela.get(novelaId) ?? [];
   let soma = 0;
@@ -416,10 +416,8 @@ export function pontuar(
 
   const generosDaNovela = corpus.generos.get(novelaId) ?? [];
   let afinidadeDeGenero = 0;
-  let escolhido = false;
   for (const generoId of generosDaNovela) {
     afinidadeDeGenero += perfil.generos.get(generoId) ?? 0;
-    if (contexto.generosEscolhidos.has(generoId)) escolhido = true;
   }
 
   // A popularidade entra comprimida por logaritmo e com peso pequeno: ela é o
@@ -427,15 +425,13 @@ export function pontuar(
   const prior = Math.log1p(Math.max(0, contexto.popularidade)) * 0.35;
 
   const valor =
-    afinidadeDeTexto + afinidadeDeGenero * 1.5 + (escolhido ? 6 : 0) + prior;
+    afinidadeDeTexto + afinidadeDeGenero * 1.5 + prior;
 
   return {
     valor,
     motivo:
       afinidadeDeTexto + afinidadeDeGenero > prior
         ? "gosto"
-        : escolhido
-          ? "genero-escolhido"
-          : "popular",
+        : "popular",
   };
 }

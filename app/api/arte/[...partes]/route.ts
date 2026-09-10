@@ -1,13 +1,13 @@
 import { db } from "@/lib/db";
 import { artSpec, renderArt, type ArtFormat } from "@/lib/art";
 
-const FORMATS = new Set<ArtFormat>(["capa", "hero", "cena", "genero"]);
+const FORMATS = new Set<ArtFormat>(["capa", "hero", "cena"]);
 const FALLBACK_ACCENT = "#c42a55";
 
 /**
  * Serve a arte gerada do catálogo de demonstração.
  * Rotas: /api/arte/capa/<slug> · /api/arte/hero/<slug>
- *        /api/arte/cena/<slug>/<temporada-episodio> · /api/arte/genero/<slug>
+ *        /api/arte/cena/<slug>/<temporada-episodio>
  */
 export async function GET(
   _request: Request,
@@ -22,11 +22,8 @@ export async function GET(
   }
 
   const accent =
-    format === "genero"
-      ? ((await db.genre.findUnique({ where: { slug }, select: { accent: true } }))
-          ?.accent ?? FALLBACK_ACCENT)
-      : ((await db.novela.findUnique({ where: { slug }, select: { accent: true } }))
-          ?.accent ?? FALLBACK_ACCENT);
+    (await db.novela.findUnique({ where: { slug }, select: { accent: true } }))
+      ?.accent ?? FALLBACK_ACCENT;
 
   const key = [format, slug, ...rest].join("/");
   const svg = renderArt(artSpec(format, key, accent));

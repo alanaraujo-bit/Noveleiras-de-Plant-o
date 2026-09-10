@@ -8,12 +8,9 @@ import {
   getFeatured,
   getComecePorAqui,
   getNovidades,
-  getParaVoce,
   getPopulares,
-  listGenres,
 } from "@/lib/repositories/catalog";
 import { getContinueWatching } from "@/lib/repositories/progresso";
-import { getFeed } from "@/lib/repositories/feed";
 import { TopoApp } from "@/components/shell/TopoApp";
 import { Destaques } from "@/components/novela/Destaques";
 import {
@@ -41,30 +38,18 @@ export default async function InicioPage() {
     continuar,
     novidades,
     populares,
-    generos,
     completas,
     comecePorAqui,
     emBreve,
-    feed,
   ] = await Promise.all([
     getFeatured(4),
     getContinueWatching(viewer.id, 8),
     getNovidades(12),
     getPopulares(12),
-    listGenres(),
     getCompletas(10),
     getComecePorAqui(10),
     getEmBreve(4),
-    getFeed(viewer.id, { take: 2 }),
   ]);
-
-  const paraVoce = await getParaVoce(
-    viewer.preferences.favoriteGenreIds,
-    continuar.map((item) => item.novelaId),
-    10,
-  );
-
-  const primeiroNome = viewer.name.split(" ")[0];
 
   return (
     <>
@@ -116,129 +101,12 @@ export default async function InicioPage() {
           <TrilhoCapas novelas={novidades} />
         </section>
 
-        {paraVoce.length > 0 ? (
-          <section>
-            <TituloSecao sobretitulo={`Pelo seu gosto, ${primeiroNome}`}>
-              Escolhidas para você
-            </TituloSecao>
-            <TrilhoCapas novelas={paraVoce} largura="larga" />
-          </section>
-        ) : null}
-
         <section>
-          <TituloSecao
-            sobretitulo="Todo mundo comentando"
-            acao={
-              <Link
-                href="/generos"
-                className="tap -my-2 inline-flex items-center gap-1 py-2 text-[0.8125rem] font-semibold text-cream-400"
-              >
-                Gêneros
-                <IconeSeta tamanho={14} />
-              </Link>
-            }
-          >
+          <TituloSecao sobretitulo="Todo mundo comentando">
             Populares agora
           </TituloSecao>
           <TrilhoCapas novelas={populares} />
         </section>
-
-        <section>
-          <TituloSecao sobretitulo="Por onde você quer entrar">
-            Gêneros
-          </TituloSecao>
-          <div className="rail no-scrollbar pb-1">
-            {generos.map((genero) => (
-              <Link
-                key={genero.id}
-                href={`/generos/${genero.slug}`}
-                className="tap rail-item relative w-[13rem] overflow-hidden rounded-card border border-white/8"
-                style={{ aspectRatio: "3 / 2" }}
-              >
-                <img
-                  src={genero.artUrl}
-                  alt=""
-                  loading="lazy"
-                  className="absolute inset-0 size-full object-cover"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-ink-950/90 to-transparent" />
-                <div className="absolute inset-x-0 bottom-0 p-3.5">
-                  <h3 className="text-[1.0625rem] leading-tight">{genero.name}</h3>
-                  <p className="mt-0.5 line-clamp-1 text-[0.75rem] text-cream-400">
-                    {genero.tagline}
-                  </p>
-                </div>
-              </Link>
-            ))}
-            <span className="w-1 shrink-0" aria-hidden />
-          </div>
-        </section>
-
-        <Divisoria />
-
-        {feed.length > 0 ? (
-          <section>
-            <TituloSecao
-              sobretitulo="A comunidade está de plantão"
-              acao={
-                <Link
-                  href="/feed"
-                  className="tap -my-2 inline-flex items-center gap-1 py-2 text-[0.8125rem] font-semibold text-cream-400"
-                >
-                  Ver tudo
-                  <IconeSeta tamanho={14} />
-                </Link>
-              }
-            >
-              Comentários de hoje
-            </TituloSecao>
-            <div className="space-y-2.5 px-5">
-              {feed.map((post) => (
-                <Link
-                  key={post.id}
-                  href="/feed"
-                  className="tap surface-card block rounded-card p-3.5"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <Avatar
-                      nome={post.author.name}
-                      seed={post.author.avatarSeed}
-                      fotoUrl={post.author.avatarUrl}
-                      tamanho={30}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-[0.8125rem] font-semibold text-cream-50">
-                        {post.author.name}
-                      </p>
-                      <p className="truncate text-[0.6875rem] text-cream-600">
-                        {post.novela ? post.novela.title : "No plantão geral"} ·{" "}
-                        {formatRelative(post.createdAt)}
-                      </p>
-                    </div>
-                    <span className="flex items-center gap-1 text-[0.75rem] font-semibold text-cream-600">
-                      <IconeConversa tamanho={15} />
-                      {post.commentCount}
-                    </span>
-                  </div>
-                  <p
-                    className={`selectable mt-2.5 text-[0.875rem] leading-relaxed text-cream-200 ${
-                      post.spoiler && viewer.preferences.spoilerGuard
-                        ? "blur-[5px] select-none"
-                        : "line-clamp-3"
-                    }`}
-                  >
-                    {post.body}
-                  </p>
-                  {post.spoiler && viewer.preferences.spoilerGuard ? (
-                    <p className="mt-1.5 text-[0.75rem] font-semibold text-gold-400">
-                      Contém spoiler — abra no plantão para ler
-                    </p>
-                  ) : null}
-                </Link>
-              ))}
-            </div>
-          </section>
-        ) : null}
 
         <section>
           <TituloSecao sobretitulo="Começo, meio e fim no mesmo dia">

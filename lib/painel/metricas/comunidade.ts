@@ -14,14 +14,27 @@ import {
 /**
  * Comunidade.
  *
- * Três fatos e uma fila: `Post`, `Comment` e `PostLike` dizem o que foi
- * publicado; `Report` diz o que a comunidade sinalizou e ainda espera
- * decisão. A tela é dividida nessa linha — o que aconteceu à esquerda, o que
- * exige uma pessoa à direita.
+ * A conversa deixou de acontecer num feed separado e passou para dentro do
+ * episódio. Esta tela acompanhou a mudança: o que ela modera agora é
+ * `EpisodeComment` — a mesma pergunta operacional, com a fonte no lugar onde
+ * o conteúdo passou a existir.
+ *
+ * A forma da tela não mudou porque o formato da conversa não mudou. Uma raiz
+ * (`parentId` nulo) faz o papel do antigo post; as respostas fazem o dos
+ * comentários; `EpisodeCommentLike` faz o das curtidas. `Report` continua
+ * dizendo o que foi sinalizado e ainda espera decisão — e a tela segue
+ * dividida nessa linha: o que aconteceu à esquerda, o que exige uma pessoa à
+ * direita.
  *
  * Conteúdo oculto não é conteúdo apagado: `hiddenAt` some do aplicativo mas
  * continua aqui, porque moderação sem histórico é moderação irrevisável.
+ * Ocultar uma raiz tira a conversa inteira de vista sem apagar as respostas.
  */
+
+/** Raiz de conversa: o que antes era um post. */
+const RAIZES = Prisma.sql`"parentId" IS NULL`;
+/** Resposta dentro de uma conversa: o que antes era um comentário. */
+const RESPOSTAS = Prisma.sql`"parentId" IS NOT NULL`;
 
 export type ResumoDaComunidade = {
   posts: Indicador;
@@ -59,17 +72,35 @@ export async function resumoDaComunidade(
     seriePostsAnterior,
     serieComentarios,
   ] = await Promise.all([
-    totalNoPeriodo({ tabela: "Post", coluna: "createdAt", periodo }),
-    totalNoPeriodo({ tabela: "Comment", coluna: "createdAt", periodo }),
-    totalNoPeriodo({ tabela: "PostLike", coluna: "createdAt", periodo }),
     totalNoPeriodo({
-      tabela: "Post",
+      tabela: "EpisodeComment",
+      coluna: "createdAt",
+      periodo,
+      filtro: RAIZES,
+    }),
+    totalNoPeriodo({
+      tabela: "EpisodeComment",
+      coluna: "createdAt",
+      periodo,
+      filtro: RESPOSTAS,
+    }),
+    totalNoPeriodo({
+      tabela: "EpisodeCommentLike",
+      coluna: "createdAt",
+      periodo,
+    }),
+    totalNoPeriodo({
+      tabela: "EpisodeComment",
       coluna: "createdAt",
       periodo,
       expressao: AUTORES_DISTINTOS,
     }),
-    db.post.count({ where: { hiddenAt: { not: null } } }),
-    db.comment.count({ where: { hiddenAt: { not: null } } }),
+    db.episodeComment.count({
+      where: { parentId: null, hiddenAt: { not: null } },
+    }),
+    db.episodeComment.count({
+      where: { parentId: { not: null }, hiddenAt: { not: null } },
+    }),
     db.report.count({ where: { state: { in: ["OPEN", "REVIEWING"] } } }),
     totalNoPeriodo({ tabela: "Report", coluna: "createdAt", periodo }),
     db.$queryRaw<{ media: number | null }[]>(Prisma.sql`
@@ -79,14 +110,25 @@ export async function resumoDaComunidade(
       WHERE "resolvedAt" IS NOT NULL
         AND "createdAt" >= ${periodo.inicio} AND "createdAt" < ${periodo.fim}
     `),
-    serieTemporal({ tabela: "Post", coluna: "createdAt", periodo }),
     serieTemporal({
-      tabela: "Post",
+      tabela: "EpisodeComment",
+      coluna: "createdAt",
+      periodo,
+      filtro: RAIZES,
+    }),
+    serieTemporal({
+      tabela: "EpisodeComment",
       coluna: "createdAt",
       periodo,
       anterior: true,
+      filtro: RAIZES,
     }),
-    serieTemporal({ tabela: "Comment", coluna: "createdAt", periodo }),
+    serieTemporal({
+      tabela: "EpisodeComment",
+      coluna: "createdAt",
+      periodo,
+      filtro: RESPOSTAS,
+    }),
   ]);
 
   return {
@@ -110,7 +152,6 @@ export async function resumoDaComunidade(
 export type LinhaDePost = {
   id: string;
   corpo: string;
-  tipo: string;
   spoiler: boolean;
   oculto: boolean;
   ocultadoEm: Date | null;
@@ -119,15 +160,14 @@ export type LinhaDePost = {
   comentarios: number;
   autor: { id: string; nome: string; handle: string; demo: boolean } | null;
   novela: { id: string; titulo: string } | null;
+  /** Episódio onde a conversa acontece. É por ele que se chega ao conteúdo. */
+  episodio: { id: string; numero: number; temporada: number } | null;
   denunciasAbertas: number;
 };
-
-export const TIPOS_DE_POST = ["THOUGHT", "REVIEW", "THEORY"] as const;
 
 export type FiltroDaComunidade = {
   periodo: Periodo;
   termo?: string;
-  tipo?: string;
   /** "ocultos", "visiveis", "denunciados" ou vazio. */
   situacao?: string;
   novelaId?: string;
@@ -141,9 +181,13 @@ export type FiltroDaComunidade = {
  * `Report.targetId` é um id solto — não há relação no schema, porque uma
  * denúncia sobrevive ao que ela denuncia. Resolvida em lote, como os títulos
  * de `Event`.
+ *
+ * Os tipos POST e COMMENT continuam aceitos porque continuam gravados: uma
+ * denúncia antiga é um fato datado, e apagá-la para arrumar o enum reescreveria
+ * história. A tela só emite EPISODE_COMMENT daqui em diante.
  */
 async function denunciasPorAlvo(
-  tipo: "POST" | "COMMENT",
+  tipo: "EPISODE_COMMENT" | "POST" | "COMMENT",
   ids: string[],
 ): Promise<Map<string, number>> {
   if (ids.length === 0) return new Map();
@@ -167,16 +211,17 @@ export async function listarPosts(filtro: FiltroDaComunidade): Promise<{
   const porPagina = Math.min(100, Math.max(10, filtro.porPagina ?? 25));
   const pagina = Math.max(1, filtro.pagina ?? 1);
 
-  const onde: Prisma.PostWhereInput = {
+  // Só as raízes entram na lista: uma conversa é uma linha, e as respostas
+  // aparecem ao abri-la. Listar resposta no mesmo nível quebraria a paginação
+  // — o mesmo assunto ocuparia dez linhas.
+  const onde: Prisma.EpisodeCommentWhereInput = {
+    parentId: null,
     createdAt: { gte: filtro.periodo.inicio, lt: filtro.periodo.fim },
   };
   if (filtro.termo?.trim()) {
     onde.body = { contains: filtro.termo.trim(), mode: "insensitive" };
   }
-  if (filtro.tipo && (TIPOS_DE_POST as readonly string[]).includes(filtro.tipo)) {
-    onde.kind = filtro.tipo as (typeof TIPOS_DE_POST)[number];
-  }
-  if (filtro.novelaId) onde.novelaId = filtro.novelaId;
+  if (filtro.novelaId) onde.episode = { novelaId: filtro.novelaId };
   if (filtro.situacao === "ocultos") onde.hiddenAt = { not: null };
   else if (filtro.situacao === "visiveis") onde.hiddenAt = null;
 
@@ -185,16 +230,19 @@ export async function listarPosts(filtro: FiltroDaComunidade): Promise<{
   // contando o mesmo conjunto que exibe.
   if (filtro.situacao === "denunciados") {
     const alvos = await db.report.findMany({
-      where: { targetType: "POST", state: { in: ["OPEN", "REVIEWING"] } },
+      where: {
+        targetType: "EPISODE_COMMENT",
+        state: { in: ["OPEN", "REVIEWING"] },
+      },
       select: { targetId: true },
       distinct: ["targetId"],
     });
     onde.id = { in: alvos.map((alvo) => alvo.targetId) };
   }
 
-  const [total, posts] = await Promise.all([
-    db.post.count({ where: onde }),
-    db.post.findMany({
+  const [total, conversas] = await Promise.all([
+    db.episodeComment.count({ where: onde }),
+    db.episodeComment.findMany({
       where: onde,
       orderBy: { createdAt: "desc" },
       skip: (pagina - 1) * porPagina,
@@ -202,45 +250,56 @@ export async function listarPosts(filtro: FiltroDaComunidade): Promise<{
       select: {
         id: true,
         body: true,
-        kind: true,
         spoiler: true,
         hiddenAt: true,
         createdAt: true,
-        _count: { select: { likes: true, comments: true } },
+        _count: { select: { likes: true, replies: true } },
         user: { select: { id: true, name: true, handle: true, isDemo: true } },
-        novela: { select: { id: true, title: true } },
+        episode: {
+          select: {
+            id: true,
+            number: true,
+            season: { select: { number: true } },
+            novela: { select: { id: true, title: true } },
+          },
+        },
       },
     }),
   ]);
 
   const denuncias = await denunciasPorAlvo(
-    "POST",
-    posts.map((post) => post.id),
+    "EPISODE_COMMENT",
+    conversas.map((conversa) => conversa.id),
   );
 
   return {
-    linhas: posts.map((post) => ({
-      id: post.id,
-      corpo: post.body,
-      tipo: post.kind,
-      spoiler: post.spoiler,
-      oculto: post.hiddenAt !== null,
-      ocultadoEm: post.hiddenAt,
-      criadoEm: post.createdAt,
-      curtidas: post._count.likes,
-      comentarios: post._count.comments,
-      autor: post.user
+    linhas: conversas.map((conversa) => ({
+      id: conversa.id,
+      corpo: conversa.body,
+      spoiler: conversa.spoiler,
+      oculto: conversa.hiddenAt !== null,
+      ocultadoEm: conversa.hiddenAt,
+      criadoEm: conversa.createdAt,
+      curtidas: conversa._count.likes,
+      comentarios: conversa._count.replies,
+      autor: conversa.user
         ? {
-            id: post.user.id,
-            nome: post.user.name,
-            handle: post.user.handle,
-            demo: post.user.isDemo,
+            id: conversa.user.id,
+            nome: conversa.user.name,
+            handle: conversa.user.handle,
+            demo: conversa.user.isDemo,
           }
         : null,
-      novela: post.novela
-        ? { id: post.novela.id, titulo: post.novela.title }
-        : null,
-      denunciasAbertas: denuncias.get(post.id) ?? 0,
+      novela: {
+        id: conversa.episode.novela.id,
+        titulo: conversa.episode.novela.title,
+      },
+      episodio: {
+        id: conversa.episode.id,
+        numero: conversa.episode.number,
+        temporada: conversa.episode.season.number,
+      },
+      denunciasAbertas: denuncias.get(conversa.id) ?? 0,
     })),
     total,
     pagina,
@@ -426,19 +485,24 @@ export type ComentarioDoPost = {
   denunciasAbertas: number;
 };
 
-export async function postComComentarios(postId: string) {
-  const post = await db.post.findUnique({
-    where: { id: postId },
+/**
+ * Uma conversa inteira, para a tela de detalhe.
+ *
+ * O id recebido é o da raiz. Ele chega da lista, e a lista só emite raízes —
+ * mas a checagem de `parentId` fica no `where` mesmo assim: um link colado à
+ * mão apontando para uma resposta abriria uma tela sem as respostas dela, o que
+ * pareceria uma conversa vazia em vez de um endereço errado.
+ */
+export async function postComComentarios(raizId: string) {
+  const raiz = await db.episodeComment.findFirst({
+    where: { id: raizId, parentId: null },
     select: {
       id: true,
       body: true,
-      kind: true,
       spoiler: true,
-      rating: true,
       hiddenAt: true,
       createdAt: true,
-      updatedAt: true,
-      _count: { select: { likes: true, comments: true } },
+      _count: { select: { likes: true, replies: true } },
       user: {
         select: {
           id: true,
@@ -448,9 +512,16 @@ export async function postComComentarios(postId: string) {
           status: true,
         },
       },
-      novela: { select: { id: true, title: true } },
-      episode: { select: { id: true, number: true, title: true } },
-      comments: {
+      episode: {
+        select: {
+          id: true,
+          number: true,
+          title: true,
+          season: { select: { number: true } },
+          novela: { select: { id: true, title: true } },
+        },
+      },
+      replies: {
         orderBy: { createdAt: "asc" },
         select: {
           id: true,
@@ -462,35 +533,41 @@ export async function postComComentarios(postId: string) {
       },
     },
   });
-  if (!post) return null;
+  if (!raiz) return null;
 
-  const [denunciasDoPost, denunciasDosComentarios] = await Promise.all([
+  const [denunciasDaRaiz, denunciasDasRespostas] = await Promise.all([
     db.report.findMany({
-      where: { targetType: "POST", targetId: postId },
+      where: { targetType: "EPISODE_COMMENT", targetId: raizId },
       orderBy: { createdAt: "desc" },
     }),
     denunciasPorAlvo(
-      "COMMENT",
-      post.comments.map((comentario) => comentario.id),
+      "EPISODE_COMMENT",
+      raiz.replies.map((resposta) => resposta.id),
     ),
   ]);
 
   return {
-    post,
-    comentarios: post.comments.map((comentario) => ({
-      id: comentario.id,
-      corpo: comentario.body,
-      criadoEm: comentario.createdAt,
-      oculto: comentario.hiddenAt !== null,
-      autor: comentario.user
+    post: {
+      ...raiz,
+      novela: raiz.episode.novela,
+      // A tela mostrava `kind` e `rating`, que eram do post e não existem numa
+      // conversa de episódio. Vão embora em vez de virar campos sempre nulos:
+      // um campo que nunca tem valor é ruído com aparência de dado.
+    },
+    comentarios: raiz.replies.map((resposta) => ({
+      id: resposta.id,
+      corpo: resposta.body,
+      criadoEm: resposta.createdAt,
+      oculto: resposta.hiddenAt !== null,
+      autor: resposta.user
         ? {
-            id: comentario.user.id,
-            nome: comentario.user.name,
-            handle: comentario.user.handle,
+            id: resposta.user.id,
+            nome: resposta.user.name,
+            handle: resposta.user.handle,
           }
         : null,
-      denunciasAbertas: denunciasDosComentarios.get(comentario.id) ?? 0,
+      denunciasAbertas: denunciasDasRespostas.get(resposta.id) ?? 0,
     })) satisfies ComentarioDoPost[],
-    denuncias: denunciasDoPost,
+    denuncias: denunciasDaRaiz,
   };
 }

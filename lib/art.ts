@@ -34,13 +34,12 @@ export function hashKey(key: string): number {
   return Math.abs(h);
 }
 
-export type ArtFormat = "capa" | "hero" | "cena" | "genero";
+export type ArtFormat = "capa" | "hero" | "cena";
 
 const SIZES: Record<ArtFormat, { width: number; height: number }> = {
   capa: { width: 720, height: 1080 },
   hero: { width: 900, height: 1200 },
   cena: { width: 960, height: 540 },
-  genero: { width: 720, height: 480 },
 };
 
 export function artSpec(

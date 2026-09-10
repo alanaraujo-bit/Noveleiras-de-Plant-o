@@ -172,7 +172,7 @@ export function TrilhoContinuar({ itens }: { itens: ContinueItem[] }) {
   );
 }
 
-/** Linha de novela em listas verticais (busca, gênero, minha lista). */
+/** Linha de novela em listas verticais (busca e minha lista). */
 export function LinhaNovela({
   novela,
   legenda,

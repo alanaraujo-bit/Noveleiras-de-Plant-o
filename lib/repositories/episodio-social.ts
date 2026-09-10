@@ -75,7 +75,7 @@ function paraAutor(u: {
  *
  * `likes` vem filtrado pelo espectador em vez de carregado inteiro: a pergunta
  * é "eu curti?", e trazer mil linhas para responder um booleano seria absurdo.
- * É o mesmo padrão que `lib/repositories/feed.ts` já usa para publicações.
+ * É o mesmo padrão usado nas outras listagens sociais.
  */
 function selecaoDeComentario(viewerId: string | null) {
   return {
@@ -352,4 +352,45 @@ export async function contarEnvio(episodeId: string): Promise<number> {
     select: { shareCount: true },
   });
   return episodio.shareCount;
+}
+
+/** Um comentário recente, com o episódio de onde ele veio. */
+export type ComentarioDaNovela = ComentarioDeEpisodio & {
+  episodio: { id: string; numero: number; temporada: number };
+};
+
+/**
+ * Conversa recente de uma novela inteira, para a ficha da obra.
+ *
+ * Antes esta seção lia o feed público. Ela sobrevive à remoção dele porque o
+ * que ela mostra continua existindo — só mudou de lugar: em vez de posts sobre
+ * a novela, são os comentários dos episódios dela. Cada linha leva ao episódio
+ * onde a conversa acontece, que é onde dá para responder.
+ */
+export async function comentariosRecentesDaNovela(
+  novelaId: string,
+  viewerId: string | null,
+  take = 4,
+): Promise<ComentarioDaNovela[]> {
+  const linhas = await db.episodeComment.findMany({
+    where: {
+      episode: { novelaId },
+      ...filtroDeComentariosVisiveis(),
+    },
+    orderBy: { createdAt: "desc" },
+    take,
+    select: {
+      ...selecaoDeComentario(viewerId),
+      episode: { select: { id: true, number: true, season: { select: { number: true } } } },
+    },
+  });
+
+  return linhas.map((linha) => ({
+    ...paraComentario(linha as unknown as LinhaDeComentario, viewerId),
+    episodio: {
+      id: linha.episode.id,
+      numero: linha.episode.number,
+      temporada: linha.episode.season.number,
+    },
+  }));
 }

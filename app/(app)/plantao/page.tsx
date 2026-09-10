@@ -4,8 +4,9 @@ import { redirect } from "next/navigation";
 
 import { Reel } from "@/components/reel/Reel";
 import { getViewer } from "@/lib/auth/session";
-import { filaInicial } from "@/lib/repositories/reel";
+import { continuacaoDaNovela, filaInicial } from "@/lib/repositories/reel";
 import { track } from "@/lib/analytics/track";
+import { db } from "@/lib/db";
 
 export const metadata: Metadata = {
   title: "Plantão",
@@ -21,30 +22,58 @@ export const metadata: Metadata = {
  * abertura é a diferença entre "isto é um reel" e "isto é um site de vídeo".
  *
  * A rota não é estática nem cacheável: cada pessoa vê uma fila diferente,
- * montada a partir do que ela já assistiu e dos gêneros que escolheu.
+ * montada a partir do que ela já assistiu.
  */
-export default async function PlantaoPage() {
+type PlantaoProps = {
+  searchParams: Promise<{ episodio?: string | string[] }>;
+};
+
+export default async function PlantaoPage({ searchParams }: PlantaoProps) {
   const viewer = await getViewer();
   if (!viewer) redirect("/bem-vindo");
 
-  const { laminas, retomando } = await filaInicial({
-    viewerId: viewer.id,
-    entitlement: viewer.entitlement,
-    generosPreferidos: viewer.preferences.favoriteGenreIds,
-  });
+  const episodioParam = (await searchParams).episodio;
+  const episodioId =
+    typeof episodioParam === "string" ? episodioParam : undefined;
+  const episodio = episodioId
+    ? await db.episode.findUnique({
+        where: { id: episodioId },
+        select: { id: true, novelaId: true },
+      })
+    : null;
+
+  const fila = episodio
+    ? {
+        laminas: await continuacaoDaNovela({
+          novelaId: episodio.novelaId,
+          apartirDoEpisodioId: episodio.id,
+          incluirAtual: true,
+          viewerId: viewer.id,
+          entitlement: viewer.entitlement,
+        }),
+        retomando: false,
+      }
+    : await filaInicial({
+        viewerId: viewer.id,
+        entitlement: viewer.entitlement,
+      });
 
   await track({
     type: "REEL_OPEN",
     userId: viewer.id,
     sessionId: viewer.appSessionId,
-    payload: { laminas: laminas.length, retomando },
+    payload: {
+      laminas: fila.laminas.length,
+      retomando: fila.retomando,
+      origem: episodio ? "catalogo" : "abertura",
+    },
   });
 
-  if (laminas.length === 0) return <CatalogoVazio />;
+  if (fila.laminas.length === 0) return <CatalogoVazio />;
 
   return (
     <Reel
-      laminasIniciais={laminas}
+      laminasIniciais={fila.laminas}
       economiaDeDados={viewer.preferences.dataSaver}
       viewer={{
         nome: viewer.name,

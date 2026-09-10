@@ -78,7 +78,6 @@ export type Viewer = {
   appSessionId: string;
   entitlement: Entitlement;
   preferences: {
-    favoriteGenreIds: string[];
     autoplayNext: boolean;
     dataSaver: boolean;
     reduceMotion: boolean;
@@ -143,7 +142,6 @@ export const getViewer = cache(async (): Promise<Viewer | null> => {
     appSessionId: claims.sid,
     entitlement: carteiraDe(user.subscription, direitos, agora),
     preferences: {
-      favoriteGenreIds: user.preference?.favoriteGenreIds ?? [],
       autoplayNext: user.preference?.autoplayNext ?? true,
       dataSaver: user.preference?.dataSaver ?? false,
       reduceMotion: user.preference?.reduceMotion ?? false,

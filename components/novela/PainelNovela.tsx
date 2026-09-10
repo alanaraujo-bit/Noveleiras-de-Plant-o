@@ -253,19 +253,6 @@ export function PainelNovela({
         </button>
       </div>
 
-      {/* Gêneros --------------------------------------------------------- */}
-      <div className="mt-4 flex flex-wrap gap-1.5 px-5">
-        {novela.genres.map((genero) => (
-          <Link
-            key={genero.slug}
-            href={`/generos/${genero.slug}`}
-            className="tap rounded-full border border-white/12 bg-white/5 px-3 py-1.5 text-[0.75rem] font-semibold text-cream-200"
-          >
-            {genero.name}
-          </Link>
-        ))}
-      </div>
-
       {/* Elenco ---------------------------------------------------------- */}
       {novela.cast.length > 0 ? (
         <section className="mt-7">

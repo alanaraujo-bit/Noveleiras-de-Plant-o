@@ -183,37 +183,22 @@ export async function sair() {
   redirect("/entrar");
 }
 
-export async function concluirOnboarding(generoIds: string[]) {
+export async function concluirOnboarding() {
   const viewer = await getViewer();
   if (!viewer) redirect("/entrar");
 
-  const chosen = z
-    .array(z.string())
-    .max(12)
-    .safeParse(generoIds);
-
   await db.user.update({
     where: { id: viewer.id },
-    data: {
-      onboardedAt: new Date(),
-      preference: {
-        upsert: {
-          create: { favoriteGenreIds: chosen.success ? chosen.data : [] },
-          update: { favoriteGenreIds: chosen.success ? chosen.data : [] },
-        },
-      },
-    },
+    data: { onboardedAt: new Date() },
   });
 
   await track({
     type: "ONBOARDING_COMPLETE",
     userId: viewer.id,
     sessionId: viewer.appSessionId,
-    payload: { generos: chosen.success ? chosen.data.length : 0 },
+    payload: {},
   });
 
-  // O catalogo tambem muda com os generos escolhidos, mas quem acaba de
-  // concluir o onboarding vai para o reel: e la que o app abre.
   revalidatePath("/inicio");
   redirect(ROTA_INICIAL);
 }
@@ -251,22 +236,6 @@ export async function salvarPreferencias(
   });
 
   revalidatePath("/perfil/preferencias");
-  return { ok: true as const };
-}
-
-export async function salvarGenerosPreferidos(generoIds: string[]) {
-  const viewer = await getViewer();
-  if (!viewer) return { ok: false as const };
-  const parsed = z.array(z.string()).max(12).safeParse(generoIds);
-  if (!parsed.success) return { ok: false as const };
-
-  await db.preference.upsert({
-    where: { userId: viewer.id },
-    create: { userId: viewer.id, favoriteGenreIds: parsed.data },
-    update: { favoriteGenreIds: parsed.data },
-  });
-
-  revalidatePath("/inicio");
   return { ok: true as const };
 }
 

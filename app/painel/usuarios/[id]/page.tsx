@@ -95,7 +95,7 @@ export default async function FichaDaConta({
                 nota={
                   usuario.onboardedAt
                     ? fmtDataHora(usuario.onboardedAt)
-                    : "parou antes de escolher os gêneros"
+                    : "ainda não concluiu o onboarding"
                 }
               />
               <LinhaRazao rotulo="Identificador" valor={usuario.id} />

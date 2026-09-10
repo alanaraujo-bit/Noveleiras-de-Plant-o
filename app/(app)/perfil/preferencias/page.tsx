@@ -2,7 +2,6 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { getViewer } from "@/lib/auth/session";
-import { listGenres } from "@/lib/repositories/catalog";
 import { PainelPreferencias } from "./PainelPreferencias";
 import { IconeVoltar } from "@/components/ui/icones";
 
@@ -11,8 +10,6 @@ export const metadata = { title: "Preferências" };
 export default async function PreferenciasPage() {
   const viewer = await getViewer();
   if (!viewer) redirect("/entrar");
-
-  const generos = await listGenres();
 
   return (
     <div>
@@ -40,11 +37,6 @@ export default async function PreferenciasPage() {
           avatarSeed: viewer.avatarSeed,
           avatarUrl: viewer.avatarUrl,
         }}
-        generos={generos.map((genero) => ({
-          id: genero.id,
-          name: genero.name,
-          accent: genero.accent,
-        }))}
       />
     </div>
   );

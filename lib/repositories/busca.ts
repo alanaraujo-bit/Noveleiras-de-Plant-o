@@ -25,7 +25,6 @@ export type SearchHit = {
   status: "ONGOING" | "COMPLETED" | "COMING_SOON";
   episodeCount: number;
   rating: number;
-  genres: { slug: string; name: string }[];
   /** Por que este resultado apareceu — mostrado discretamente na lista. */
   matchedOn: "titulo" | "elenco" | "tema";
 };
@@ -33,18 +32,16 @@ export type SearchHit = {
 export type SearchOutcome = {
   term: string;
   novelas: SearchHit[];
-  genres: { slug: string; name: string; accent: string }[];
 };
 
 export async function searchCatalog(rawTerm: string): Promise<SearchOutcome> {
   const term = rawTerm.trim();
   const normalized = normalizeText(term);
-  if (normalized.length < 2) return { term, novelas: [], genres: [] };
+  if (normalized.length < 2) return { term, novelas: [] };
 
   const tokens = normalized.split(" ").filter(Boolean).slice(0, 6);
 
-  const [rows, genres] = await Promise.all([
-    db.novela.findMany({
+  const rows = await db.novela.findMany({
       where: { AND: tokens.map((token) => ({ searchText: { contains: token } })) },
       orderBy: [{ viewCount: "desc" }],
       take: 30,
@@ -61,16 +58,9 @@ export async function searchCatalog(rawTerm: string): Promise<SearchOutcome> {
         status: true,
         rating: true,
         cast: true,
-        genres: { select: { genre: { select: { slug: true, name: true } } } },
         _count: { select: { episodes: true } },
       },
-    }),
-    db.genre.findMany({
-      where: { name: { contains: term, mode: "insensitive" } },
-      select: { slug: true, name: true, accent: true },
-      take: 4,
-    }),
-  ]);
+    });
 
   const hits: SearchHit[] = rows.map((row) => {
     const titleNorm = normalizeText(row.title);
@@ -96,7 +86,6 @@ export async function searchCatalog(rawTerm: string): Promise<SearchOutcome> {
       status: row.status,
       episodeCount: row._count.episodes,
       rating: row.rating,
-      genres: row.genres.map((link) => link.genre),
       matchedOn,
     };
   });
@@ -110,7 +99,7 @@ export async function searchCatalog(rawTerm: string): Promise<SearchOutcome> {
     return aStarts - bStarts;
   });
 
-  return { term, novelas: hits, genres };
+  return { term, novelas: hits };
 }
 
 /** Registra a busca — base das métricas de intenção do painel futuro. */
