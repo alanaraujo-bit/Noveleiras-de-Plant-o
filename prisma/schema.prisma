@@ -1441,8 +1441,28 @@ model PaymentAttempt {
   currency    String  @default("BRL")
   method      String?
 
-  provider   String
+  provider String
+  /**
+   * O recurso que **decide** o estado: o pagamento (`/v1/payments`) numa
+   * compra, o preapproval numa assinatura. Nunca uma preferencia.
+   *
+   * Guardar a preferencia aqui foi a origem de um bug caro: reconsultar
+   * `/v1/payments/<preferenceId>` devolve 404, a reconciliacao devolvia
+   * "inexistente" e o acesso simplesmente nao era concedido, em silencio.
+   */
   externalId String?
+  /**
+   * Checkout Pro: a preferencia criada antes de existir pagamento. E o unico
+   * id que temos enquanto a pessoa ainda esta na tela deles, e o ponto de
+   * partida para descobrir o pagamento real depois.
+   */
+  externalPreferenceId String?
+  /**
+   * Checkout Pro: o pedido que agrupa as tentativas de pagamento de uma
+   * preferencia. E por ele que se chega ao `paymentId` sem depender de a
+   * pessoa voltar pela `back_url`.
+   */
+  externalMerchantOrderId String?
   // Como o provedor descreveu o estado, cru. O enum acima e a nossa leitura;
   // isto e o que ele disse, para quando as duas divergirem.
   rawStatus  String?
@@ -1467,6 +1487,10 @@ model PaymentAttempt {
   @@unique([provider, externalId])
   @@index([userId, createdAt])
   @@index([status, createdAt])
+  // Reconciliar a partir de um webhook de `merchant_order` ou de um retorno
+  // que so trouxe `preference_id` precisa achar a tentativa por esses ids.
+  @@index([externalPreferenceId])
+  @@index([externalMerchantOrderId])
 }
 
 enum WebhookEventStatus {

@@ -27,6 +27,7 @@ import {
   type CriarCompraEntrada,
   type EstadoProvedor,
   type ProvedorDePagamento,
+  type ResolucaoDePreferencia,
   type RespostaCheckout,
   type ResultadoReembolso,
   type WebhookLido,
@@ -120,6 +121,22 @@ export class ProvedorMock implements ProvedorDePagamento {
       expiraEm: pix ? new Date(Date.now() + 30 * 60_000) : null,
       bruto: { mock: true, tipo: "payment", externalId, status },
     };
+  }
+
+  /**
+   * O mock cria o pagamento direto, sem preferência intermediária: não há
+   * redirecionamento para tela nenhuma de terceiro. Devolver a própria
+   * referência mantém o contrato sem inventar um objeto que não existe aqui.
+   */
+  async resolverPreferencia(
+    preferenceId: string,
+  ): Promise<ResolucaoDePreferencia | null> {
+    if (!registros.has(preferenceId)) return null;
+    return { merchantOrderId: null, pagamentoIds: [preferenceId] };
+  }
+
+  async pagamentosDaMerchantOrder(merchantOrderId: string): Promise<string[]> {
+    return registros.has(merchantOrderId) ? [merchantOrderId] : [];
   }
 
   async consultarPagamento(

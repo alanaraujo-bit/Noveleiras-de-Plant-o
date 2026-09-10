@@ -6,7 +6,7 @@ import { getViewer } from "@/lib/auth/session";
 import { db } from "@/lib/db";
 import {
   reconciliarAssinatura,
-  reconciliarPagamento,
+  reconciliarCompra,
 } from "@/lib/pagamentos/servico";
 
 export const metadata = { title: "Pagamento" };
@@ -66,9 +66,11 @@ export default async function RetornoPage({
   // Reconsulta autenticada. Falhar aqui não pode travar a tela: o webhook
   // ainda vai chegar, e a tela de estado consulta de novo sozinha.
   try {
-    const externo = pagamentoId ?? tentativa.externalId;
-    if (externo && tentativa.kind === "PURCHASE") {
-      await reconciliarPagamento(externo);
+    if (tentativa.kind === "PURCHASE") {
+      // `payment_id`/`collection_id` quando a MP os devolve; senão a compra se
+      // resolve pela preferência, via merchant order. O que nunca acontece
+      // mais é consultar `/v1/payments/<preferenceId>` e engolir o 404.
+      await reconciliarCompra(tentativa.id, pagamentoId);
     } else {
       const preapproval = preapprovalId ?? tentativa.externalId;
       // A mesma rotina do webhook, e não um carimbo local: antes daqui saía
@@ -116,15 +118,24 @@ async function localizarTentativa(userId: string, pistas: Pistas) {
     if (achada) return achada;
   }
 
-  const externos = [
-    pistas.preapprovalId,
-    pistas.pagamentoId,
-    pistas.preferenciaId,
-  ].filter((v): v is string => Boolean(v));
+  // `externalId` guarda só o recurso que decide — pagamento ou preapproval. A
+  // preferência tem coluna própria, e procurá-la aqui dentro não acharia nada.
+  const externos = [pistas.preapprovalId, pistas.pagamentoId].filter(
+    (v): v is string => Boolean(v),
+  );
 
   if (externos.length > 0) {
     const achada = await db.paymentAttempt.findFirst({
       where: { userId, externalId: { in: externos } },
+      select: selecao,
+    });
+    if (achada) return achada;
+  }
+
+  if (pistas.preferenciaId) {
+    const achada = await db.paymentAttempt.findFirst({
+      where: { userId, externalPreferenceId: pistas.preferenciaId },
+      orderBy: { createdAt: "desc" },
       select: selecao,
     });
     if (achada) return achada;

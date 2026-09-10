@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { provedorDePagamento } from "@/lib/pagamentos";
 import {
   reconciliarAssinatura,
+  reconciliarMerchantOrder,
   reconciliarPagamento,
 } from "@/lib/pagamentos/servico";
 
@@ -56,7 +57,6 @@ export const runtime = "nodejs";
  */
 const TOPICOS_DE_PAGAMENTO = new Set([
   "payment",
-  "merchant_order",
   "subscription_authorized_payment",
 ]);
 
@@ -174,9 +174,19 @@ async function processar(
 ): Promise<Processamento> {
   if (!recursoId) return { tratado: false };
 
+  if (topico === "merchant_order") {
+    // O id aqui é o do **pedido**, não o do pagamento. Mandá-lo para
+    // `/v1/payments` devolvia 404, e o ramo abaixo gravava `tratado: true`
+    // mesmo assim — o evento constava PROCESSED tendo feito nada.
+    const resultado = await reconciliarMerchantOrder(recursoId);
+    return { tratado: resultado.mudou, snapshot: resultado };
+  }
+
   if (TOPICOS_DE_PAGAMENTO.has(topico)) {
     const resultado = await reconciliarPagamento(recursoId);
-    return { tratado: true, snapshot: resultado };
+    // `tratado` passa a seguir o que de fato mudou. Antes era fixo em `true`,
+    // e um pagamento que não achava tentativa constava como processado.
+    return { tratado: resultado.mudou, snapshot: resultado };
   }
 
   if (TOPICOS_DE_ASSINATURA.has(topico)) {

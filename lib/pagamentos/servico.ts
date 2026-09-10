@@ -253,26 +253,32 @@ export async function iniciarCompra(entrada: {
       urlRetorno: entrada.urlRetorno,
     });
 
+    const demo = mock || resposta.pagadorSubstituido === true;
+    // A preferência do Checkout Pro tem coluna própria. Guardá-la em
+    // `externalId` — que é por onde a reconciliação consulta `/v1/payments` —
+    // garantia 404 e uma compra paga que nunca liberava nada.
+    const preferenceId = resposta.preferenceId ?? null;
+
     await db.$transaction([
       db.paymentAttempt.update({
         where: { id: tentativa.id },
         data: {
           externalId: resposta.externalId,
+          externalPreferenceId: preferenceId,
           status: mapaTentativa(resposta.status),
           rawStatus: resposta.status,
           checkoutUrl: resposta.checkoutUrl,
           pixQrCode: resposta.pixQrCode,
           expiresAt: resposta.expiraEm,
-          isDemo: mock || resposta.pagadorSubstituido === true,
+          isDemo: demo,
         },
       }),
       db.purchase.update({
         where: { id: compra.id },
-        data: { isDemo: mock || resposta.pagadorSubstituido === true },
-      }),
-      db.purchase.update({
-        where: { id: compra.id },
-        data: { externalPreferenceId: resposta.externalId },
+        data: {
+          isDemo: demo,
+          externalPreferenceId: preferenceId,
+        },
       }),
     ]);
 
@@ -417,6 +423,160 @@ async function localizarTentativa(
   return db.paymentAttempt.findFirst({
     where: { provider: provedorNome, externalId: consulta.externalId },
   });
+}
+
+/**
+ * Reconcilia uma **compra avulsa**, descobrindo o pagamento real primeiro.
+ *
+ * O Checkout Pro tem três objetos e só um deles pode ser consultado em
+ * `/v1/payments`:
+ *
+ *   preferência    o que criamos antes de existir pagamento
+ *   merchant order o pedido que agrupa as tentativas daquela preferência
+ *   payment        a cobrança de verdade — a única que decide o estado
+ *
+ * Guardar a preferência como se fosse pagamento fazia `/v1/payments/<pref>`
+ * responder 404, a reconciliação devolver "inexistente" e a compra paga não
+ * liberar nada. A tela de espera girava para sempre e o webhook era a única
+ * salvação — que é justamente o que pode não chegar.
+ *
+ * A ordem aqui é do mais barato e mais confiável para o mais caro:
+ *
+ * 1. `paymentId` explícito (veio na `back_url` ou no webhook de `payment`);
+ * 2. `externalId` já gravado, que a esta altura só é um pagamento;
+ * 3. a merchant order conhecida;
+ * 4. a preferência, resolvida em pedido e daí em pagamentos.
+ *
+ * Idempotente: `reconciliarPagamento` é, e os ids descobertos são gravados
+ * para que a próxima passagem já comece do passo 2.
+ */
+export async function reconciliarCompra(
+  tentativaId: string,
+  paymentIdExplicito?: string | null,
+): Promise<ResultadoReconciliacao> {
+  const tentativa = await db.paymentAttempt.findUnique({
+    where: { id: tentativaId },
+  });
+
+  if (!tentativa) {
+    return {
+      mudou: false,
+      motivo: "tentativa inexistente",
+      attemptId: null,
+      status: "UNKNOWN",
+    };
+  }
+
+  const provedor = provedorDePagamento();
+  const candidatos: string[] = [];
+
+  if (paymentIdExplicito) candidatos.push(paymentIdExplicito);
+  if (tentativa.externalId) candidatos.push(tentativa.externalId);
+
+  // Descobrir custa uma ida a mais ao provedor, então só quando os ids que já
+  // temos não bastam.
+  if (candidatos.length === 0) {
+    let merchantOrderId = tentativa.externalMerchantOrderId;
+
+    if (!merchantOrderId && tentativa.externalPreferenceId) {
+      const resolucao = await provedor.resolverPreferencia(
+        tentativa.externalPreferenceId,
+      );
+
+      if (resolucao) {
+        merchantOrderId = resolucao.merchantOrderId;
+        candidatos.push(...resolucao.pagamentoIds);
+
+        if (merchantOrderId) {
+          await db.paymentAttempt.update({
+            where: { id: tentativa.id },
+            data: { externalMerchantOrderId: merchantOrderId },
+          });
+        }
+      }
+    } else if (merchantOrderId) {
+      candidatos.push(...(await provedor.pagamentosDaMerchantOrder(merchantOrderId)));
+    }
+  }
+
+  if (candidatos.length === 0) {
+    // Estado legítimo: abriu o checkout e ainda não pagou. Não é erro, e
+    // mexer na tentativa aqui apagaria o `PENDING` que a tela usa.
+    return {
+      mudou: false,
+      motivo: "pagamento ainda não existe no provedor",
+      attemptId: tentativa.id,
+      status: "PENDING",
+    };
+  }
+
+  // `candidatos` vem ordenado pelo provedor com o desfecho que vale na frente:
+  // um cartão recusado seguido de um aprovado não pode marcar a compra como
+  // recusada. O primeiro que o provedor reconhecer decide.
+  let ultimo: ResultadoReconciliacao | null = null;
+
+  for (const paymentId of candidatos) {
+    const resultado = await reconciliarPagamento(paymentId);
+    ultimo = resultado;
+    if (resultado.attemptId) return resultado;
+  }
+
+  return (
+    ultimo ?? {
+      mudou: false,
+      motivo: "nenhum pagamento reconciliável",
+      attemptId: tentativa.id,
+      status: "PENDING",
+    }
+  );
+}
+
+/**
+ * Reconcilia tudo que um `merchant_order` contém.
+ *
+ * O webhook de `merchant_order` traz o id do **pedido**, não o do pagamento.
+ * Mandá-lo direto para `/v1/payments` devolvia 404 e o evento era gravado como
+ * PROCESSED tendo feito nada — a auditoria mentia.
+ */
+export async function reconciliarMerchantOrder(
+  merchantOrderId: string,
+): Promise<ResultadoReconciliacao> {
+  const provedor = provedorDePagamento();
+  const pagamentoIds = await provedor.pagamentosDaMerchantOrder(merchantOrderId);
+
+  if (pagamentoIds.length === 0) {
+    return {
+      mudou: false,
+      motivo: "merchant order sem pagamento ainda",
+      attemptId: null,
+      status: "PENDING",
+    };
+  }
+
+  let ultimo: ResultadoReconciliacao | null = null;
+
+  for (const paymentId of pagamentoIds) {
+    const resultado = await reconciliarPagamento(paymentId);
+    ultimo = resultado;
+
+    if (resultado.attemptId) {
+      // Guardar o pedido encurta a próxima reconciliação desta tentativa.
+      await db.paymentAttempt.updateMany({
+        where: { id: resultado.attemptId, externalMerchantOrderId: null },
+        data: { externalMerchantOrderId: merchantOrderId },
+      });
+      return resultado;
+    }
+  }
+
+  return (
+    ultimo ?? {
+      mudou: false,
+      motivo: "merchant order sem tentativa correspondente",
+      attemptId: null,
+      status: "UNKNOWN",
+    }
+  );
 }
 
 /**

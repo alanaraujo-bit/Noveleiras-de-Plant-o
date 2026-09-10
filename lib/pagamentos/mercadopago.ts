@@ -24,6 +24,7 @@ import {
   type CriarCompraEntrada,
   type EstadoProvedor,
   type ProvedorDePagamento,
+  type ResolucaoDePreferencia,
   type RespostaCheckout,
   type ResultadoReembolso,
   type WebhookLido,
@@ -52,6 +53,37 @@ function lerCredenciais(): Credenciais {
     notificationUrl:
       process.env.MERCADOPAGO_NOTIFICATION_URL?.trim() || null,
   };
+}
+
+/**
+ * Ordena os pagamentos de um pedido: o que decide primeiro.
+ *
+ * Um cartão recusado seguido de um aprovado deixa dois pagamentos no mesmo
+ * pedido. Reconciliar pelo primeiro da lista marcaria a compra como recusada
+ * mesmo tendo dinheiro entrado.
+ */
+const PESO_DO_STATUS: Record<string, number> = {
+  approved: 0,
+  authorized: 0,
+  in_process: 1,
+  pending: 1,
+  in_mediation: 1,
+  refunded: 2,
+  charged_back: 2,
+};
+
+function ordenarPagamentos(
+  pagamentos: Array<{ id?: number | string; status?: string }> | undefined,
+): string[] {
+  return (pagamentos ?? [])
+    .filter((p) => p.id != null)
+    .slice()
+    .sort(
+      (a, b) =>
+        (PESO_DO_STATUS[a.status ?? ""] ?? 3) -
+        (PESO_DO_STATUS[b.status ?? ""] ?? 3),
+    )
+    .map((p) => String(p.id));
 }
 
 // ------------------------------------------------------ pagador de teste
@@ -409,7 +441,11 @@ export class MercadoPago implements ProvedorDePagamento {
     });
 
     return {
-      externalId: resposta.id ?? null,
+      // `externalId` fica vazio de propósito: ainda não existe pagamento, e
+      // carimbar a preferência aqui é exatamente o que fazia a reconsulta
+      // bater em `/v1/payments/<preferenceId>` e receber 404.
+      externalId: null,
+      preferenceId: resposta.id ?? null,
       status: "PENDING",
       checkoutUrl: resposta.init_point ?? resposta.sandbox_init_point ?? null,
       pixQrCode: null,
@@ -420,6 +456,59 @@ export class MercadoPago implements ProvedorDePagamento {
     };
   }
 
+  /**
+   * Preferência → pedido → pagamentos.
+   *
+   * O Mercado Pago não deixa consultar uma preferência e obter os pagamentos
+   * direto; o caminho é `merchant_orders/search?preference_id=`. Um pedido sem
+   * `payments` é o estado normal de quem abriu o checkout e ainda não pagou.
+   */
+  async resolverPreferencia(
+    preferenceId: string,
+  ): Promise<ResolucaoDePreferencia | null> {
+    try {
+      const busca = await chamar<{
+        elements?: Array<{
+          id?: number | string;
+          payments?: Array<{ id?: number | string; status?: string }>;
+        }>;
+      }>(
+        `/merchant_orders/search?preference_id=${encodeURIComponent(preferenceId)}`,
+      );
+
+      const pedido = busca.elements?.[0];
+      if (!pedido) return null;
+
+      return {
+        merchantOrderId: pedido.id != null ? String(pedido.id) : null,
+        pagamentoIds: ordenarPagamentos(pedido.payments),
+      };
+    } catch (erro) {
+      if (erro instanceof FalhaDoProvedor && erro.status === 404) return null;
+      throw erro;
+    }
+  }
+
+  async pagamentosDaMerchantOrder(merchantOrderId: string): Promise<string[]> {
+    try {
+      const pedido = await chamar<{
+        payments?: Array<{ id?: number | string; status?: string }>;
+      }>(`/merchant_orders/${encodeURIComponent(merchantOrderId)}`);
+
+      return ordenarPagamentos(pedido.payments);
+    } catch (erro) {
+      if (erro instanceof FalhaDoProvedor && erro.status === 404) return [];
+      throw erro;
+    }
+  }
+
+  /**
+   * Consulta o pagamento, mas só quando o id é mesmo de um pagamento.
+   *
+   * Um pedido pode ter várias tentativas — cartão recusado e depois aprovado.
+   * `ordenarPagamentos` põe o aprovado na frente para que a reconciliação
+   * decida pelo desfecho que vale, e não pela primeira tentativa que apareceu.
+   */
   async consultarPagamento(
     externalId: string,
   ): Promise<ConsultaPagamento | null> {

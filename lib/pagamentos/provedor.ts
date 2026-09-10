@@ -65,8 +65,24 @@ export type CriarCompraEntrada = {
 };
 
 /** O que o provedor devolve ao abrir uma cobrança. */
+/**
+ * O que uma preferência do Checkout Pro virou do lado do provedor.
+ *
+ * Existe porque preferência, pedido e pagamento são três objetos distintos, e
+ * só o último pode ser consultado em `/v1/payments`. Sem este passo, a única
+ * forma de descobrir o pagamento era a pessoa voltar pela `back_url` com o
+ * `payment_id` na query — e quem fecha a aba nunca volta.
+ */
+export type ResolucaoDePreferencia = {
+  merchantOrderId: string | null;
+  /** Ids de pagamento do pedido, do mais recente para o mais antigo. */
+  pagamentoIds: string[];
+};
+
 export type RespostaCheckout = {
   externalId: string | null;
+  /** Checkout Pro: a preferência, que **não** é um id de pagamento. */
+  preferenceId?: string | null;
   status: EstadoProvedor;
   /** Checkout hospedado, quando o fluxo é por redirecionamento. */
   checkoutUrl: string | null;
@@ -143,6 +159,20 @@ export interface ProvedorDePagamento {
   criarCompra(entrada: CriarCompraEntrada): Promise<RespostaCheckout>;
 
   consultarPagamento(externalId: string): Promise<ConsultaPagamento | null>;
+
+  /**
+   * Descobre o pagamento real de uma preferência do Checkout Pro.
+   *
+   * Devolve `null` quando o provedor não tem nada ainda — a pessoa abriu o
+   * checkout e não pagou. Isso é uma resposta legítima, não um erro: quem
+   * chamou deve deixar a tentativa como está e tentar de novo depois.
+   */
+  resolverPreferencia(
+    preferenceId: string,
+  ): Promise<ResolucaoDePreferencia | null>;
+
+  /** Os pagamentos de um `merchant_order`, do mais recente para o mais antigo. */
+  pagamentosDaMerchantOrder(merchantOrderId: string): Promise<string[]>;
 
   consultarAssinatura(externalId: string): Promise<ConsultaAssinatura | null>;
 

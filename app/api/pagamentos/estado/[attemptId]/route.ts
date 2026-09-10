@@ -4,7 +4,7 @@ import { getViewer } from "@/lib/auth/session";
 import { db } from "@/lib/db";
 import {
   reconciliarAssinatura,
-  reconciliarPagamento,
+  reconciliarCompra,
 } from "@/lib/pagamentos/servico";
 
 /**
@@ -45,6 +45,8 @@ export async function GET(
       plan: true,
       novelaId: true,
       externalId: true,
+      externalPreferenceId: true,
+      externalMerchantOrderId: true,
       amountCents: true,
       method: true,
       checkoutUrl: true,
@@ -66,18 +68,27 @@ export async function GET(
 
   let status = tentativa.status;
 
-  if (
-    (status === "PENDING" || status === "CREATED") &&
-    tentativa.externalId
-  ) {
+  // Assinatura precisa do `preapproval`; compra pode partir da preferência ou
+  // do pedido, e é isso que permite recuperar quem fechou a aba do Mercado
+  // Pago sem nunca passar pela `back_url`.
+  const temPorOndeComecar =
+    tentativa.kind === "SUBSCRIPTION"
+      ? Boolean(tentativa.externalId)
+      : Boolean(
+          tentativa.externalId ??
+            tentativa.externalPreferenceId ??
+            tentativa.externalMerchantOrderId,
+        );
+
+  if ((status === "PENDING" || status === "CREATED") && temPorOndeComecar) {
     try {
       // Assinatura e compra são objetos diferentes no provedor. Mandar um id
-      // de `preapproval` para a consulta de pagamento devolvia 404, a rota não
-      // fazia nada, e a tela girava para sempre sem nunca liberar o acesso.
+      // de `preapproval` — ou de preferência — para a consulta de pagamento
+      // devolvia 404, a rota não fazia nada, e a tela girava para sempre.
       const resultado =
         tentativa.kind === "SUBSCRIPTION"
-          ? await reconciliarAssinatura(tentativa.externalId)
-          : await reconciliarPagamento(tentativa.externalId);
+          ? await reconciliarAssinatura(tentativa.externalId as string)
+          : await reconciliarCompra(tentativa.id);
       if (resultado.attemptId) {
         const atualizada = await db.paymentAttempt.findUnique({
           where: { id: tentativa.id },
