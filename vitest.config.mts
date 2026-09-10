@@ -24,7 +24,9 @@ export default defineConfig({
         test: {
           name: "regras",
           environment: "node",
-          include: ["lib/**/*.test.ts"],
+          // Os scripts entram junto: o guarda do agente empacotado mora lá,
+          // e é justamente o tipo de regra que ninguém lembra de rodar à mão.
+          include: ["lib/**/*.test.ts", "scripts/**/*.test.ts"],
         },
       },
       {

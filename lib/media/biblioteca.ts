@@ -48,6 +48,24 @@ export type EpisodioNoDisco = {
   previa: boolean;
 };
 
+/**
+ * Aviso de andamento durante a leitura da pasta.
+ *
+ * Existe porque esta função é o trecho mudo da varredura: entre "peguei o
+ * trabalho" e "estou lendo metadados" ela percorre a biblioteca inteira sem
+ * dizer nada, e quem clicou em Escanear fica olhando uma barra parada. Pior:
+ * o servidor conta o silêncio como agente morto e recicla a varredura no
+ * meio.
+ *
+ * O módulo continua sem saber o que é um painel — ele avisa, e quem chamou
+ * decide o que fazer com o aviso.
+ */
+export type AvisoDeLeitura = (
+  lidas: number,
+  total: number,
+  titulo: string,
+) => void;
+
 /** Um tema declarado pela origem. Cru, em inglês, como veio. */
 export type TemaDaOrigem = { chave: string; valor: string };
 
@@ -257,12 +275,17 @@ async function lerManifesto(pasta: string): Promise<Manifesto | null> {
   }
 }
 
-export async function lerBiblioteca(raiz: string): Promise<NovelaNoDisco[]> {
+export async function lerBiblioteca(
+  raiz: string,
+  aoAndar?: AvisoDeLeitura,
+): Promise<NovelaNoDisco[]> {
   const entradas = await readdir(raiz, { withFileTypes: true });
+  const pastas = entradas.filter(
+    (e) => e.isDirectory() && !e.name.startsWith("."),
+  );
   const novelas: NovelaNoDisco[] = [];
 
-  for (const entrada of entradas) {
-    if (!entrada.isDirectory() || entrada.name.startsWith(".")) continue;
+  for (const entrada of pastas) {
 
     const pasta = join(raiz, entrada.name);
     const [arquivos, manifesto, imagens] = await Promise.all([
@@ -407,6 +430,8 @@ export async function lerBiblioteca(raiz: string): Promise<NovelaNoDisco[]> {
       fonte: manifesto?.source?.trim() || null,
       totalDuracaoSeg: manifesto?.totalDurationSec ?? null,
     });
+
+    aoAndar?.(novelas.length, pastas.length, novelas[novelas.length - 1].titulo);
   }
 
   return novelas.sort((a, b) => a.titulo.localeCompare(b.titulo, "pt-BR"));

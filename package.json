@@ -38,7 +38,8 @@
     "midia:converter": "node scripts/converter-para-mp4.mjs",
     "planos:semear": "node --env-file=.env scripts/semear-planos.ts",
     "pagamentos:provar": "node --env-file=.env --env-file=.env.local --env-file=.env.development.local scripts/provar-pagamentos.mjs",
-    "backup:financeiro": "node --env-file=.env scripts/backup-financeiro.ts"
+    "backup:financeiro": "node --env-file=.env scripts/backup-financeiro.ts",
+    "agente:empacotar": "node scripts/empacotar-agente.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1127.0",

@@ -20,7 +20,7 @@ import { ehOPrograma } from "./lib-agente.mjs";
 import { lerBiblioteca } from "../lib/media/biblioteca.ts";
 import { calcularChecksum, sondar } from "../lib/media/inventario.ts";
 
-const VERSAO = "1.0.0";
+const VERSAO = "1.0.2";
 const SLUG = process.env.AGENTE_SLUG;
 const SEGREDO = process.env.AGENTE_SEGREDO;
 const DESTINO = (process.env.AGENTE_DESTINO ?? "http://localhost:3100").replace(/\/$/, "");
@@ -50,6 +50,14 @@ if (!SLUG || !SEGREDO) {
       '\n  Registre o servidor: npm run servidor -- registrar <slug> "<nome>"\n',
   );
   process.exit(1);
+}
+
+/** Segundos em algo que se lê de relance: "40s", "12min", "1h20". */
+function duracao(seg) {
+  if (seg < 90) return `${seg}s`;
+  const min = Math.round(seg / 60);
+  if (min < 90) return `${min}min`;
+  return `${Math.floor(min / 60)}h${String(min % 60).padStart(2, "0")}`;
 }
 
 async function falar(corpo) {
@@ -86,7 +94,7 @@ async function falarComTeimosia(corpo) {
       ultimoErro = erro;
       // 4xx é o servidor dizendo que o pedido está errado; repetir só demora
       // mais para chegar à mesma resposta.
-      if (/^4dd /.test(erro.message)) throw erro;
+      if (/^4\d\d /.test(erro.message)) throw erro;
       if (tentativa === TENTATIVAS_POR_LOTE) break;
       console.log(`  reenviando (${tentativa}/${TENTATIVAS_POR_LOTE}): ${erro.message}`);
       await new Promise((r) => setTimeout(r, 2000 * tentativa));
@@ -141,6 +149,7 @@ function dividirEmLotes(arvore) {
  */
 function criarReporter(scanId) {
   let ultimo = 0;
+  let mudo = 0;
   return async (etapa, total, processados, forcar = false) => {
     const agora = Date.now();
     if (!forcar && agora - ultimo < 1000) return true;
@@ -153,10 +162,23 @@ function criarReporter(scanId) {
         total,
         processados,
       });
+      // Voltar a falar depois de um silêncio é notícia: até ali o painel
+      // mostrava um número velho sem que ninguém soubesse.
+      if (mudo > 0) {
+        console.log(`  painel de volta (${mudo} relato(s) perdidos)`);
+        mudo = 0;
+      }
       return resposta.continuar !== false;
-    } catch {
-      // Rede instável não deve abortar uma varredura em andamento; o
-      // servidor já trata varredura muda como abandonada.
+    } catch (erro) {
+      // Rede instável não deve abortar uma varredura em andamento; o servidor
+      // já trata varredura muda como abandonada. Mas o silêncio precisa
+      // aparecer no registro: sem isto o agente segue trabalhando enquanto a
+      // tela congela, e a varredura acaba morrendo com uma explicação que não
+      // é a verdadeira.
+      mudo += 1;
+      if (mudo === 1 || mudo % 30 === 0) {
+        console.log(`  painel não respondeu (${mudo}x): ${erro.message}`);
+      }
       return true;
     }
   };
@@ -165,24 +187,54 @@ function criarReporter(scanId) {
 async function executar(varredura) {
   const { id: scanId, completa, biblioteca } = varredura;
   const reportar = criarReporter(scanId);
+  // Marcado antes de tocar no disco: é daqui que saem tanto a estimativa do
+  // que falta quanto o "pronto em" do fim.
+  const comecou = Date.now();
 
+  console.log("");
   console.log(
-    `\n  ${biblioteca.nome}` +
-      `\n  ${biblioteca.caminho}` +
-      (completa ? "  (completa)" : ""),
+    `  varredura ${completa ? "completa" : "incremental"} · ${biblioteca.nome}`,
   );
+  console.log(`  ${biblioteca.caminho}`);
 
-  await reportar("varrendo a pasta", 0, 0, true);
-  const novelas = await lerBiblioteca(biblioteca.caminho);
+  await reportar("abrindo a pasta", 0, 0, true);
+
+  // A leitura da pasta era o trecho mudo da varredura: entre pegar o trabalho
+  // e começar os metadados ninguém sabia se havia progresso. Agora cada pasta
+  // lida vira um relato — e é ele que também mantém a varredura viva, porque
+  // silêncio longo o servidor conta como agente morto.
+  let ultimaPasta = 0;
+  const novelas = await lerBiblioteca(biblioteca.caminho, (lidas, total, titulo) => {
+    void reportar(`lendo pasta ${lidas}/${total} · ${titulo}`, 0, 0);
+    // No registro, uma linha a cada 25 pastas: o bastante para ver a coisa
+    // andar, longe de uma linha por pasta que ninguém consegue ler.
+    if (lidas === total || lidas - ultimaPasta >= 25) {
+      ultimaPasta = lidas;
+      console.log(`  pastas lidas: ${lidas}/${total}`);
+    }
+  });
 
   const totalArquivos = novelas.reduce((s, n) => s + n.episodios.length, 0);
-  console.log(`  ${novelas.length} novelas · ${totalArquivos} arquivos`);
-  if (!(await reportar("lendo metadados", totalArquivos, 0, true))) {
+  const vazias = novelas.filter((n) => n.episodios.length === 0).length;
+  console.log(
+    `  ${novelas.length} novela(s) · ${totalArquivos} arquivo(s)` +
+      (vazias > 0 ? ` · ${vazias} pasta(s) sem episódio` : ""),
+  );
+
+  const etapaMetadados = completa
+    ? "lendo metadados e conferindo checksum"
+    : "lendo metadados";
+  if (!(await reportar(etapaMetadados, totalArquivos, 0, true))) {
     console.log("  cancelada pelo painel");
     return;
   }
+  if (completa) {
+    console.log("  completa: cada arquivo é sondado e somado de novo — demora");
+  }
 
   let processados = 0;
+  let ultimoRelato = 0;
+  const comecouMetadados = Date.now();
   const arvore = [];
 
   for (const novela of novelas) {
@@ -239,9 +291,36 @@ async function executar(varredura) {
       });
 
       processados += 1;
-      if (!(await reportar("lendo metadados", totalArquivos, processados))) {
+      // A etapa nomeia a novela porque "4200 de 8899" não diz onde a
+      // varredura está — e é o nome que deixa perceber que ela travou num
+      // arquivo específico.
+      if (
+        !(await reportar(
+          `${etapaMetadados} · ${novela.titulo}`,
+          totalArquivos,
+          processados,
+        ))
+      ) {
         console.log("  cancelada pelo painel");
         return;
+      }
+      if (processados - ultimoRelato >= 500 || processados === totalArquivos) {
+        ultimoRelato = processados;
+        // Conta da fase de metadados, não da varredura: incluir a leitura da
+        // pasta faz a estimativa despencar de "17s" para "0s" enquanto o
+        // tempo morto se dilui, e uma estimativa que muda assim não é uma
+        // estimativa — é um número que se desmente sozinho.
+        const decorrido = (Date.now() - comecouMetadados) / 1000;
+        const porSeg = processados / Math.max(0.001, decorrido);
+        const faltam = Math.round((totalArquivos - processados) / Math.max(0.1, porSeg));
+        // A estimativa só entra quando diz algo. Numa varredura incremental os
+        // metadados vêm do manifesto e a fase inteira dura segundos: repetir
+        // "faltam ~0s" dezessete vezes é ruído com cara de informação.
+        const vaiDemorar = processados < totalArquivos && faltam >= 5;
+        console.log(
+          `  metadados: ${processados}/${totalArquivos}` +
+            (vaiDemorar ? ` · faltam ~${duracao(faltam)}` : ""),
+        );
       }
     }
 
@@ -264,9 +343,12 @@ async function executar(varredura) {
   }
 
   const lotes = dividirEmLotes(arvore);
-  console.log(`  enviando em ${lotes.length} lote(s)`);
+  console.log(
+    `  enviando ao servidor: ${lotes.length} lote(s), ${totalArquivos} arquivo(s)`,
+  );
 
   let resposta;
+  let enviados = 0;
   for (const [i, lote] of lotes.entries()) {
     const ultimo = i === lotes.length - 1;
     const seguir = await reportar(
@@ -289,15 +371,36 @@ async function executar(varredura) {
       ultimo,
       novelas: lote,
     });
+
+    enviados += lote.reduce((s, n) => s + n.episodios.length, 0);
+    console.log(
+      `  lote ${i + 1}/${lotes.length} · ${lote.length} novela(s) · ` +
+        `${enviados}/${totalArquivos} arquivo(s) no servidor` +
+        (ultimo ? " · importando e conferindo o que sumiu" : ""),
+    );
   }
   const r = resposta.resultado;
 
+  console.log(`  pronto em ${duracao(Math.round((Date.now() - comecou) / 1000))}`);
   console.log(
-    `  pronto: ${r.novelasCriadas} novela(s) nova(s), ${r.novelasAtualizadas} atualizada(s)` +
-      `\n          ${r.episodiosCriados} episódio(s) novo(s), ${r.arquivosIndexados} arquivo(s) indexado(s)` +
-      (r.arquivosAusentes > 0 ? `\n          ${r.arquivosAusentes} sumiram do disco` : ""),
+    `    ${r.novelasCriadas} novela(s) nova(s), ${r.novelasAtualizadas} atualizada(s)`,
   );
-  for (const aviso of r.avisos.slice(0, 5)) console.log(`          ! ${aviso}`);
+  console.log(
+    `    ${r.episodiosCriados} episódio(s) novo(s), ${r.episodiosAtualizados} atualizado(s)`,
+  );
+  console.log(`    ${r.arquivosIndexados} arquivo(s) indexado(s)`);
+  if (r.arquivosAusentes > 0) {
+    console.log(
+      `    ${r.arquivosAusentes} sumiram do disco` +
+        (r.episodiosRemovidos > 0
+          ? `, ${r.episodiosRemovidos} episódio(s) retirado(s) do catálogo`
+          : " (catálogo preservado)"),
+    );
+  }
+  for (const aviso of r.avisos.slice(0, 5)) console.log(`    ! ${aviso}`);
+  if (r.avisos.length > 5) {
+    console.log(`    e mais ${r.avisos.length - 5} aviso(s), no histórico do painel`);
+  }
 }
 
 async function umCiclo() {

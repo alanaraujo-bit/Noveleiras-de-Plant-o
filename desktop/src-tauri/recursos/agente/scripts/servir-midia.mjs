@@ -24,6 +24,7 @@ import { createServer } from "node:http";
 import { extname, join, normalize, resolve, sep } from "node:path";
 
 import { caminhoDentroDaRaiz } from "../lib/media/biblioteca.ts";
+import { validarAssinatura } from "../lib/media/assinatura.ts";
 import { ehOPrograma } from "./lib-agente.mjs";
 
 function argumento(nome, padrao) {
@@ -69,6 +70,48 @@ function caminhoSeguro(chave) {
   return caminhoDentroDaRaiz(RAIZ, chave, { resolve, join, normalize, sep });
 }
 
+/**
+ * Extensões que exigem link assinado.
+ *
+ * Só o vídeo. Capas e miniaturas saem por esta mesma porta — é por isso que
+ * `.jpg` está no mapa de tipos — e aparecem no catálogo para quem sequer tem
+ * conta: são material de vitrine, não o produto pago. Exigir assinatura nelas
+ * deixaria a grade inteira com imagem quebrada sem proteger nada.
+ */
+const PROTEGIDAS = new Set([".mp4", ".m4v", ".mov", ".mkv", ".webm", ".m3u8", ".ts"]);
+
+/**
+ * Confere o link assinado. Devolve `null` quando pode servir.
+ *
+ * Sem `MEDIA_SIGNING_SECRET` configurado, nada é exigido: é o modo de
+ * desenvolvimento local. Os dois lados destravam juntos — o aplicativo só
+ * assina quando tem o segredo, e o servidor só cobra quando tem o mesmo —, o
+ * que evita o estado meio-protegido em que um exige e o outro não fornece.
+ */
+function conferirAssinatura(chave, url) {
+  const segredo = process.env.MEDIA_SIGNING_SECRET?.trim();
+  if (!segredo) return null;
+  if (!PROTEGIDAS.has(extname(chave).toLowerCase())) return null;
+
+  const resultado = validarAssinatura(
+    chave,
+    {
+      exp: url.searchParams.get("exp"),
+      u: url.searchParams.get("u"),
+      sig: url.searchParams.get("sig"),
+    },
+    segredo,
+  );
+
+  if (resultado.valida) return null;
+
+  // 410 para link vencido e 403 para forjado: o player distingue os dois e
+  // renova o primeiro em silêncio, em vez de mostrar erro a quem tem direito.
+  return resultado.motivo === "expirada"
+    ? { status: 410, mensagem: "link expirado" }
+    : { status: 403, mensagem: "link sem autorizacao" };
+}
+
 function cabecalhosComuns(resposta) {
   // O player está em outro domínio; sem isto o navegador recusa a resposta.
   resposta.setHeader("access-control-allow-origin", "*");
@@ -98,9 +141,20 @@ const servidor = createServer(async (requisicao, resposta) => {
     return;
   }
 
-  const caminho = caminhoSeguro(url.pathname.replace(/^\/+/, ""));
+  const chave = url.pathname.replace(/^\/+/, "");
+
+  const caminho = caminhoSeguro(chave);
   if (!caminho) {
     resposta.writeHead(403).end("fora da biblioteca");
+    return;
+  }
+
+  // Autorização do link. Sem isto, a rota do aplicativo verificava o direito
+  // de assistir e entregava uma URL permanente: quem copiasse o endereço uma
+  // vez assistiria para sempre, e poderia repassá-lo.
+  const negado = conferirAssinatura(chave, url);
+  if (negado) {
+    resposta.writeHead(negado.status).end(negado.mensagem);
     return;
   }
 
