@@ -226,6 +226,11 @@ function traduzirStatusAssinatura(status: string | null): EstadoProvedor {
       return "APPROVED";
     case "pending":
       return "PENDING";
+    // `canceled` não é a grafia que o Mercado Pago usa hoje, mas ler as duas
+    // é grátis e evita que uma padronização do lado deles vire "estado
+    // desconhecido" — que aqui significaria não reconhecer um cancelamento.
+    case "canceled":
+      return "CANCELED";
     case "paused":
       return "PENDING";
     case "cancelled":
@@ -572,11 +577,25 @@ export class MercadoPago implements ProvedorDePagamento {
     }
   }
 
-  async cancelarAssinatura(externalId: string): Promise<void> {
-    await chamar(`/preapproval/${encodeURIComponent(externalId)}`, {
-      method: "PUT",
-      body: JSON.stringify({ status: "cancelled" }),
-    });
+  /**
+   * `"cancelled"`, com dois L.
+   *
+   * Conferido na referência do Mercado Pago e no SDK oficial deles: os estados
+   * de um preapproval são `pending`, `authorized`, `paused` e `cancelled`. A
+   * grafia americana (`canceled`) **não** é aceita — e como a API responde
+   * 400 genérico para status inválido, errar aqui é o tipo de coisa que passa
+   * despercebida até alguém tentar cancelar de verdade.
+   */
+  async cancelarAssinatura(externalId: string): Promise<EstadoProvedor> {
+    const resposta = await chamar<{ status?: string }>(
+      `/preapproval/${encodeURIComponent(externalId)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ status: "cancelled" }),
+      },
+    );
+
+    return traduzirStatusAssinatura(resposta.status ?? null);
   }
 
   async reembolsar(

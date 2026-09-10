@@ -92,6 +92,11 @@ const bancoFalso = {
 
 vi.mock("@/lib/db", () => ({ db: bancoFalso }));
 
+/** `lib/painel/log` e `server-only`, que nao resolve no ambiente de teste. */
+vi.mock("@/lib/painel/log", () => ({
+  log: { info: () => {}, warn: () => {}, error: () => {} },
+}));
+
 // -------------------------------------------------------- provedor falso
 
 const PREFERENCIA = "pref-abc";

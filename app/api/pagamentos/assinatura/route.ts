@@ -84,7 +84,15 @@ export async function DELETE() {
     );
   } catch (erro) {
     if (erro instanceof ErroDeCobranca) {
-      return NextResponse.json({ erro: erro.message }, { status: 400 });
+      // 502 e não 400 quando quem recusou foi o provedor: não houve erro da
+      // pessoa, nada foi alterado, e tentar de novo é a ação certa. O 400
+      // continua valendo para "não há assinatura ativa".
+      const status =
+        erro.codigo === "cancelamento-nao-confirmado" ? 502 : 400;
+      return NextResponse.json(
+        { erro: erro.message, codigo: erro.codigo }, // pode tentar de novo
+        { status },
+      );
     }
     console.error("[assinatura] cancelamento falhou", erro);
     return NextResponse.json(

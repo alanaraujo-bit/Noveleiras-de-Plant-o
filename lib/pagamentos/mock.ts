@@ -175,9 +175,11 @@ export class ProvedorMock implements ProvedorDePagamento {
     };
   }
 
-  async cancelarAssinatura(externalId: string): Promise<void> {
+  async cancelarAssinatura(externalId: string): Promise<EstadoProvedor> {
     const r = registros.get(externalId);
-    if (r) registros.set(externalId, { ...r, status: "CANCELED" });
+    if (!r) throw new Error("assinatura inexistente no provedor falso");
+    registros.set(externalId, { ...r, status: "CANCELED" });
+    return "CANCELED";
   }
 
   async reembolsar(

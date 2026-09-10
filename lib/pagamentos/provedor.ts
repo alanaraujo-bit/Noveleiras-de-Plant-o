@@ -176,7 +176,15 @@ export interface ProvedorDePagamento {
 
   consultarAssinatura(externalId: string): Promise<ConsultaAssinatura | null>;
 
-  cancelarAssinatura(externalId: string): Promise<void>;
+  /**
+   * Cancela a assinatura no provedor e devolve **o estado que ele confirmou**.
+   *
+   * Devolver `void` era o problema: sem resposta não havia como saber se o
+   * cancelamento pegou, e o chamador gravava "cancelada" localmente na fé. Se
+   * a chamada falhasse, nosso banco dizia uma coisa e o provedor seguia
+   * cobrando.
+   */
+  cancelarAssinatura(externalId: string): Promise<EstadoProvedor>;
 
   reembolsar(
     externalId: string,

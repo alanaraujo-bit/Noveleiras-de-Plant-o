@@ -27,6 +27,7 @@ import {
   revogarDireitos,
 } from "@/lib/access/direitos";
 import { db } from "@/lib/db";
+import { log } from "@/lib/painel/log";
 
 import { podeUsarMock, provedorDePagamento } from "./index";
 import {
@@ -52,7 +53,8 @@ export class ErroDeCobranca extends Error {
       | "novela-invalida"
       | "ja-possui"
       | "sem-assinatura"
-      | "metodo-invalido",
+      | "metodo-invalido"
+      | "cancelamento-nao-confirmado",
   ) {
     super(message);
     this.name = "ErroDeCobranca";
@@ -1216,19 +1218,25 @@ export async function cancelarAssinaturaDoUsuario(
   }
 
   const externo = assinatura.externalPreapprovalId ?? assinatura.externalId;
+
+  // O que o provedor confirmou. Sem preapproval não há lado de lá a confirmar
+  // — assinatura de legado ou do provedor falso — e o cancelamento é local.
+  let statusDoProvedor: EstadoProvedor | null = null;
+
   if (externo) {
-    // Falhar aqui não pode impedir o cancelamento do lado de cá: a pessoa
-    // pediu, e a reconciliação seguinte acerta o provedor.
-    try {
-      await provedorDePagamento().cancelarAssinatura(externo);
-    } catch {
-      // Silenciado de propósito; o evento abaixo registra o pedido.
-    }
+    statusDoProvedor = await confirmarCancelamentoNoProvedor(
+      externo,
+      userId,
+      assinatura.id,
+    );
   }
 
   await db.$transaction([
     db.subscription.update({
       where: { userId },
+      // `status` continua ACTIVE e `currentPeriodEnd` intocado: quem pagou até
+      // o dia 30 assiste até o dia 30. O direito também não é revogado aqui —
+      // ele expira sozinho no fim do ciclo.
       data: { cancelAtPeriodEnd: true, canceledAt: new Date() },
     }),
     db.subscriptionEvent.create({
@@ -1239,12 +1247,95 @@ export async function cancelarAssinaturaDoUsuario(
         fromStatus: assinatura.status,
         toStatus: assinatura.status,
         periodEnd: assinatura.currentPeriodEnd,
-        payload: {} as Prisma.InputJsonValue,
+        payload: {
+          confirmadoPeloProvedor: statusDoProvedor === "CANCELED",
+          providerStatus: statusDoProvedor,
+          externalPreapprovalId: externo,
+        } as Prisma.InputJsonValue,
       },
     }),
   ]);
 
+  void log.info({
+    channel: "PAYMENTS",
+    message: "Renovação cancelada e confirmada pelo provedor",
+    userId,
+    context: {
+      subscriptionId: assinatura.id,
+      externalPreapprovalId: externo,
+      providerStatus: statusDoProvedor,
+    },
+  });
+
   return { ativoAte: assinatura.currentPeriodEnd };
+}
+
+/**
+ * Cancela no provedor e **exige a confirmação dele** antes de deixar o
+ * chamador gravar qualquer coisa.
+ *
+ * Antes, a falha era engolida num `catch` vazio: se o `PUT /preapproval`
+ * quebrasse, o nosso banco dizia "cancelada" e o Mercado Pago seguia com a
+ * assinatura viva — cobrando no ciclo seguinte, sem ninguém saber. Nada
+ * reconsulta assinatura periodicamente, então a divergência duraria até a
+ * próxima fatura.
+ *
+ * Duas voltas, e a segunda é o que torna a operação repetível: se o `PUT`
+ * falhar — inclusive porque a assinatura **já estava** cancelada, caso em que
+ * o provedor responde 400 — reconsultamos. Se a reconsulta disser CANCELED, o
+ * desfecho desejado já é o vigente e seguimos em frente.
+ *
+ * Lança `ErroDeCobranca` quando não dá para confirmar. O chamador não grava, a
+ * assinatura fica como está, e a pessoa pode tentar de novo.
+ */
+async function confirmarCancelamentoNoProvedor(
+  externalId: string,
+  userId: string,
+  subscriptionId: string,
+): Promise<EstadoProvedor> {
+  const provedor = provedorDePagamento();
+  let motivo: unknown = null;
+  let status: EstadoProvedor | null = null;
+
+  try {
+    status = await provedor.cancelarAssinatura(externalId);
+  } catch (erro) {
+    motivo = erro;
+  }
+
+  if (status !== "CANCELED") {
+    try {
+      const consulta = await provedor.consultarAssinatura(externalId);
+      status = consulta?.status ?? null;
+    } catch (erro) {
+      motivo = motivo ?? erro;
+    }
+  }
+
+  if (status === "CANCELED") return status;
+
+  // Só a mensagem, nunca o objeto de erro inteiro: ele carrega o corpo da
+  // resposta do provedor, que pode trazer identificadores da conta.
+  const detalhe =
+    motivo instanceof Error ? motivo.message : motivo ? String(motivo) : null;
+
+  void log.error({
+    channel: "PAYMENTS",
+    message: "Cancelamento recusado pelo provedor — assinatura preservada",
+    userId,
+    context: {
+      subscriptionId,
+      externalPreapprovalId: externalId,
+      providerStatus: status,
+      erro: detalhe,
+    },
+  });
+
+  throw new ErroDeCobranca(
+    "O provedor de pagamento não confirmou o cancelamento. " +
+      "Sua assinatura segue ativa e nada foi alterado — tente de novo em instantes.",
+    "cancelamento-nao-confirmado",
+  );
 }
 
 /**
