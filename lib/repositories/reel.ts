@@ -5,6 +5,13 @@ import { posterUrl, resolveMedia, type MediaProviderName } from "@/lib/media/res
 import { assinarUrl, segredoDeMidia } from "@/lib/media/assinatura";
 import { canWatchEpisode, type Entitlement } from "@/lib/access/entitlements";
 import { filtroDeComentariosVisiveis } from "@/lib/repositories/episodio-social";
+import {
+  corpusDoCatalogo,
+  FORCA_MINIMA,
+  perfilDeGosto,
+  pontuar,
+  type Pontuacao,
+} from "@/lib/repositories/afinidade";
 import type { Fonte } from "@/lib/player/reproducao";
 
 /**
@@ -24,8 +31,10 @@ import type { Fonte } from "@/lib/player/reproducao";
  * novela por `/api/reel` e ela é costurada logo abaixo — a passagem de
  * "descobri" para "estou assistindo" acontece sem tela intermediária.
  *
- * Nada aqui inventa relevância: a ordenação usa gênero preferido declarado no
- * onboarding, destaque editorial e contagem de acessos já gravada.
+ * A ordem da descoberta vem de : um perfil de
+ * gosto derivado do que a pessoa assistiu, curtiu, comentou, enviou e
+ * descartou. Nada é inventado — cada peso vem de uma linha datada, e o perfil
+ * é recalculado a cada montagem em vez de guardado.
  */
 
 /** Episódios da novela em andamento que entram de uma vez. */
@@ -372,12 +381,153 @@ export async function continuacaoDaNovela({
 // ---------------------------------------------------------------- ganchos
 
 /**
- * Ganchos de novelas que a pessoa ainda não abriu.
+ * Fatia da fila reservada a obras fora do perfil.
  *
- * A ordenação é declaradamente simples e explicável: gênero que a pessoa
- * escolheu no onboarding primeiro, depois destaque editorial, depois acessos.
- * Não há modelo de recomendação escondido — quando existir, ele entra aqui e
- * o resto da fila não muda.
+ * É o que impede o feed de fechar sobre si mesmo. Um recomendador que só serve
+ * o que já casa com o histórico só consegue confirmar o que já sabe: a pessoa
+ * nunca vê uma obra de um tipo que ainda não experimentou, então nunca gera
+ * sinal sobre ela, então ela nunca sobe. Uma em cada quatro lâminas de
+ * descoberta vem de fora justamente para o perfil continuar aprendendo.
+ */
+const FATIA_DE_EXPLORACAO = 0.25;
+
+/**
+ * Largura da faixa dentro da qual duas obras contam como empatadas.
+ *
+ * Relativa à melhor pontuação, e não absoluta: a escala do modelo muda com o
+ * tamanho do perfil, e um limiar fixo viraria "tudo empatado" para quem tem
+ * muito histórico e "nada empatado" para quem tem pouco.
+ */
+const LARGURA_DA_FAIXA = 0.12;
+
+/**
+ * Embaralhamento determinístico dentro de faixas de pontuação.
+ *
+ * Duas obras separadas por um centésimo de ponto não estão de fato ordenadas —
+ * essa diferença é ruído do modelo. Sortear entre elas é mais honesto do que
+ * fingir uma ordem, e é o que faz uma recarga trazer coisa nova sem descer
+ * para o fundo do ranking.
+ */
+function baralharComSemente<T>(itens: T[], semente: number): T[] {
+  const copia = [...itens];
+  let estado = semente || 1;
+  for (let i = copia.length - 1; i > 0; i--) {
+    // Gerador congruencial simples: previsível a partir da semente, que é o
+    // que permite reproduzir uma fila ao investigar o que a pessoa viu.
+    estado = (estado * 1664525 + 1013904223) % 4294967296;
+    const j = estado % (i + 1);
+    [copia[i], copia[j]] = [copia[j], copia[i]];
+  }
+  return copia;
+}
+
+type Candidata<T> = { novela: T; pontuacao: Pontuacao };
+
+/**
+ * Escolhe as obras da fila misturando o que o perfil pede com o que ele ainda
+ * não conhece.
+ *
+ * A ordem final é intercalada, não concatenada: as de exploração entram
+ * espalhadas entre as do perfil. Um bloco de "outras coisas" no fim da fila
+ * seria descartado em sequência — e é justamente o descarte em sequência que o
+ * limiar de permanência interpreta como desinteresse, envenenando o perfil com
+ * um sinal que o próprio produto fabricou.
+ */
+function escolherComExploracao<T extends { id: string }>({
+  pontuadas,
+  quantidade,
+  perfilDecide,
+  semente,
+}: {
+  pontuadas: Candidata<T>[];
+  quantidade: number;
+  perfilDecide: boolean;
+  semente: number;
+}): Candidata<T>[] {
+  if (pontuadas.length === 0) return [];
+
+  const porPontuacao = [...pontuadas].sort(
+    (a, b) => b.pontuacao.valor - a.pontuacao.valor,
+  );
+
+  // Sem perfil formado, o sorteio é a única fonte de variação — e é o
+  // suficiente: quem acabou de chegar precisa ver o catálogo, não um recorte.
+  if (!perfilDecide) {
+    return baralharComSemente(porPontuacao, semente).slice(0, quantidade);
+  }
+
+  // Faixas de empate: dentro de cada uma a ordem é sorteada.
+  const melhor = porPontuacao[0]?.pontuacao.valor ?? 0;
+  const largura = Math.max(0.001, Math.abs(melhor) * LARGURA_DA_FAIXA);
+  const faixas: Candidata<T>[][] = [];
+  for (const item of porPontuacao) {
+    const faixa = Math.floor(item.pontuacao.valor / largura);
+    const ultima = faixas[faixas.length - 1];
+    if (
+      ultima &&
+      Math.floor(ultima[0].pontuacao.valor / largura) === faixa
+    ) {
+      ultima.push(item);
+    } else {
+      faixas.push([item]);
+    }
+  }
+
+  const doPerfil = faixas.flatMap((faixa, i) =>
+    baralharComSemente(faixa, semente + i),
+  );
+
+  // Exploração: sorteada do fundo da lista, onde o perfil não vê valor. É de
+  // lá que vem a chance de descobrir um gosto que ainda não existe.
+  const alvoDeExploracao = Math.max(
+    1,
+    Math.round(quantidade * FATIA_DE_EXPLORACAO),
+  );
+  const cauda = porPontuacao.slice(Math.floor(porPontuacao.length / 2));
+  const exploratorias = baralharComSemente(cauda, semente + 977).slice(
+    0,
+    alvoDeExploracao,
+  );
+  const idsExploratorios = new Set(exploratorias.map((e) => e.novela.id));
+
+  const preferidas = doPerfil.filter((c) => !idsExploratorios.has(c.novela.id));
+
+  // Intercala: a cada três do perfil, uma de fora.
+  const resultado: Candidata<T>[] = [];
+  let iPreferida = 0;
+  let iExploratoria = 0;
+  while (
+    resultado.length < quantidade &&
+    (iPreferida < preferidas.length || iExploratoria < exploratorias.length)
+  ) {
+    const toca = resultado.length > 0 && (resultado.length + 1) % 4 === 0;
+    const proxima =
+      toca && iExploratoria < exploratorias.length
+        ? exploratorias[iExploratoria++]
+        : iPreferida < preferidas.length
+          ? preferidas[iPreferida++]
+          : exploratorias[iExploratoria++];
+    if (proxima) resultado.push(proxima);
+  }
+  return resultado;
+}
+
+/**
+ * Ganchos de novelas que a pessoa ainda não abriu, na ordem que o gosto dela
+ * indica.
+ *
+ * A ordenação tem três camadas, e todas são reconstruíveis:
+ *
+ * 1. **Perfil de gosto** (`lib/repositories/afinidade`), derivado do que a
+ *    pessoa assistiu, curtiu, comentou, enviou e descartou. Só assume o
+ *    comando quando há sinal suficiente — dois toques não são um gosto.
+ * 2. **Exploração**, uma fatia fixa reservada a obras fora do perfil, para o
+ *    modelo não parar de aprender.
+ * 3. **Sorteio dentro de faixas**, para que uma recarga traga variação sem
+ *    trocar relevância por aleatoriedade.
+ *
+ * Obras que a pessoa já descartou repetidamente ficam de fora: ela já disse
+ * não, e insistir é o que faz um feed parecer surdo.
  */
 export async function ganchosDeDescoberta({
   viewerId,
@@ -386,6 +536,7 @@ export async function ganchosDeDescoberta({
   excluirNovelas,
   excluirEpisodios = new Set<string>(),
   quantidade = LOTE_GANCHOS,
+  semente,
 }: {
   viewerId: string | null;
   entitlement: Entitlement;
@@ -393,17 +544,31 @@ export async function ganchosDeDescoberta({
   excluirNovelas: Set<string>;
   excluirEpisodios?: Set<string>;
   quantidade?: number;
+  /** Muda a cada recarga para variar a ordem dentro das faixas de pontuação. */
+  semente?: number;
 }): Promise<LaminaReel[]> {
+  const perfil = viewerId ? await perfilDeGosto(viewerId) : null;
+  const corpus = await corpusDoCatalogo();
+
+  const fora = new Set(excluirNovelas);
+  // O que já foi engajado não volta como descoberta: aquilo já é série, e
+  // reaparecer como "novidade" desmente o que a pessoa acabou de assistir.
+  if (perfil) {
+    for (const id of perfil.engajadas) fora.add(id);
+    for (const id of perfil.recusadas) fora.add(id);
+  }
+
   const candidatas = await db.novela.findMany({
     where: {
-      id: { notIn: [...excluirNovelas] },
+      id: { notIn: [...fora] },
       status: { not: "COMING_SOON" },
       episodes: { some: {} },
     },
     orderBy: [{ isFeatured: "desc" }, { viewCount: "desc" }, { releasedAt: "desc" }],
-    // Folga proposital: a reordenação por afinidade acontece em memória, então
-    // é preciso mais candidatas do que lâminas para a preferência ter efeito.
-    take: quantidade * 3,
+    // A pontuação acontece em memória, então é preciso um conjunto bem maior
+    // que a fila para o perfil ter de onde escolher. Sem folga, ordenar o que
+    // o banco já ordenou por popularidade só devolveria popularidade.
+    take: Math.max(60, quantidade * 8),
     select: {
       ...NOVELA_SELECT,
       isFeatured: true,
@@ -413,14 +578,25 @@ export async function ganchosDeDescoberta({
     },
   });
 
-  const preferidos = new Set(generosPreferidos);
-  const ordenadas = candidatas
-    .map((novela) => ({
-      novela,
-      afim: novela.genres.some((g) => preferidos.has(g.genreId)),
-    }))
-    .sort((a, b) => Number(b.afim) - Number(a.afim))
-    .slice(0, quantidade);
+  const escolhidos = new Set(generosPreferidos);
+  const perfilDecide = perfil !== null && perfil.forca >= FORCA_MINIMA;
+
+  const pontuadas = candidatas.map((novela) => ({
+    novela,
+    pontuacao: perfil
+      ? pontuar(novela.id, perfil, corpus, {
+          generosEscolhidos: escolhidos,
+          popularidade: novela.viewCount,
+        })
+      : { valor: Math.log1p(novela.viewCount), motivo: "popular" as const },
+  }));
+
+  const ordenadas = escolherComExploracao({
+    pontuadas,
+    quantidade,
+    perfilDecide,
+    semente: semente ?? 1,
+  });
 
   if (ordenadas.length === 0) return [];
 
@@ -478,10 +654,13 @@ export async function filaInicial({
   viewerId,
   entitlement,
   generosPreferidos,
+  semente,
 }: {
   viewerId: string | null;
   entitlement: Entitlement;
   generosPreferidos: string[];
+  /** Varia a ordem entre recargas. Ausente na abertura, presente ao recarregar. */
+  semente?: number;
 }): Promise<FilaInicial> {
   const laminas: LaminaReel[] = [];
   const novelasUsadas = new Set<string>();
@@ -523,6 +702,7 @@ export async function filaInicial({
     generosPreferidos,
     excluirNovelas: novelasUsadas,
     excluirEpisodios: episodiosUsados,
+    semente,
   });
 
   return { laminas: [...laminas, ...ganchos], retomando };
@@ -539,16 +719,20 @@ export async function maisGanchos({
   entitlement,
   generosPreferidos,
   novelasNaFila,
+  semente,
 }: {
   viewerId: string | null;
   entitlement: Entitlement;
   generosPreferidos: string[];
   novelasNaFila: string[];
+  /** Varia a ordem entre páginas, para a fila não repetir a mesma cauda. */
+  semente?: number;
 }): Promise<LaminaReel[]> {
   return ganchosDeDescoberta({
     viewerId,
     entitlement,
     generosPreferidos,
     excluirNovelas: new Set(novelasNaFila),
+    semente,
   });
 }

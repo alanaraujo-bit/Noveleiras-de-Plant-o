@@ -263,6 +263,9 @@ export async function carregarMaisLaminas(novelasNaFila: string[]) {
     entitlement: viewer?.entitlement ?? ANONYMOUS_ENTITLEMENT,
     generosPreferidos: viewer?.preferences.favoriteGenreIds ?? [],
     novelasNaFila,
+    // A semente vem do tamanho da fila: páginas diferentes sorteiam ordens
+    // diferentes dentro das faixas de empate, em vez de repetir a mesma cauda.
+    semente: novelasNaFila.length * 7919 + 13,
   });
   return { ok: true as const, laminas };
 }
@@ -285,17 +288,23 @@ export async function recarregarFila() {
   const viewer = await getViewer();
   if (!viewer) return FALHA_SEM_CONTA;
 
+  // A semente do relógio é o que faz uma recarga trazer outra ordem. Ela
+  // varia por minuto, não por milissegundo: dois toques seguidos por engano
+  // devolvem a mesma fila, o que é o certo — a pessoa não pediu duas filas.
+  const semente = Math.floor(Date.now() / 60_000);
+
   const { laminas, retomando } = await filaInicial({
     viewerId: viewer.id,
     entitlement: viewer.entitlement,
     generosPreferidos: viewer.preferences.favoriteGenreIds,
+    semente,
   });
 
   await track({
     type: "REEL_OPEN",
     userId: viewer.id,
     sessionId: viewer.appSessionId,
-    payload: { laminas: laminas.length, retomando, origem: "recarga" },
+    payload: { laminas: laminas.length, retomando, origem: "recarga", semente },
   });
 
   return { ok: true as const, laminas };
