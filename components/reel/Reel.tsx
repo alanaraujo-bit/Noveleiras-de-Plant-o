@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { AnimatePresence } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
 
 import { Comentarios } from "@/components/reel/Comentarios";
 import { FolhaEnviar } from "@/components/reel/FolhaEnviar";
@@ -13,9 +13,11 @@ import {
   carregarMaisLaminas,
   curtirEpisodio,
   emendarSerie,
+  recarregarFila,
   registrarDescarte,
   registrarPermanencia,
 } from "@/lib/actions/reel";
+import { ouvirAbaReativada } from "@/lib/shell/aba-reativada";
 import type { LaminaReel } from "@/lib/repositories/reel";
 
 /**
@@ -358,6 +360,78 @@ export function Reel({
     proximo?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [ativo]);
 
+  // ------------------------------------------------ tocar na aba de novo
+  //
+  // Dois passos, como em qualquer aplicativo do gênero: se a pessoa desceu na
+  // fila, o primeiro toque a leva de volta ao topo; estando no topo, o toque
+  // recarrega. Recarregar direto de dentro da fila apagaria o lugar onde ela
+  // estava sem ela ter pedido isso.
+  const [recarregando, setRecarregando] = useState(false);
+  const recarregandoRef = useRef(false);
+
+  const irAoTopo = useCallback((suave: boolean) => {
+    const trilho = trilhoRef.current;
+    if (!trilho) return;
+    trilho.scrollTo({ top: 0, behavior: suave ? "smooth" : "auto" });
+  }, []);
+
+  const recarregar = useCallback(async () => {
+    if (recarregandoRef.current) return;
+    recarregandoRef.current = true;
+    setRecarregando(true);
+
+    // Um piscar da tela inteira seria pior que a espera. O indicador é uma
+    // pílula no topo; a fila fica onde está até a nova chegar.
+    const resultado = await recarregarFila().catch(() => null);
+
+    if (resultado?.ok && resultado.laminas.length > 0) {
+      // Zerar a permanência registrada permite que a fila nova conte suas
+      // próprias visualizações — sem isso, um episódio repetido entre as duas
+      // filas nunca mais contaria.
+      registradasRef.current = new Set();
+      emendandoRef.current = new Set();
+      setLaminas(resultado.laminas);
+      setAtivo(0);
+      // O salto acontece no mesmo quadro da troca: rolar suavemente por uma
+      // lista que acabou de ser substituída atravessaria lâminas que a pessoa
+      // nunca pediu para ver.
+      irAoTopo(false);
+    } else if (!resultado?.ok) {
+      toast.show("Não deu para atualizar agora.", "ruim");
+    }
+
+    // Um mínimo de permanência do indicador. Uma resposta instantânea faria a
+    // pílula piscar sem que se lesse nada, e o gesto pareceria não ter feito
+    // efeito nenhum.
+    window.setTimeout(() => {
+      setRecarregando(false);
+      recarregandoRef.current = false;
+    }, 260);
+  }, [irAoTopo, toast]);
+
+  useEffect(
+    () =>
+      ouvirAbaReativada("/plantao", () => {
+        const trilho = trilhoRef.current;
+        // Meia lâmina de tolerância. `scrollTop` raramente é zero exato depois
+        // de um encaixe elástico, e exigir zero deixaria o toque sem efeito
+        // justamente na primeira lâmina, onde ele mais é usado.
+        const alturaDaLamina = altura ?? window.innerHeight;
+        const noTopo = !trilho || trilho.scrollTop < alturaDaLamina * 0.5;
+
+        if (noTopo) {
+          // Um toque leve confirma o gesto onde o aparelho permite. É o que
+          // separa "recarregou" de "não aconteceu nada" quando a fila volta
+          // igual — o caso mais comum, já que ela só muda quando algo mudou.
+          navigator.vibrate?.(8);
+          void recarregar();
+        } else {
+          irAoTopo(true);
+        }
+      }),
+    [altura, irAoTopo, recarregar],
+  );
+
   const laminaDaFolha = folha
     ? laminas.find((l) => l.episodio.id === folha.laminaId)
     : undefined;
@@ -408,6 +482,44 @@ export function Reel({
         ))}
       </div>
 
+      {/* Indicador da recarga. Uma pílula que desce do topo, some sozinha e
+          nunca cobre a cena — o oposto de uma tela de carregamento. */}
+      <AnimatePresence>
+        {recarregando ? (
+          <motion.div
+            key="recarregando"
+            initial={{ opacity: 0, y: -28, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -20, scale: 0.92 }}
+            transition={{ type: "spring", stiffness: 480, damping: 32 }}
+            className="pointer-events-none fixed inset-x-0 z-[75] flex justify-center"
+            style={{ top: "calc(var(--safe-t) + 0.75rem)" }}
+          >
+            <span className="flex items-center gap-2 rounded-full bg-black/65 px-3.5 py-2 backdrop-blur-md">
+              <span
+                aria-hidden
+                className="size-3.5 animate-spin rounded-full border-2 border-white/25 border-t-white"
+              />
+              <span className="text-[0.8125rem] font-semibold text-white">
+                Atualizando
+              </span>
+            </span>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
+      {/* A recarga é anunciada por texto para quem usa leitor de tela: a
+          pílula é visual, e o gesto precisa ser perceptível sem ela. */}
+      <span aria-live="polite" className="sr-only">
+        {recarregando ? "Atualizando o plantão" : ""}
+      </span>
+
+      {/* Um `AnimatePresence` por elemento que entra e sai.
+
+          Agrupar os dois num só daria a ele dois filhos, e o segundo entraria
+          sem chave — o que, na conta interna do motion, é a chave vazia. Dois
+          filhos com a mesma chave vazia é uma lista ambígua para o React, que
+          então pode duplicar ou omitir qualquer um deles. */}
       <AnimatePresence>
         {laminaDaFolha && folha?.tipo === "comentarios" ? (
           <Comentarios

@@ -12,7 +12,12 @@ import {
   listarRespostas,
   type ComentarioDeEpisodio,
 } from "@/lib/repositories/episodio-social";
-import { continuacaoDaNovela, maisGanchos, type LaminaReel } from "@/lib/repositories/reel";
+import {
+  continuacaoDaNovela,
+  filaInicial,
+  maisGanchos,
+  type LaminaReel,
+} from "@/lib/repositories/reel";
 import { countEpisodeView } from "@/lib/repositories/progresso";
 import { ANONYMOUS_ENTITLEMENT } from "@/lib/access/entitlements";
 import { track } from "@/lib/analytics/track";
@@ -262,3 +267,36 @@ export async function carregarMaisLaminas(novelasNaFila: string[]) {
   return { ok: true as const, laminas };
 }
 
+/**
+ * Remonta a fila do zero.
+ *
+ * Chamada quando a pessoa toca de novo na aba do Plantão já estando no topo.
+ * É a mesma montagem da abertura do aplicativo — progresso pendente primeiro,
+ * ganchos depois —, então recarregar depois de assistir alguma coisa devolve
+ * uma fila que já sabe onde a pessoa parou.
+ *
+ * O gesto pede um resultado diferente do anterior, e a fila só muda quando
+ * algo mudou de verdade: o que foi assistido, o que entrou no catálogo. Não há
+ * embaralhamento artificial para simular novidade — inventar variação faria a
+ * ordem deixar de ser explicável, que é justamente o que a descoberta aqui não
+ * pode perder.
+ */
+export async function recarregarFila() {
+  const viewer = await getViewer();
+  if (!viewer) return FALHA_SEM_CONTA;
+
+  const { laminas, retomando } = await filaInicial({
+    viewerId: viewer.id,
+    entitlement: viewer.entitlement,
+    generosPreferidos: viewer.preferences.favoriteGenreIds,
+  });
+
+  await track({
+    type: "REEL_OPEN",
+    userId: viewer.id,
+    sessionId: viewer.appSessionId,
+    payload: { laminas: laminas.length, retomando, origem: "recarga" },
+  });
+
+  return { ok: true as const, laminas };
+}

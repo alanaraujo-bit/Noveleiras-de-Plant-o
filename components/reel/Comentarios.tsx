@@ -369,6 +369,7 @@ export function Comentarios({
                         <AnimatePresence initial={false}>
                           {aberta ? (
                             <motion.ul
+                              key="respostas"
                               initial={{ height: 0, opacity: 0 }}
                               animate={{ height: "auto", opacity: 1 }}
                               exit={{ height: 0, opacity: 0 }}
@@ -421,6 +422,7 @@ export function Comentarios({
             <AnimatePresence>
               {respondendoA ? (
                 <motion.div
+                  key="respondendo"
                   initial={{ height: 0, opacity: 0 }}
                   animate={{ height: "auto", opacity: 1 }}
                   exit={{ height: 0, opacity: 0 }}

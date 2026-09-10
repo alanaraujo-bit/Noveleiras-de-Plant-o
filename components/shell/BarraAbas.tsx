@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "motion/react";
 
+import { avisarAbaReativada } from "@/lib/shell/aba-reativada";
 import {
   IconeBusca,
   IconeCatalogo,
@@ -22,6 +23,10 @@ import {
  *
  * Sobre o reel a barra fica sem fundo: uma faixa opaca cortando o rodapé de um
  * vídeo em tela cheia devolve a moldura de site que o reel existe para tirar.
+ *
+ * Tocar na aba em que já se está não navega: avisa a tela, que decide o que
+ * fazer. Navegar para a rota atual não produz efeito nenhum no roteador, e a
+ * pessoa ficaria com a impressão de um botão morto.
  */
 
 const ABAS = [
@@ -54,6 +59,11 @@ export function BarraAbas() {
               <Link
                 href={href}
                 aria-current={ativo ? "page" : undefined}
+                onClick={(evento) => {
+                  if (!ativo) return;
+                  evento.preventDefault();
+                  avisarAbaReativada(href);
+                }}
                 className="relative flex h-full flex-col items-center justify-center gap-1 pt-1.5 outline-offset-[-6px]"
               >
                 {ativo && !sobreReel ? (

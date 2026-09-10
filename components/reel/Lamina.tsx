@@ -526,6 +526,7 @@ export function Lamina({
       <AnimatePresence>
         {turbo ? (
           <motion.div
+            key="turbo"
             initial={{ opacity: 0, y: -6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -6 }}
@@ -566,6 +567,7 @@ export function Lamina({
       <AnimatePresence>
         {ativa && !tocando && !bloqueada && !falhou && fonte ? (
           <motion.span
+            key="pausa"
             initial={{ opacity: 0, scale: 0.85 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 1.1 }}
@@ -585,6 +587,7 @@ export function Lamina({
       <AnimatePresence>
         {ativa && !somLigado && !bloqueada ? (
           <motion.button
+            key="som"
             type="button"
             initial={{ opacity: 0, y: -8 }}
             animate={{ opacity: 1, y: 0 }}
