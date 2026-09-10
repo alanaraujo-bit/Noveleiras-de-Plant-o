@@ -4,11 +4,9 @@ import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { provedorDePagamento } from "@/lib/pagamentos";
 import {
-  ativarAssinatura,
+  reconciliarAssinatura,
   reconciliarPagamento,
 } from "@/lib/pagamentos/servico";
-import { planoPorCodigo } from "@/lib/pagamentos/planos";
-import { revogarDireitos } from "@/lib/access/direitos";
 
 /**
  * Recepção de webhooks do provedor de pagamento.
@@ -17,7 +15,8 @@ import { revogarDireitos } from "@/lib/access/direitos";
  * forma conhecida de perder dinheiro ou vazar conteúdo:
  *
  * 1. **O corpo do webhook nunca autoriza nada.** Ele só diz "o recurso X
- *    mudou". Quem decide é a releitura autenticada em `reconciliarPagamento`.
+ *    mudou". Quem decide é a releitura autenticada em `reconciliarPagamento`
+ *    ou `reconciliarAssinatura`.
  *    Confiar no corpo significaria que qualquer um com a URL — que é pública
  *    por definição — poderia liberar o catálogo inteiro com um `curl`.
  *
@@ -181,114 +180,14 @@ async function processar(
   }
 
   if (TOPICOS_DE_ASSINATURA.has(topico)) {
-    return processarAssinatura(recursoId);
+    // Mesma rotina que a página de retorno e a tela de espera chamam. Havendo
+    // um só caminho, não existe o desfecho em que um deles ativa a assinatura
+    // e o outro só carimba a tentativa.
+    const resultado = await reconciliarAssinatura(recursoId);
+    return { tratado: resultado.mudou, snapshot: resultado.snapshot };
   }
 
   return { tratado: false };
-}
-
-/**
- * Assinatura recorrente mudou de estado no provedor.
- *
- * `authorized` liga ou renova; `cancelled` marca para não renovar mas **não**
- * corta o acesso na hora — quem pagou até o dia 30 assiste até o dia 30, e o
- * direito expira sozinho. `paused` é o caso em que o provedor suspendeu a
- * cobrança: aí o acesso cai, porque não há mais pagamento sustentando.
- */
-async function processarAssinatura(
-  externalId: string,
-): Promise<Processamento> {
-  const provedor = provedorDePagamento();
-  const consulta = await provedor.consultarAssinatura(externalId);
-  if (!consulta) return { tratado: false };
-
-  const tentativa = consulta.referenciaExterna
-    ? await db.paymentAttempt.findUnique({
-        where: { id: consulta.referenciaExterna },
-      })
-    : await db.paymentAttempt.findFirst({
-        where: { provider: provedor.nome, externalId },
-      });
-
-  if (!tentativa) return { tratado: false, snapshot: consulta };
-
-  const assinatura = await db.subscription.findUnique({
-    where: { userId: tentativa.userId },
-  });
-
-  switch (consulta.status) {
-    case "APPROVED": {
-      const plano = planoPorCodigo(tentativa.plan ?? "MONTHLY");
-      await db.$transaction(async (tx) => {
-        await tx.paymentAttempt.update({
-          where: { id: tentativa.id },
-          data: { status: "APPROVED", externalId, rawStatus: "authorized" },
-        });
-        await ativarAssinatura(tx, tentativa.userId, plano, provedor.nome, {
-          externalId,
-        });
-        await tx.subscription.update({
-          where: { userId: tentativa.userId },
-          data: { externalPreapprovalId: externalId },
-        });
-      });
-      return { tratado: true, snapshot: consulta };
-    }
-
-    case "CANCELED": {
-      if (!assinatura) return { tratado: false, snapshot: consulta };
-      await db.$transaction([
-        db.subscription.update({
-          where: { id: assinatura.id },
-          data: { cancelAtPeriodEnd: true, canceledAt: new Date() },
-        }),
-        db.subscriptionEvent.create({
-          data: {
-            subscriptionId: assinatura.id,
-            userId: tentativa.userId,
-            type: "CANCELED",
-            fromStatus: assinatura.status,
-            toStatus: assinatura.status,
-            periodEnd: assinatura.currentPeriodEnd,
-            payload: { origem: "webhook" },
-          },
-        }),
-      ]);
-      return { tratado: true, snapshot: consulta };
-    }
-
-    case "PENDING": {
-      // `paused` chega como PENDING. Sem cobrança, sem acesso.
-      if (!assinatura || assinatura.status !== "ACTIVE") {
-        return { tratado: false, snapshot: consulta };
-      }
-      await db.$transaction(async (tx) => {
-        await tx.subscription.update({
-          where: { id: assinatura.id },
-          data: { status: "PAST_DUE" },
-        });
-        await revogarDireitos(
-          { userId: tentativa.userId, subscriptionId: assinatura.id },
-          "assinatura pausada no provedor",
-          tx,
-        );
-        await tx.subscriptionEvent.create({
-          data: {
-            subscriptionId: assinatura.id,
-            userId: tentativa.userId,
-            type: "PAST_DUE",
-            fromStatus: assinatura.status,
-            toStatus: "PAST_DUE",
-            payload: { origem: "webhook" },
-          },
-        });
-      });
-      return { tratado: true, snapshot: consulta };
-    }
-
-    default:
-      return { tratado: false, snapshot: consulta };
-  }
 }
 
 /**

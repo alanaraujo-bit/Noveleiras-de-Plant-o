@@ -2,7 +2,10 @@ import { NextResponse } from "next/server";
 
 import { getViewer } from "@/lib/auth/session";
 import { db } from "@/lib/db";
-import { reconciliarPagamento } from "@/lib/pagamentos/servico";
+import {
+  reconciliarAssinatura,
+  reconciliarPagamento,
+} from "@/lib/pagamentos/servico";
 
 /**
  * Estado de uma cobrança. A tela de checkout consulta isto enquanto espera.
@@ -68,7 +71,13 @@ export async function GET(
     tentativa.externalId
   ) {
     try {
-      const resultado = await reconciliarPagamento(tentativa.externalId);
+      // Assinatura e compra são objetos diferentes no provedor. Mandar um id
+      // de `preapproval` para a consulta de pagamento devolvia 404, a rota não
+      // fazia nada, e a tela girava para sempre sem nunca liberar o acesso.
+      const resultado =
+        tentativa.kind === "SUBSCRIPTION"
+          ? await reconciliarAssinatura(tentativa.externalId)
+          : await reconciliarPagamento(tentativa.externalId);
       if (resultado.attemptId) {
         const atualizada = await db.paymentAttempt.findUnique({
           where: { id: tentativa.id },

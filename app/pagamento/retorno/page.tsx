@@ -4,8 +4,10 @@ import { redirect } from "next/navigation";
 import { BotaoLink } from "@/components/ui/primitivos";
 import { getViewer } from "@/lib/auth/session";
 import { db } from "@/lib/db";
-import { provedorDePagamento } from "@/lib/pagamentos";
-import { reconciliarPagamento } from "@/lib/pagamentos/servico";
+import {
+  reconciliarAssinatura,
+  reconciliarPagamento,
+} from "@/lib/pagamentos/servico";
 
 export const metadata = { title: "Pagamento" };
 export const dynamic = "force-dynamic";
@@ -67,11 +69,13 @@ export default async function RetornoPage({
     const externo = pagamentoId ?? tentativa.externalId;
     if (externo && tentativa.kind === "PURCHASE") {
       await reconciliarPagamento(externo);
-    } else if (preapprovalId ?? tentativa.externalId) {
-      await reconciliarAssinaturaDoRetorno(
-        (preapprovalId ?? tentativa.externalId) as string,
-        tentativa.id,
-      );
+    } else {
+      const preapproval = preapprovalId ?? tentativa.externalId;
+      // A mesma rotina do webhook, e não um carimbo local: antes daqui saía
+      // uma tentativa APROVADA sem assinatura e sem direito, e o acesso só
+      // apareceria se o webhook chegasse — que é justamente o que pode não
+      // acontecer.
+      if (preapproval) await reconciliarAssinatura(preapproval);
     }
   } catch (erro) {
     console.error("[retorno] reconciliação falhou", erro);
@@ -146,29 +150,6 @@ async function localizarTentativa(userId: string, pistas: Pistas) {
     where: { userId, status: { in: ["CREATED", "PENDING"] } },
     orderBy: { createdAt: "desc" },
     select: selecao,
-  });
-}
-
-/** Reconsulta a assinatura e carimba o estado na tentativa. */
-async function reconciliarAssinaturaDoRetorno(
-  externalId: string,
-  attemptId: string,
-): Promise<void> {
-  const consulta = await provedorDePagamento().consultarAssinatura(externalId);
-  if (!consulta) return;
-
-  await db.paymentAttempt.update({
-    where: { id: attemptId },
-    data: {
-      externalId,
-      rawStatus: consulta.status,
-      status:
-        consulta.status === "APPROVED"
-          ? "APPROVED"
-          : consulta.status === "CANCELED"
-            ? "EXPIRED"
-            : "PENDING",
-    },
   });
 }
 

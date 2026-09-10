@@ -303,6 +303,12 @@ export type ResultadoReconciliacao = {
   motivo: string;
   attemptId: string | null;
   status: EstadoProvedor;
+  /**
+   * O que o provedor respondeu na reconsulta. É isto que o webhook grava em
+   * `WebhookEvent.providerSnapshot` — a prova do que autorizou a mudança, e
+   * não o corpo do webhook, que não autoriza nada.
+   */
+  snapshot?: unknown;
 };
 
 /**
@@ -411,6 +417,203 @@ async function localizarTentativa(
   return db.paymentAttempt.findFirst({
     where: { provider: provedorNome, externalId: consulta.externalId },
   });
+}
+
+/**
+ * Sincroniza uma **assinatura recorrente** do provedor com o nosso banco.
+ *
+ * Irmã de `reconciliarPagamento`, e separada dela porque os dois objetos são
+ * diferentes do lado do provedor: um `preapproval` não é um pagamento, e
+ * pedi-lo em `/v1/payments/<id>` devolve 404. Passar um id de assinatura para
+ * a função de pagamento não falha ruidosamente — ela simplesmente não acha
+ * nada e devolve "inexistente", que foi como o acesso deixou de ser concedido
+ * em silêncio.
+ *
+ * **É o único lugar que ativa uma assinatura.** O webhook, o retorno do
+ * checkout e a tela de espera chamam esta função; nenhum deles decide nada por
+ * conta própria. Antes havia três caminhos, e só o do webhook concedia direito
+ * — quem voltava do checkout ficava com a tentativa aprovada e sem acesso.
+ *
+ * Idempotente: `ativarAssinatura` estende o ciclo a partir do fim vigente e
+ * `concederAssinatura` reencontra o direito ativo em vez de criar outro. A
+ * segunda entrega do mesmo evento converge para o mesmo estado.
+ */
+export async function reconciliarAssinatura(
+  externalId: string,
+): Promise<ResultadoReconciliacao> {
+  const provedor = provedorDePagamento();
+  const consulta = await provedor.consultarAssinatura(externalId);
+
+  if (!consulta) {
+    return {
+      mudou: false,
+      motivo: "assinatura inexistente no provedor",
+      attemptId: null,
+      status: "UNKNOWN",
+    };
+  }
+
+  // `external_reference` é o nosso id de tentativa viajando dentro do objeto
+  // deles: o caminho confiável. O `externalId` é a reserva para o fluxo em que
+  // a referência não volta.
+  const tentativa = consulta.referenciaExterna
+    ? await db.paymentAttempt.findUnique({
+        where: { id: consulta.referenciaExterna },
+      })
+    : await db.paymentAttempt.findFirst({
+        where: { provider: provedor.nome, externalId },
+      });
+
+  if (!tentativa) {
+    return {
+      mudou: false,
+      motivo: "sem tentativa correspondente",
+      attemptId: null,
+      status: consulta.status,
+      snapshot: consulta,
+    };
+  }
+
+  const assinatura = await db.subscription.findUnique({
+    where: { userId: tentativa.userId },
+  });
+
+  switch (consulta.status) {
+    case "APPROVED": {
+      const plano = planoPorCodigo(tentativa.plan ?? "MONTHLY");
+
+      await db.$transaction(async (tx) => {
+        await tx.paymentAttempt.update({
+          where: { id: tentativa.id },
+          data: { status: "APPROVED", externalId, rawStatus: "authorized" },
+        });
+        // O dono do direito é `tentativa.userId` — a conta real de quem
+        // clicou. O `payer_email` mandado ao provedor pode ser o comprador de
+        // teste, e ele não entra nesta linha em momento algum.
+        await ativarAssinatura(tx, tentativa.userId, plano, provedor.nome, {
+          externalId,
+        });
+        await tx.subscription.update({
+          where: { userId: tentativa.userId },
+          data: { externalPreapprovalId: externalId },
+        });
+      });
+
+      // Sempre `true`, mesmo na reentrega: a transação rodou e convergiu. É o
+      // que mantém o evento repetido gravado como PROCESSED, e não IGNORED.
+      return {
+        mudou: true,
+        motivo: "assinatura ativada",
+        attemptId: tentativa.id,
+        status: consulta.status,
+        snapshot: consulta,
+      };
+    }
+
+    case "CANCELED": {
+      if (!assinatura) {
+        return {
+          mudou: false,
+          motivo: "cancelamento sem assinatura nossa",
+          attemptId: tentativa.id,
+          status: consulta.status,
+          snapshot: consulta,
+        };
+      }
+
+      // Não corta o acesso agora: quem pagou até o dia 30 assiste até o dia
+      // 30, e o direito expira sozinho no fim do ciclo.
+      await db.$transaction([
+        db.subscription.update({
+          where: { id: assinatura.id },
+          data: { cancelAtPeriodEnd: true, canceledAt: new Date() },
+        }),
+        db.subscriptionEvent.create({
+          data: {
+            subscriptionId: assinatura.id,
+            userId: tentativa.userId,
+            type: "CANCELED",
+            fromStatus: assinatura.status,
+            toStatus: assinatura.status,
+            periodEnd: assinatura.currentPeriodEnd,
+            payload: { origem: "reconciliacao" },
+          },
+        }),
+      ]);
+
+      return {
+        mudou: true,
+        motivo: "assinatura cancelada no provedor",
+        attemptId: tentativa.id,
+        status: consulta.status,
+        snapshot: consulta,
+      };
+    }
+
+    case "PENDING": {
+      // `paused` chega como PENDING — e `pending`, o preapproval que a pessoa
+      // ainda não autorizou, também. Os dois são indistinguíveis aqui, então
+      // só rebaixa a assinatura que **este** preapproval sustenta.
+      //
+      // Sem essa condição, a tela de espera consultando de segundo em segundo
+      // enquanto o cartão não é autorizado marcaria a conta como PAST_DUE e
+      // revogaria os direitos de quem nunca chegou a assinar. O webhook antigo
+      // escapava disso por acidente: só recebia evento de assinatura que já
+      // existia.
+      if (
+        !assinatura ||
+        assinatura.status !== "ACTIVE" ||
+        assinatura.externalPreapprovalId !== externalId
+      ) {
+        return {
+          mudou: false,
+          motivo: "assinatura ainda não autorizada",
+          attemptId: tentativa.id,
+          status: consulta.status,
+          snapshot: consulta,
+        };
+      }
+
+      await db.$transaction(async (tx) => {
+        await tx.subscription.update({
+          where: { id: assinatura.id },
+          data: { status: "PAST_DUE" },
+        });
+        await revogarDireitos(
+          { userId: tentativa.userId, subscriptionId: assinatura.id },
+          "assinatura pausada no provedor",
+          tx,
+        );
+        await tx.subscriptionEvent.create({
+          data: {
+            subscriptionId: assinatura.id,
+            userId: tentativa.userId,
+            type: "PAST_DUE",
+            fromStatus: assinatura.status,
+            toStatus: "PAST_DUE",
+            payload: { origem: "reconciliacao" },
+          },
+        });
+      });
+
+      return {
+        mudou: true,
+        motivo: "assinatura pausada no provedor",
+        attemptId: tentativa.id,
+        status: consulta.status,
+        snapshot: consulta,
+      };
+    }
+
+    default:
+      return {
+        mudou: false,
+        motivo: `estado ${consulta.status} não muda acesso`,
+        attemptId: tentativa.id,
+        status: consulta.status,
+        snapshot: consulta,
+      };
+  }
 }
 
 async function aprovar(
