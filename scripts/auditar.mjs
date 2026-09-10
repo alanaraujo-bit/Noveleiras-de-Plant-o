@@ -17,6 +17,7 @@ const arg = (nome, padrao) => {
 
 const BASE = arg("base", "http://localhost:3100");
 const ROTAS = [
+  "/plantao",
   "/inicio",
   "/buscar",
   "/generos",
@@ -81,7 +82,7 @@ async function main() {
   await pagina.fill('input[name="email"]', "demo@noveleiras.app");
   await pagina.fill('input[name="senha"]', "plantao123");
   await pagina.click('button[type="submit"]');
-  await pagina.waitForURL("**/inicio", { timeout: 45000 }).catch(() => {});
+  await pagina.waitForURL("**/plantao", { timeout: 45000 }).catch(() => {});
 
   console.log("\nComportamento nativo");
   const viewport = await pagina

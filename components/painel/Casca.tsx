@@ -150,7 +150,7 @@ export function Casca({
       </div>
       <div className="flex gap-1.5">
         <Link
-          href="/inicio"
+          href="/plantao"
           className="flex-1 rounded-lg px-2.5 py-1.5 text-center text-[0.75rem] text-[var(--p-suave)] transition-colors hover:bg-white/6 hover:text-[var(--p-texto)]"
         >
           Ver o app

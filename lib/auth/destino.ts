@@ -8,6 +8,16 @@
  * Só passa caminho interno absoluto. `//outro.site` é recusado de propósito: o
  * navegador o trata como URL com protocolo relativo, não como caminho.
  */
+/**
+ * Onde o aplicativo abre depois de entrar, criar conta ou concluir o
+ * onboarding.
+ *
+ * É uma constante, e não a string espalhada por seis arquivos, porque a
+ * primeira tela mudou de `/inicio` para `/plantao` quando o reel virou a
+ * entrada — e o próximo produto que mudar de ideia precisa de um lugar só.
+ */
+export const ROTA_INICIAL = "/plantao";
+
 export function destinoSeguro(valor: unknown): string | null {
   if (typeof valor !== "string") return null;
   const limpo = valor.trim();

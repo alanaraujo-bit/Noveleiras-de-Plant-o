@@ -16,22 +16,30 @@ import {
   IconeVolume,
 } from "@/components/ui/icones";
 import type { MotivoBloqueado } from "@/lib/access/entitlements";
+import {
+  renovarFonte as pedirFonteNova,
+  useRegistroDeProgresso,
+  useTelaAcordada,
+  type Fonte as FonteCompartilhada,
+} from "@/lib/player/reproducao";
 import { formatClock } from "@/lib/format";
 
 /**
- * Player.
+ * Player de tela cheia.
  *
  * A fonte do vídeo chega pronta da página, que já decidiu o acesso no servidor
  * — o player abre tocando imediatamente. Tela cheia fica disponível no
  * controle explícito, porque o Android exibe um aviso nativo sempre que um
- * site chama a Fullscreen API automaticamente. A rota
- * /api/midia continua sendo a autoridade e serve para renovar a fonte quando
- * ela expirar (URLs assinadas de CDN, mais adiante).
+ * site chama a Fullscreen API automaticamente. A rota /api/midia continua
+ * sendo a autoridade e serve para renovar a fonte quando ela expirar.
  *
  * Tocar, paywall e erro são três estados de primeira classe, não exceções.
  *
- * O progresso é enviado com o tempo real de exibição acumulado, não com a
- * posição pura: é assim que "tempo assistido" fica honesto no painel.
+ * A contabilidade invisível — tempo real de tela, envio por `sendBeacon` ao
+ * sair, wake lock, renovação de assinatura — vive em `lib/player/reproducao`,
+ * compartilhada com as lâminas do reel. As duas telas são visualmente opostas
+ * e medem exatamente a mesma coisa; duas cópias divergiriam em silêncio, e o
+ * sintoma apareceria semanas depois num gráfico de tempo assistido.
  */
 
 type EpisodioPlayer = {
@@ -52,12 +60,7 @@ type Proximo = {
   capaUrl: string;
 };
 
-type Fonte = {
-  kind: "mp4" | "hls";
-  url: string;
-  poster: string | null;
-  expiresAt?: string | null;
-};
+type Fonte = FonteCompartilhada;
 
 type Bloqueio = MotivoBloqueado;
 
@@ -67,7 +70,6 @@ type Estado =
   | { nome: "erro"; mensagem: string };
 
 const OCULTAR_CONTROLES_MS = 2800;
-const INTERVALO_SALVAR_MS = 10_000;
 
 type DocumentoComWebkit = Document & {
   webkitExitFullscreen?: () => void;
@@ -78,15 +80,6 @@ type VideoComWebkit = HTMLVideoElement & {
   webkitDisplayingFullscreen?: boolean;
   webkitEnterFullscreen?: () => void;
   webkitExitFullscreen?: () => void;
-};
-
-type SentinelaTela = {
-  release: () => Promise<void>;
-  released: boolean;
-};
-
-type NavegadorComWakeLock = Navigator & {
-  wakeLock?: { request: (tipo: "screen") => Promise<SentinelaTela> };
 };
 
 export function Player({
@@ -110,7 +103,7 @@ export function Player({
   const { track, sessionId } = useTelemetry();
   const playerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const wakeLockRef = useRef<SentinelaTela | null>(null);
+  const { manterTelaAcordada, liberarTelaAcordada } = useTelaAcordada();
 
   const [estado, setEstado] = useState<Estado>(() =>
     fonte
@@ -127,10 +120,22 @@ export function Player({
   const [avisoRetomada, setAvisoRetomada] = useState(retomarEm > 5);
   const [emTelaCheia, setEmTelaCheia] = useState(false);
 
-  const assistidoMsRef = useRef(0);
-  const ultimoTickRef = useRef(0);
-  const salvoAteRef = useRef(0);
   const ocultarRef = useRef<number | null>(null);
+
+  const {
+    enviar: enviarProgresso,
+    aoAtualizarTempo: contabilizarTempo,
+    marcarInicioDeContagem,
+    pararContagem,
+  } = useRegistroDeProgresso({
+    videoRef,
+    episodeId: episodio.id,
+    duracaoPadraoSec: episodio.duracaoSec,
+    sessionId,
+    // Na tela cheia a pessoa escolheu este episódio: não existe passagem de
+    // dedo para filtrar, e toda reprodução conta.
+    deveGravar: () => true,
+  });
 
   const atualizarTelaCheia = useCallback(() => {
     const documento = document as DocumentoComWebkit;
@@ -185,30 +190,6 @@ export function Player({
     router.back();
   }, [router, sairTelaCheia]);
 
-  const liberarTelaAcordada = useCallback(() => {
-    const sentinela = wakeLockRef.current;
-    wakeLockRef.current = null;
-    if (sentinela && !sentinela.released) void sentinela.release().catch(() => {});
-  }, []);
-
-  const manterTelaAcordada = useCallback(() => {
-    const navegador = navigator as NavegadorComWakeLock;
-    if (wakeLockRef.current?.released) wakeLockRef.current = null;
-    if (!navegador.wakeLock || wakeLockRef.current || document.hidden) return;
-    void navegador.wakeLock
-      .request("screen")
-      .then((sentinela) => {
-        if (videoRef.current?.paused) {
-          void sentinela.release().catch(() => {});
-        } else {
-          wakeLockRef.current = sentinela;
-        }
-      })
-      .catch(() => {
-        // Economia de bateria ou política do aparelho pode negar o wake lock.
-      });
-  }, []);
-
   useEffect(() => {
     const video = videoRef.current as VideoComWebkit | null;
     document.addEventListener("fullscreenchange", atualizarTelaCheia);
@@ -216,24 +197,13 @@ export function Player({
     video?.addEventListener("webkitbeginfullscreen", atualizarTelaCheia);
     video?.addEventListener("webkitendfullscreen", atualizarTelaCheia);
 
-    const aoMudarVisibilidade = () => {
-      if (document.hidden) {
-        liberarTelaAcordada();
-      } else if (videoRef.current && !videoRef.current.paused) {
-        manterTelaAcordada();
-      }
-    };
-    document.addEventListener("visibilitychange", aoMudarVisibilidade);
-
     return () => {
       document.removeEventListener("fullscreenchange", atualizarTelaCheia);
       document.removeEventListener("webkitfullscreenchange", atualizarTelaCheia);
       video?.removeEventListener("webkitbeginfullscreen", atualizarTelaCheia);
       video?.removeEventListener("webkitendfullscreen", atualizarTelaCheia);
-      document.removeEventListener("visibilitychange", aoMudarVisibilidade);
-      liberarTelaAcordada();
     };
-  }, [atualizarTelaCheia, liberarTelaAcordada, manterTelaAcordada]);
+  }, [atualizarTelaCheia]);
 
   // Trocar de episódio pelo botão "próximo" reaproveita este componente:
   // o estado precisa acompanhar a nova fonte que a página entregou.
@@ -246,95 +216,25 @@ export function Player({
   }, [fonte, bloqueio]);
 
   /**
-   * Renova a fonte pela rota de mídia. Só é necessário quando a URL expira —
-   * o caminho normal já vem resolvido do servidor.
+   * Renova a fonte pela rota de mídia e reflete o resultado no estado da tela.
+   * Só é necessário quando a URL expira — o caminho normal já vem resolvido
+   * do servidor.
    */
   const renovarFonte = useCallback(async () => {
-    try {
-      const resposta = await fetch(`/api/midia/${episodio.id}`);
-      const dados = await resposta.json().catch(() => null);
-      if (resposta.ok && dados?.fonte) {
-        setEstado({ nome: "pronto", fonte: dados.fonte });
-        return true;
-      }
-      if (resposta.status === 401 || resposta.status === 402) {
-        setEstado({
-          nome: "bloqueado",
-          motivo: dados?.motivo ?? "precisa-pagar",
-        });
-        return true;
-      }
-    } catch {
-      /* tratado por quem chamou */
+    const resultado = await pedirFonteNova(episodio.id);
+    if (resultado.estado === "pronto") {
+      setEstado({ nome: "pronto", fonte: resultado.fonte });
+      return true;
+    }
+    if (resultado.estado === "bloqueado") {
+      setEstado({
+        nome: "bloqueado",
+        motivo: (resultado.motivo as Bloqueio) ?? "precisa-pagar",
+      });
+      return true;
     }
     return false;
   }, [episodio.id]);
-
-  // ------------------------------------------------------------- progresso
-  const enviarProgresso = useCallback(
-    (opcoes: { completo?: boolean; abandonado?: boolean; beacon?: boolean } = {}) => {
-      const video = videoRef.current;
-      const posicaoAtual = video?.currentTime ?? posicao;
-      const duracaoAtual =
-        video && Number.isFinite(video.duration) && video.duration > 0
-          ? video.duration
-          : duracao;
-
-      const deltaMs = Math.round(assistidoMsRef.current);
-      if (
-        deltaMs === 0 &&
-        !opcoes.completo &&
-        Math.abs(posicaoAtual - salvoAteRef.current) < 1
-      ) {
-        return;
-      }
-      assistidoMsRef.current = 0;
-      salvoAteRef.current = posicaoAtual;
-
-      const corpo = JSON.stringify({
-        episodeId: episodio.id,
-        positionSec: posicaoAtual,
-        durationSec: duracaoAtual,
-        deltaMs,
-        completed: opcoes.completo,
-        abandoned: opcoes.abandonado,
-        sessionId: sessionId(),
-      });
-
-      if (opcoes.beacon && navigator.sendBeacon) {
-        navigator.sendBeacon(
-          "/api/progresso",
-          new Blob([corpo], { type: "application/json" }),
-        );
-        return;
-      }
-      void fetch("/api/progresso", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: corpo,
-        keepalive: true,
-      }).catch(() => {});
-    },
-    [duracao, episodio.id, posicao, sessionId],
-  );
-
-  useEffect(() => {
-    const salvar = window.setInterval(() => {
-      if (videoRef.current && !videoRef.current.paused) enviarProgresso();
-    }, INTERVALO_SALVAR_MS);
-
-    const aoSair = () => enviarProgresso({ abandonado: true, beacon: true });
-    window.addEventListener("pagehide", aoSair);
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "hidden") aoSair();
-    });
-
-    return () => {
-      window.clearInterval(salvar);
-      window.removeEventListener("pagehide", aoSair);
-      enviarProgresso({ abandonado: true });
-    };
-  }, [enviarProgresso]);
 
   // ------------------------------------------------------------- controles
   const agendarOcultar = useCallback(() => {
@@ -452,14 +352,9 @@ export function Player({
   }, [episodio.id, prepararVideo]);
 
   const aoAtualizarTempo = () => {
+    contabilizarTempo();
     const video = videoRef.current;
-    if (!video) return;
-    const agora = performance.now();
-    if (!video.paused && ultimoTickRef.current > 0) {
-      assistidoMsRef.current += Math.min(agora - ultimoTickRef.current, 2000);
-    }
-    ultimoTickRef.current = agora;
-    setPosicao(video.currentTime);
+    if (video) setPosicao(video.currentTime);
   };
 
   const progresso = duracao > 0 ? (posicao / duracao) * 100 : 0;
@@ -543,7 +438,7 @@ export function Player({
             setBufferando(false);
             setTocando(true);
             manterTelaAcordada();
-            ultimoTickRef.current = performance.now();
+            marcarInicioDeContagem();
             agendarOcultar();
           }}
           onPlay={() => {
@@ -556,6 +451,7 @@ export function Player({
           onPause={() => {
             setTocando(false);
             setControles(true);
+            pararContagem();
             liberarTelaAcordada();
             sairTelaCheia();
             enviarProgresso();

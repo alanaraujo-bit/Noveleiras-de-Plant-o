@@ -236,6 +236,61 @@ export const IconeProximo = ({ tamanho = 22, ...p }: Props) => (
   </svg>
 );
 
+/**
+ * Aba do reel: uma lâmina vertical com o triângulo de play.
+ *
+ * Não reaproveita a casinha porque as duas abas passaram a competir: a casa
+ * agora é o catálogo, e dois ícones de "início" na mesma barra deixariam a
+ * pessoa sem saber qual leva ao vídeo.
+ */
+export const IconePlantao = ({
+  ativo = false,
+  ...p
+}: Props & { ativo?: boolean }) => (
+  <Base {...p}>
+    <rect
+      x="6.4"
+      y="3.4"
+      width="11.2"
+      height="17.2"
+      rx="3"
+      fill={ativo ? "currentColor" : "none"}
+      opacity={ativo ? 0.16 : 1}
+    />
+    <rect x="6.4" y="3.4" width="11.2" height="17.2" rx="3" />
+    <path
+      d="M10.7 9.3a.6.6 0 0 1 .92-.5l3.1 1.9a.6.6 0 0 1 0 1.02l-3.1 1.9a.6.6 0 0 1-.92-.5V9.3Z"
+      fill="currentColor"
+      stroke="none"
+    />
+  </Base>
+);
+
+/** Aba do catálogo: a grade de cartazes. */
+export const IconeCatalogo = (p: Props) => (
+  <Base {...p}>
+    <rect x="3.6" y="4.2" width="7" height="7" rx="1.8" />
+    <rect x="13.4" y="4.2" width="7" height="7" rx="1.8" />
+    <rect x="3.6" y="12.8" width="7" height="7" rx="1.8" />
+    <rect x="13.4" y="12.8" width="7" height="7" rx="1.8" />
+  </Base>
+);
+
+/** Coração cheio da curtida — traço mais grosso para segurar sobre vídeo. */
+export const IconeCoracaoCheio = ({ tamanho = 22, ...p }: Props) => (
+  <svg
+    width={tamanho}
+    height={tamanho}
+    viewBox="0 0 24 24"
+    fill="currentColor"
+    aria-hidden
+    focusable="false"
+    {...p}
+  >
+    <path d="M12 21.2c-.4 0-.8-.14-1.1-.42C7.3 17.6 3 14 3 9.9 3 6.9 5.3 4.6 8.2 4.6c1.5 0 2.9.66 3.8 1.76a5 5 0 0 1 3.8-1.76C18.7 4.6 21 6.9 21 9.9c0 4.1-4.3 7.7-7.9 10.88-.3.28-.7.42-1.1.42Z" />
+  </svg>
+);
+
 export const IconeMarca = ({ tamanho = 28, ...p }: Props) => (
   <svg
     width={tamanho}

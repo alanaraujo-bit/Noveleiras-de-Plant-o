@@ -69,7 +69,7 @@ export default async function PagamentoPage({
       ? destino
       : novela
         ? `/novela/${novela.slug}`
-        : "/inicio";
+        : "/plantao";
 
   return (
     <EstadoDoPagamento

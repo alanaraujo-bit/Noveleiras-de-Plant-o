@@ -57,10 +57,22 @@ async function main() {
   await pagina.fill('input[name="email"]', "demo@noveleiras.app");
   await pagina.fill('input[name="senha"]', "plantao123");
   await pagina.click('button[type="submit"]');
-  await pagina.waitForURL("**/inicio", { timeout: ESPERA }).catch(() => {});
-  passo("entrar na conta", new URL(pagina.url()).pathname === "/inicio");
+  // Entrar leva ao reel, que virou a porta de entrada do aplicativo.
+  await pagina.waitForURL("**/plantao", { timeout: ESPERA }).catch(() => {});
+  passo("entrar na conta", new URL(pagina.url()).pathname === "/plantao");
 
-  // 2. Home carrega com conteúdo -------------------------------------------
+  // 2. Reel abre com a fila montada ----------------------------------------
+  await pagina.waitForSelector("section[data-indice]", { timeout: ESPERA });
+  const laminas = await pagina.locator("section[data-indice]").count();
+  passo("reel monta a fila", laminas > 1, `${laminas} lâminas`);
+  // A janela de montagem precisa segurar: um <video> por lâmina esgota os
+  // decodificadores do aparelho e o quarto vídeo simplesmente não toca.
+  const videos = await pagina.locator("video").count();
+  passo("janela de vídeo contida", videos > 0 && videos <= 3, `${videos} vídeos montados`);
+  await captura("0-reel");
+
+  // 3. Catálogo carrega com conteúdo ---------------------------------------
+  await pagina.goto(`${BASE}/inicio`, { waitUntil: "domcontentloaded" });
   await pagina.waitForSelector("text=Continuar assistindo", { timeout: ESPERA });
   const capas = await pagina.locator('a[href^="/novela/"]').count();
   passo("home lista novelas", capas > 4, `${capas} atalhos`);

@@ -207,7 +207,7 @@ function NaoIdentificado() {
           Ver minha assinatura
         </BotaoLink>
         <Link
-          href="/inicio"
+          href="/plantao"
           className="tap mt-3 py-2 text-[0.8125rem] text-cream-600 underline underline-offset-4"
         >
           Voltar ao início

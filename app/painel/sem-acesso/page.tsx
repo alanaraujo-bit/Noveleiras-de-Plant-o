@@ -58,7 +58,7 @@ export default async function SemAcesso({
                   Ir para {primeiroDisponivel.rotulo}
                 </LinkPainel>
               ) : null}
-              <LinkPainel href="/inicio">Voltar ao aplicativo</LinkPainel>
+              <LinkPainel href="/plantao">Voltar ao aplicativo</LinkPainel>
             </div>
           </div>
         </Bloco>

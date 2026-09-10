@@ -64,6 +64,9 @@ model User {
   postLikes    PostLike[]
   comments     Comment[]
 
+  episodeLikes    EpisodeLike[]
+  episodeComments EpisodeComment[]
+
   entitlements       Entitlement[]
   purchases          Purchase[]
   paymentAttempts    PaymentAttempt[]
@@ -343,12 +346,67 @@ model Episode {
   watchedMs  BigInt   @default(0)
   createdAt  DateTime @default(now())
 
+  // Contadores sociais do reel. Denormalizados pelo mesmo motivo dos de
+  // `Novela`: a lamina precisa exibir o numero no primeiro quadro, e contar
+  // linha a linha numa fila de dezenas de episodios custaria uma consulta por
+  // lamina. A fonte factual continua sendo `EpisodeLike`/`EpisodeComment`.
+  likeCount    Int @default(0)
+  commentCount Int @default(0)
+  shareCount   Int @default(0)
+
+  // Gancho do reel: a frase que segura a pessoa nos primeiros segundos.
+  // Vazio cai para a sinopse — a lamina nunca fica muda.
+  hookText String?
+
   progress WatchProgress[]
   posts    Post[]
+  likes    EpisodeLike[]
+  comments EpisodeComment[]
 
   @@unique([seasonId, number])
   @@index([novelaId, number])
   @@index([releasedAt])
+}
+
+// -------------------------------------------------- social do episodio
+//
+// Curtida e comentario de episodio vivem em tabelas proprias, separadas de
+// `PostLike` e `Comment`, por uma razao concreta: aquelas apontam para `Post`
+// com chave obrigatoria. Torna-las polimorficas obrigaria a reescrever as
+// leituras de `app/painel/comunidade`, `lib/painel/acoes/comunidade.ts` e
+// `lib/painel/metricas/comunidade.ts` — as tres com dado gravado em producao.
+//
+// O preco desta escolha fica nomeado aqui: a moderacao do painel ainda nao
+// enxerga estas linhas. `hiddenAt` ja existe e `ReportTargetType` ja aceita
+// EPISODE_COMMENT, entao a tela de moderacao entra sem migracao destrutiva.
+
+model EpisodeLike {
+  episodeId String
+  episode   Episode @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@id([episodeId, userId])
+  @@index([userId, createdAt])
+}
+
+model EpisodeComment {
+  id        String  @id @default(cuid())
+  episodeId String
+  episode   Episode @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  body    String
+  spoiler Boolean @default(false)
+
+  createdAt DateTime  @default(now())
+  hiddenAt  DateTime?
+
+  @@index([episodeId, hiddenAt, createdAt])
+  @@index([userId, createdAt])
 }
 
 // ------------------------------------------- progresso, lista, historico
@@ -503,6 +561,17 @@ enum EventType {
   POST_CREATE
   POST_LIKE
   POST_COMMENT
+
+  // Reel. REEL_SLIDE_VIEW so e emitido depois do limiar de permanencia: sem
+  // isso, uma passada de dedo por dez laminas viraria dez "visualizacoes" e
+  // envenenaria retencao, abandono e "continue assistindo" de uma vez.
+  REEL_OPEN
+  REEL_SLIDE_VIEW
+  REEL_SLIDE_SKIP
+  EPISODE_LIKE
+  EPISODE_UNLIKE
+  EPISODE_COMMENT
+  EPISODE_SHARE
   PAYWALL_VIEW
   PAYWALL_CTA
 
@@ -1080,6 +1149,7 @@ enum ReportTargetType {
   POST
   COMMENT
   USER
+  EPISODE_COMMENT
 }
 
 enum ReportState {

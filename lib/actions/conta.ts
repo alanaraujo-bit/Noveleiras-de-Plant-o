@@ -14,7 +14,7 @@ import {
 } from "@/lib/auth/session";
 import { track } from "@/lib/analytics/track";
 import { lerDispositivo } from "@/lib/analytics/dispositivo";
-import { destinoSeguro } from "@/lib/auth/destino";
+import { destinoSeguro, ROTA_INICIAL } from "@/lib/auth/destino";
 
 export type FormState = { erro?: string; campo?: string } | null;
 
@@ -159,7 +159,7 @@ export async function entrar(
   await track({ type: "SIGN_IN", userId: user.id, sessionId });
 
   const destino = destinoSeguro(formData.get("destino"));
-  redirect(destino ?? (user.onboardedAt ? "/inicio" : "/bem-vindo"));
+  redirect(destino ?? (user.onboardedAt ? ROTA_INICIAL : "/bem-vindo"));
 }
 
 export async function sair() {
@@ -212,8 +212,10 @@ export async function concluirOnboarding(generoIds: string[]) {
     payload: { generos: chosen.success ? chosen.data.length : 0 },
   });
 
+  // O catalogo tambem muda com os generos escolhidos, mas quem acaba de
+  // concluir o onboarding vai para o reel: e la que o app abre.
   revalidatePath("/inicio");
-  redirect("/inicio");
+  redirect(ROTA_INICIAL);
 }
 
 const preferenciasSchema = z.object({

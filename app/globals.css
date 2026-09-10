@@ -247,6 +247,100 @@ h4 {
   }
 }
 
+/* --------------------------------------------------------------- reel
+
+   O reel é a superfície de assistir: preto de sala escura, sem grão, sem
+   textura de papel. As utilidades abaixo existem porque algumas regras
+   precisam valer em toda lâmina e não podem depender de alguém lembrar delas.
+   ------------------------------------------------------------------------ */
+
+/* Trilho de rolagem por lâminas. `scroll-snap-stop: always` impede que um
+   gesto rápido atravesse duas ou três de uma vez — num folhetim, pular um
+   episódio sem querer é perder a história, não só um vídeo. */
+@utility trilho-reel {
+  overflow-y: scroll;
+  scroll-snap-type: y mandatory;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+@utility lamina-snap {
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}
+
+/* Véu de leitura: texto sobre vídeo precisa de contraste garantido, e um
+   gradiente é mais honesto que sombra de texto — não escurece o rosto do
+   ator no meio do quadro. */
+@utility veu-inferior {
+  background: linear-gradient(
+    to top,
+    rgb(0 0 0 / 0.82) 0%,
+    rgb(0 0 0 / 0.55) 26%,
+    rgb(0 0 0 / 0.16) 58%,
+    transparent 100%
+  );
+}
+
+@utility veu-superior {
+  background: linear-gradient(
+    to bottom,
+    rgb(0 0 0 / 0.58) 0%,
+    rgb(0 0 0 / 0.2) 55%,
+    transparent 100%
+  );
+}
+
+/* Cada ícone da coluna de ações carrega o próprio halo: sobre uma cena clara
+   um traço branco simplesmente some, e ação que some não é tocada. */
+@utility halo-acao {
+  filter: drop-shadow(0 1px 3px rgb(0 0 0 / 0.55));
+}
+
+@keyframes coracao-estoura {
+  0% {
+    opacity: 0;
+    transform: scale(0.3) rotate(-14deg);
+  }
+  35% {
+    opacity: 1;
+    transform: scale(1.18) rotate(4deg);
+  }
+  60% {
+    transform: scale(0.96) rotate(-2deg);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.5) rotate(0deg);
+  }
+}
+
+@utility coracao-estouro {
+  animation: coracao-estoura 0.72s var(--ease-out-soft) both;
+}
+
+@keyframes pulso-acao {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.28);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@utility pulso-acao {
+  animation: pulso-acao 0.36s var(--ease-spring) both;
+}
+
+/* O grão de impressão do resto do app é ótimo em cartaz e péssimo sobre vídeo
+   em movimento: vira ruído de compressão aparente. */
+:root[data-superficie="reel"] body::after {
+  display: none;
+}
+
 /* ------------------------------------------------------------- animações */
 
 @keyframes rise {

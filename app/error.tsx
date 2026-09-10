@@ -35,7 +35,7 @@ export default function ErroGlobal({
           Tentar de novo
         </button>
         <a
-          href="/inicio"
+          href="/plantao"
           className="tap flex h-13 items-center justify-center rounded-2xl border border-white/12 bg-white/6 text-[0.9375rem] font-semibold text-cream-200"
         >
           Voltar ao início

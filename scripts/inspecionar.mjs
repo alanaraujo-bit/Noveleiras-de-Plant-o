@@ -6,7 +6,7 @@
  * desenvolvimento — não faz parte do produto.
  *
  * Uso: node scripts/inspecionar.mjs [--base=http://localhost:3100] [--saida=dir]
- *      node scripts/inspecionar.mjs --rotas=/inicio,/buscar
+ *      node scripts/inspecionar.mjs --rotas=/plantao,/buscar
  *      node scripts/inspecionar.mjs --largura=393 --altura=852
  */
 import { mkdir } from "node:fs/promises";
@@ -30,6 +30,7 @@ const ROTAS_PADRAO = [
   "/bem-vindo",
   "/entrar",
   "/criar-conta",
+  "/plantao",
   "/inicio",
   "/buscar",
   "/generos",
