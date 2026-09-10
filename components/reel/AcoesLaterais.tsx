@@ -38,7 +38,7 @@ export function AcoesLaterais({
 }) {
   return (
     <div
-      className="absolute bottom-0 right-0 z-30 flex w-[4.5rem] flex-col items-center gap-[1.125rem] pb-1"
+      className="pointer-events-auto absolute bottom-0 right-0 z-30 flex w-[4.5rem] flex-col items-center gap-[1.125rem] pb-1"
       style={{
         paddingBottom: "calc(var(--tabbar-h) + var(--safe-b) + 1.25rem)",
       }}

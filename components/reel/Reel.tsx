@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { FolhaComentarios } from "@/components/reel/FolhaComentarios";
+import { AnimatePresence } from "motion/react";
+
+import { Comentarios } from "@/components/reel/Comentarios";
 import { FolhaEnviar } from "@/components/reel/FolhaEnviar";
 import { Lamina } from "@/components/reel/Lamina";
 import { useTelemetry } from "@/components/sistema/TelemetryProvider";
@@ -53,12 +55,14 @@ type Folha =
 export function Reel({
   laminasIniciais,
   economiaDeDados,
-  temConta,
+  viewer,
 }: {
   laminasIniciais: LaminaReel[];
   economiaDeDados: boolean;
-  temConta: boolean;
+  /** Quem está assistindo. Nulo só existiria numa fila pública, que ainda não há. */
+  viewer: { nome: string; avatarSeed: string; avatarUrl: string | null } | null;
 }) {
+  const temConta = viewer !== null;
   const { sessionId } = useTelemetry();
   const toast = useToast();
 
@@ -375,7 +379,14 @@ export function Reel({
               key={lamina.chave}
               indice={indice}
               lamina={lamina}
-              ativa={indice === ativo && folha === null}
+              // A lâmina continua tocando com o painel de comentários aberto.
+              // Amarrar `ativa` à folha pausava o episódio no instante em que a
+              // pessoa ia falar sobre ele — e um reel que congela ao ser
+              // comentado deixa de ser um reel.
+              ativa={indice === ativo}
+              // O cromo some enquanto o painel está de pé: a faixa de vídeo que
+              // sobra é estreita, e a coluna de ações competiria com ela.
+              recuada={folha !== null}
               // A janela de montagem: o anterior continua montado para que
               // voltar um passo não recomece o vídeo do zero.
               montada={Math.abs(indice - ativo) <= 1}
@@ -397,16 +408,20 @@ export function Reel({
         ))}
       </div>
 
-      {laminaDaFolha && folha?.tipo === "comentarios" ? (
-        <FolhaComentarios
-          lamina={laminaDaFolha}
-          temConta={temConta}
-          aoFechar={() => setFolha(null)}
-          aoMudarTotal={(total) =>
-            ajustarContagem(laminaDaFolha.episodio.id, "comentarios", total)
-          }
-        />
-      ) : null}
+      <AnimatePresence>
+        {laminaDaFolha && folha?.tipo === "comentarios" ? (
+          <Comentarios
+            key={laminaDaFolha.episodio.id}
+            lamina={laminaDaFolha}
+            alturaTela={altura}
+            viewer={viewer}
+            aoFechar={() => setFolha(null)}
+            aoMudarTotal={(total) =>
+              ajustarContagem(laminaDaFolha.episodio.id, "comentarios", total)
+            }
+          />
+        ) : null}
+      </AnimatePresence>
 
       {laminaDaFolha && folha?.tipo === "enviar" ? (
         <FolhaEnviar

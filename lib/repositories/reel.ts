@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { posterUrl, resolveMedia, type MediaProviderName } from "@/lib/media/resolver";
 import { assinarUrl, segredoDeMidia } from "@/lib/media/assinatura";
 import { canWatchEpisode, type Entitlement } from "@/lib/access/entitlements";
+import { filtroDeComentariosVisiveis } from "@/lib/repositories/episodio-social";
 import type { Fonte } from "@/lib/player/reproducao";
 
 /**
@@ -87,9 +88,9 @@ type EpisodioCru = {
   mediaFormat: string;
   thumbKey: string;
   likeCount: number;
-  commentCount: number;
   shareCount: number;
   season: { number: number };
+  _count: { comments: number };
 };
 
 type NovelaCrua = {
@@ -117,9 +118,12 @@ const EPISODIO_SELECT = {
   mediaFormat: true,
   thumbKey: true,
   likeCount: true,
-  commentCount: true,
   shareCount: true,
   season: { select: { number: true } },
+  // A contagem sai da relação, e não da coluna espelho: comentário agora tem
+  // resposta, e apagar uma raiz leva a árvore em cascata — nenhum decremento
+  // acompanharia isso sem errar. Uma subconsulta por lâmina, exata sempre.
+  _count: { select: { comments: { where: filtroDeComentariosVisiveis() } } },
 } as const;
 
 const NOVELA_SELECT = {
@@ -236,7 +240,7 @@ function montarLamina({
     retomarEm,
     social: {
       curtidas: episodio.likeCount,
-      comentarios: episodio.commentCount,
+      comentarios: episodio._count.comments,
       envios: episodio.shareCount,
       curtido,
     },

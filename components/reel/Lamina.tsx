@@ -41,6 +41,8 @@ type Props = {
   ativa: boolean;
   /** Está na janela de montagem (anterior, atual ou próxima). */
   montada: boolean;
+  /** Um painel está de pé sobre a lâmina: o cromo sai de cena. */
+  recuada: boolean;
   somLigado: boolean;
   economiaDeDados: boolean;
   /** Verdadeiro depois do limiar de permanência — libera gravação e contagem. */
@@ -59,6 +61,7 @@ export function Lamina({
   indice,
   ativa,
   montada,
+  recuada,
   somLigado,
   economiaDeDados,
   contabilizavel,
@@ -473,21 +476,33 @@ export function Lamina({
         </div>
       ) : null}
 
-      {/* ------------------------------------------------- coluna de ações */}
-      <AcoesLaterais
-        lamina={lamina}
-        aoCurtir={aoCurtir}
-        aoAbrirComentarios={aoAbrirComentarios}
-        aoEnviar={aoEnviar}
-      />
+      {/* Cromo da lâmina.
 
-      {/* ------------------------------------------------------ identidade */}
+          Some junto, num plano só, quando um painel sobe: a faixa de vídeo que
+          sobra acima dele é estreita, e manter a coluna de ações e o texto ali
+          empilharia dois níveis de interface disputando poucos pixels. */}
+      {/* O invólucro é transparente ao toque e os filhos reativam o alvo. Sem
+          isso, uma camada de tela inteira cobriria a área de tocar/pausar, que
+          vive logo abaixo — e o vídeo pararia de responder ao toque. */}
       <div
-        className="absolute inset-x-0 bottom-0 z-20 px-4 pr-[4.75rem]"
-        style={{
-          paddingBottom: "calc(var(--tabbar-h) + var(--safe-b) + 0.875rem)",
-        }}
+        className={`pointer-events-none absolute inset-0 z-20 transition-opacity duration-200 ${
+          recuada ? "opacity-0" : "opacity-100"
+        }`}
       >
+        <AcoesLaterais
+          lamina={lamina}
+          aoCurtir={aoCurtir}
+          aoAbrirComentarios={aoAbrirComentarios}
+          aoEnviar={aoEnviar}
+        />
+
+        {/* ---------------------------------------------------- identidade */}
+        <div
+          className="pointer-events-auto absolute inset-x-0 bottom-0 px-4 pr-[4.75rem]"
+          style={{
+            paddingBottom: "calc(var(--tabbar-h) + var(--safe-b) + 0.875rem)",
+          }}
+        >
         <div className="flex items-center gap-2">
           <Link
             href={`/novela/${lamina.novela.slug}`}
@@ -545,19 +560,20 @@ export function Lamina({
         ) : null}
       </div>
 
-      {/* Linha de progresso: fina, sem alça, encostada na barra de abas. Um
-          reel não tem barra de busca — arrastar aqui competiria com o swipe. */}
-      <div
-        className="pointer-events-none absolute inset-x-0 z-20 h-[2px] bg-white/12"
-        style={{ bottom: "calc(var(--tabbar-h) + var(--safe-b))" }}
-      >
+        {/* Linha de progresso: fina, sem alça, encostada na barra de abas. Um
+            reel não tem barra de busca — arrastar aqui competiria com o swipe. */}
         <div
-          className="h-full origin-left transition-[width] duration-200 ease-linear"
-          style={{
-            width: `${Math.min(100, Math.max(0, progresso))}%`,
-            background: lamina.novela.accent,
-          }}
-        />
+          className="absolute inset-x-0 h-[2px] bg-white/12"
+          style={{ bottom: "calc(var(--tabbar-h) + var(--safe-b))" }}
+        >
+          <div
+            className="h-full origin-left transition-[width] duration-200 ease-linear"
+            style={{
+              width: `${Math.min(100, Math.max(0, progresso))}%`,
+              background: lamina.novela.accent,
+            }}
+          />
+        </div>
       </div>
     </section>
   );

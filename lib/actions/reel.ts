@@ -2,11 +2,14 @@
 
 import { getViewer } from "@/lib/auth/session";
 import {
+  alternarCurtidaDeComentario,
   alternarCurtidaDeEpisodio,
   apagarComentarioDeEpisodio,
   comentarEmEpisodio,
+  contarComentarios,
   contarEnvio,
   listarComentarios,
+  listarRespostas,
   type ComentarioDeEpisodio,
 } from "@/lib/repositories/episodio-social";
 import { continuacaoDaNovela, maisGanchos, type LaminaReel } from "@/lib/repositories/reel";
@@ -60,10 +63,19 @@ export async function carregarComentarios(episodeId: string) {
   return { ok: true as const, comentarios };
 }
 
+/** Respostas de uma conversa. Só sobem quando a pessoa pede para ver. */
+export async function carregarRespostas(parentId: string) {
+  const viewer = await getViewer();
+  const respostas = await listarRespostas(parentId, viewer?.id ?? null);
+  return { ok: true as const, respostas };
+}
+
 export async function comentarEpisodio(input: {
   episodeId: string;
   body: string;
   spoiler?: boolean;
+  /** Comentário sendo respondido. Pode ser uma raiz ou uma resposta. */
+  responderA?: string | null;
 }): Promise<
   Falha | { ok: true; comentario: ComentarioDeEpisodio; total: number }
 > {
@@ -78,11 +90,15 @@ export async function comentarEpisodio(input: {
     episodeId: input.episodeId,
     body: texto,
     spoiler: input.spoiler,
+    responderA: input.responderA,
   });
+  // Nulo significa que o alvo da resposta não existe mais ou é de outro
+  // episódio — a conversa mudou embaixo da pessoa enquanto ela escrevia.
+  if (!comentario) return { ok: false, motivo: "nao-encontrado" };
 
   const episodio = await db.episode.findUnique({
     where: { id: input.episodeId },
-    select: { novelaId: true, commentCount: true },
+    select: { novelaId: true },
   });
 
   await track({
@@ -93,18 +109,36 @@ export async function comentarEpisodio(input: {
     novelaId: episodio?.novelaId ?? null,
     entityType: "episode-comment",
     entityId: comentario.id,
+    payload: { resposta: Boolean(input.responderA) },
   });
 
-  return { ok: true, comentario, total: episodio?.commentCount ?? 0 };
+  return {
+    ok: true,
+    comentario,
+    total: await contarComentarios(input.episodeId),
+  };
 }
 
-export async function apagarComentario(commentId: string) {
+export async function curtirComentario(commentId: string) {
   const viewer = await getViewer();
   if (!viewer) return FALHA_SEM_CONTA;
-  const apagou = await apagarComentarioDeEpisodio(viewer.id, commentId);
-  return apagou
-    ? { ok: true as const }
+  const resultado = await alternarCurtidaDeComentario(viewer.id, commentId);
+  return resultado
+    ? { ok: true as const, ...resultado }
     : ({ ok: false, motivo: "nao-encontrado" } satisfies Falha);
+}
+
+export async function apagarComentario(input: {
+  commentId: string;
+  episodeId: string;
+}): Promise<Falha | { ok: true; total: number }> {
+  const viewer = await getViewer();
+  if (!viewer) return FALHA_SEM_CONTA;
+  const apagou = await apagarComentarioDeEpisodio(viewer.id, input.commentId);
+  if (!apagou) return { ok: false, motivo: "nao-encontrado" };
+  // Apagar uma raiz leva as respostas junto: o total precisa ser recontado, e
+  // não estimado a partir do que a tela achava que existia.
+  return { ok: true, total: await contarComentarios(input.episodeId) };
 }
 
 // -------------------------------------------------------------- enviar

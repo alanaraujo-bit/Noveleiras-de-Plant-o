@@ -46,7 +46,11 @@ export default async function PlantaoPage() {
     <Reel
       laminasIniciais={laminas}
       economiaDeDados={viewer.preferences.dataSaver}
-      temConta
+      viewer={{
+        nome: viewer.name,
+        avatarSeed: viewer.avatarSeed,
+        avatarUrl: viewer.avatarUrl,
+      }}
     />
   );
 }
