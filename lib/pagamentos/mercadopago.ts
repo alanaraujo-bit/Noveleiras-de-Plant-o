@@ -226,15 +226,15 @@ function traduzirStatusAssinatura(status: string | null): EstadoProvedor {
       return "APPROVED";
     case "pending":
       return "PENDING";
-    // `canceled` não é a grafia que o Mercado Pago usa hoje, mas ler as duas
-    // é grátis e evita que uma padronização do lado deles vire "estado
-    // desconhecido" — que aqui significaria não reconhecer um cancelamento.
+    // As duas grafias, de propósito: a documentação deles usa `canceled` na
+    // página de cancelamento e no `/preapproval/export`, e `cancelled` nas de
+    // ciclo de vida. Não reconhecer um cancelamento porque eles trocaram a
+    // grafia seria o pior desfecho possível deste `switch`.
     case "canceled":
+    case "cancelled":
       return "CANCELED";
     case "paused":
       return "PENDING";
-    case "cancelled":
-      return "CANCELED";
     default:
       return "UNKNOWN";
   }
@@ -578,20 +578,30 @@ export class MercadoPago implements ProvedorDePagamento {
   }
 
   /**
-   * `"cancelled"`, com dois L.
+   * `"canceled"`, com **um** L — e isso não é descuido de digitação.
    *
-   * Conferido na referência do Mercado Pago e no SDK oficial deles: os estados
-   * de um preapproval são `pending`, `authorized`, `paused` e `cancelled`. A
-   * grafia americana (`canceled`) **não** é aceita — e como a API responde
-   * 400 genérico para status inválido, errar aqui é o tipo de coisa que passa
-   * despercebida até alguém tentar cancelar de verdade.
+   * A documentação do Mercado Pago diverge de si mesma. "Gerenciamento de
+   * assinaturas → Cancelar ou pausar" manda enviar `status` com o valor
+   * `canceled`, e `/preapproval/export` lista os estados como
+   * `authorized,canceled,paused`. Já as páginas que descrevem o ciclo de vida
+   * da assinatura escrevem `cancelled`, com dois L.
+   *
+   * O que vale para **escrever** é a página de cancelamento: é ela que
+   * documenta esta chamada. Para **ler**, `traduzirStatusAssinatura` aceita as
+   * duas grafias — não reconhecer um cancelamento vindo deles seria pior que
+   * tolerar uma inconsistência que é deles.
+   *
+   * Errar aqui é caro e silencioso: status inválido devolve 400 genérico, sem
+   * dizer que a string é o problema. A confirmação obrigatória em
+   * `confirmarCancelamentoNoProvedor` é a rede embaixo disso — sem `CANCELED`
+   * confirmado, nada é gravado do nosso lado.
    */
   async cancelarAssinatura(externalId: string): Promise<EstadoProvedor> {
     const resposta = await chamar<{ status?: string }>(
       `/preapproval/${encodeURIComponent(externalId)}`,
       {
         method: "PUT",
-        body: JSON.stringify({ status: "cancelled" }),
+        body: JSON.stringify({ status: "canceled" }),
       },
     );
 

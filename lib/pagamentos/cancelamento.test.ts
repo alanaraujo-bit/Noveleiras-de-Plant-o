@@ -400,3 +400,57 @@ describe("o que o cancelamento nunca toca", () => {
     expect(chamadas.cancelar).toBe(0);
   });
 });
+
+// ------------------------------------------- a grafia que vai para a API
+
+/**
+ * O valor enviado no `PUT /preapproval/{id}`.
+ *
+ * A documentação do Mercado Pago diverge de si mesma: "Gerenciamento de
+ * assinaturas → Cancelar ou pausar" e `/preapproval/export` usam `canceled`
+ * (um L); as páginas de ciclo de vida usam `cancelled` (dois L). Para
+ * **escrever** vale a primeira.
+ *
+ * Este teste existe porque errar aqui é invisível: status inválido devolve
+ * 400 genérico, sem dizer que a string é o problema. Alguém "corrigindo" a
+ * grafia de volta quebraria o cancelamento inteiro sem quebrar nenhum outro
+ * teste.
+ */
+describe("o corpo enviado ao Mercado Pago", () => {
+  it("manda status canceled, com um L, e le as duas grafias de volta", async () => {
+    const { MercadoPago } = await import("./mercadopago");
+
+    const originais = { ...process.env };
+    process.env.MERCADOPAGO_ACCESS_TOKEN = "TEST-token";
+    process.env.MERCADOPAGO_WEBHOOK_SECRET = "segredo";
+
+    const enviados: Array<{ url: string; metodo?: string; corpo: unknown }> = [];
+    const fetchOriginal = globalThis.fetch;
+    globalThis.fetch = (async (url: string, init: RequestInit) => {
+      enviados.push({
+        url: String(url),
+        metodo: init?.method,
+        corpo: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+      // Responde com a grafia de dois L, que e a que as paginas de ciclo de
+      // vida usam: a leitura tem de reconhece-la mesmo assim.
+      return new Response(JSON.stringify({ status: "cancelled" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    try {
+      const estado = await new MercadoPago().cancelarAssinatura("pre-1");
+
+      expect(enviados).toHaveLength(1);
+      expect(enviados[0]!.metodo).toBe("PUT");
+      expect(enviados[0]!.url).toContain("/preapproval/pre-1");
+      expect(enviados[0]!.corpo).toEqual({ status: "canceled" });
+      expect(estado).toBe("CANCELED");
+    } finally {
+      globalThis.fetch = fetchOriginal;
+      process.env = originais;
+    }
+  });
+});
