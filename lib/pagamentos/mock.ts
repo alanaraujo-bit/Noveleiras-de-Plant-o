@@ -26,6 +26,7 @@ import {
   type CriarAssinaturaEntrada,
   type CriarCompraEntrada,
   type EstadoProvedor,
+  type FaturaDeAssinatura,
   type ProvedorDePagamento,
   type ResolucaoDePreferencia,
   type RespostaCheckout,
@@ -156,6 +157,7 @@ export class ProvedorMock implements ProvedorDePagamento {
       reembolsadoCents: r.reembolsadoCents,
       statusCru: r.status.toLowerCase(),
       detalheCru: r.status === "REJECTED" ? "cc_rejected_other_reason" : null,
+      preapprovalId: r.assinatura ? r.externalId : null,
       bruto: r,
     };
   }
@@ -169,9 +171,48 @@ export class ProvedorMock implements ProvedorDePagamento {
     return {
       externalId: r.externalId,
       status: r.status,
+      statusCru: r.status === "APPROVED" ? "authorized" : r.status.toLowerCase(),
       referenciaExterna: r.referenciaExterna,
       proximaCobranca: null,
+      cobrancasRealizadas: r.status === "APPROVED" ? 1 : 0,
       bruto: r,
+    };
+  }
+
+  /**
+   * Uma fatura por assinatura, e a cobrança dela é o próprio registro: o
+   * provedor falso não tem retentativa nem ciclo seguinte. Basta para que o
+   * livro de ciclos funcione de ponta a ponta sem credencial.
+   */
+  async listarFaturas(preapprovalId: string): Promise<FaturaDeAssinatura[]> {
+    const fatura = await this.consultarFatura(`fat-${preapprovalId}`);
+    return fatura ? [fatura] : [];
+  }
+
+  async consultarFatura(faturaId: string): Promise<FaturaDeAssinatura | null> {
+    const preapprovalId = faturaId.replace(/^fat-/, "");
+    const r = registros.get(preapprovalId);
+    if (!r || !r.assinatura) return null;
+
+    return {
+      id: faturaId,
+      preapprovalId,
+      statusCru: "processed",
+      referenciaExterna: r.referenciaExterna,
+      dataDebito: r.aprovadoEm,
+      valorCents: r.valorCents,
+      moeda: "BRL",
+      metodo: r.metodo,
+      retentativa: 1,
+      pagamento:
+        r.status === "PENDING"
+          ? null
+          : {
+              id: preapprovalId,
+              status: r.status,
+              statusCru: r.status.toLowerCase(),
+              detalheCru: null,
+            },
     };
   }
 

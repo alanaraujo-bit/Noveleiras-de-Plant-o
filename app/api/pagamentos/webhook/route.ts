@@ -4,9 +4,12 @@ import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { provedorDePagamento } from "@/lib/pagamentos";
 import {
-  reconciliarAssinatura,
+  reconciliarCicloDeAssinatura,
+  reconciliarFatura,
   reconciliarMerchantOrder,
   reconciliarPagamento,
+  type ResultadoDeCiclo,
+  type ResultadoReconciliacao,
 } from "@/lib/pagamentos/servico";
 
 /**
@@ -49,16 +52,12 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 /**
- * `subscription_authorized_payment` está aqui, e não entre os de assinatura,
- * porque o `data.id` desse tópico é o id de uma **cobrança** de ciclo — não o
- * do `preapproval`. Mandá-lo para `/preapproval/<id>` devolveria 404, o
- * evento viraria "ignorado" e a renovação nunca estenderia o acesso, em
- * silêncio.
+ * `subscription_authorized_payment` **não** é pagamento. O `data.id` dele é
+ * o id de uma fatura: confirmado contra a API real, `GET /v1/payments/<id da
+ * fatura>` responde 404 — e era para lá que este tópico ia, então toda
+ * renovação notificada virava "ignorado" em silêncio.
  */
-const TOPICOS_DE_PAGAMENTO = new Set([
-  "payment",
-  "subscription_authorized_payment",
-]);
+const TOPICOS_DE_PAGAMENTO = new Set(["payment"]);
 
 const TOPICOS_DE_ASSINATURA = new Set([
   "preapproval",
@@ -174,6 +173,11 @@ async function processar(
 ): Promise<Processamento> {
   if (!recursoId) return { tratado: false };
 
+  if (topico === "subscription_authorized_payment") {
+    const resultado = await reconciliarFatura(recursoId);
+    return { tratado: foiTratado(resultado), snapshot: resultado };
+  }
+
   if (topico === "merchant_order") {
     // O id aqui é o do **pedido**, não o do pagamento. Mandá-lo para
     // `/v1/payments` devolvia 404, e o ramo abaixo gravava `tratado: true`
@@ -183,21 +187,36 @@ async function processar(
   }
 
   if (TOPICOS_DE_PAGAMENTO.has(topico)) {
+    // Cobrança de assinatura é desviada lá dentro para o livro de ciclos.
     const resultado = await reconciliarPagamento(recursoId);
-    // `tratado` passa a seguir o que de fato mudou. Antes era fixo em `true`,
-    // e um pagamento que não achava tentativa constava como processado.
-    return { tratado: resultado.mudou, snapshot: resultado };
+    return { tratado: foiTratado(resultado), snapshot: resultado };
   }
 
   if (TOPICOS_DE_ASSINATURA.has(topico)) {
-    // Mesma rotina que a página de retorno e a tela de espera chamam. Havendo
-    // um só caminho, não existe o desfecho em que um deles ativa a assinatura
-    // e o outro só carimba a tentativa.
-    const resultado = await reconciliarAssinatura(recursoId);
-    return { tratado: resultado.mudou, snapshot: resultado.snapshot };
+    // Mesma rotina do retorno, da tela de espera e do cron.
+    const resultado = await reconciliarCicloDeAssinatura(recursoId, {
+      origem: `webhook:${topico}`,
+    });
+    return { tratado: foiTratado(resultado), snapshot: resultado };
   }
 
   return { tratado: false };
+}
+
+/**
+ * PROCESSED quer dizer "reconciliado contra uma cobrança nossa", mesmo que a
+ * reconciliação não tenha tido nada novo a fazer — reentrega é isso. IGNORED
+ * fica para o que não nos diz respeito, e para a assinatura antiga que ainda
+ * espera a migração do livro de ciclos: esse evento precisa poder ser
+ * reprocessado depois.
+ */
+function foiTratado(
+  resultado: ResultadoReconciliacao | ResultadoDeCiclo,
+): boolean {
+  if ("vinculoLegadoPendente" in resultado && resultado.vinculoLegadoPendente) {
+    return false;
+  }
+  return resultado.attemptId !== null;
 }
 
 /**

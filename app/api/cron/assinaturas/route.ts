@@ -2,7 +2,11 @@ import { NextResponse } from "next/server";
 
 import { expirarDireitosVencidos } from "@/lib/access/direitos";
 import { log } from "@/lib/painel/log";
-import { expirarAssinaturasVencidas } from "@/lib/pagamentos/servico";
+import {
+  expirarAssinaturasVencidas,
+  reconciliarAssinaturasPeriodicamente,
+  type ResumoDaReconciliacao,
+} from "@/lib/pagamentos/servico";
 
 /**
  * Fecha ciclos vencidos.
@@ -32,6 +36,22 @@ export async function GET(requisicao: Request) {
     return NextResponse.json({ erro: "Não autorizado" }, { status: 401 });
   }
 
+  // Reconciliar ANTES de expirar. Na ordem inversa, quem pagou a renovação
+  // mas cujo webhook não chegou seria cortado primeiro e só depois
+  // descoberto como pagante.
+  //
+  // Ligada por `ASSINATURAS_RECONCILIAR=1`. Nasce desligada porque as
+  // assinaturas ativadas antes do livro de ciclos precisam de uma migração
+  // explícita; até lá a rotina só as reportaria como pendentes.
+  let reconciliacao: ResumoDaReconciliacao | "desligada" = "desligada";
+  if (process.env.ASSINATURAS_RECONCILIAR === "1") {
+    const url = new URL(requisicao.url);
+    const completa =
+      url.searchParams.get("varredura") === "completa" ||
+      new Date().getUTCDay() === 0; // domingo: a varredura larga da semana
+    reconciliacao = await reconciliarAssinaturasPeriodicamente({ completa });
+  }
+
   // Ordem importa: primeiro as assinaturas, que revogam os direitos ligados a
   // elas; depois a varredura solta, que pega direitos órfãos de compra ou
   // concessão manual.
@@ -46,5 +66,5 @@ export async function GET(requisicao: Request) {
     });
   }
 
-  return NextResponse.json({ assinaturas, direitos });
+  return NextResponse.json({ reconciliacao, assinaturas, direitos });
 }

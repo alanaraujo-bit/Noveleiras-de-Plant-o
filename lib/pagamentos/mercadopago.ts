@@ -23,6 +23,7 @@ import {
   type CriarAssinaturaEntrada,
   type CriarCompraEntrada,
   type EstadoProvedor,
+  type FaturaDeAssinatura,
   type ProvedorDePagamento,
   type ResolucaoDePreferencia,
   type RespostaCheckout,
@@ -84,6 +85,45 @@ function ordenarPagamentos(
         (PESO_DO_STATUS[b.status ?? ""] ?? 3),
     )
     .map((p) => String(p.id));
+}
+
+/** O formato de `/authorized_payments`, como a API real devolve. */
+type FaturaCrua = {
+  id?: number | string;
+  preapproval_id?: string;
+  status?: string;
+  external_reference?: string;
+  debit_date?: string;
+  date_created?: string;
+  transaction_amount?: number;
+  currency_id?: string;
+  payment_method_id?: string;
+  retry_attempt?: number;
+  payment?: { id?: number | string; status?: string; status_detail?: string };
+};
+
+function traduzirFatura(f: FaturaCrua): FaturaDeAssinatura {
+  const data = f.debit_date ?? f.date_created;
+  return {
+    id: String(f.id),
+    preapprovalId: f.preapproval_id ?? null,
+    statusCru: f.status ?? null,
+    referenciaExterna: f.external_reference ?? null,
+    dataDebito: data ? new Date(data) : null,
+    valorCents: Math.round((f.transaction_amount ?? 0) * 100),
+    moeda: f.currency_id ?? "BRL",
+    metodo: f.payment_method_id ?? null,
+    retentativa: f.retry_attempt ?? null,
+    pagamento:
+      f.payment?.id != null
+        ? {
+            id: String(f.payment.id),
+            status: traduzirStatusPagamento(f.payment.status ?? null),
+            statusCru: f.payment.status ?? null,
+            detalheCru: f.payment.status_detail ?? null,
+          }
+        : null,
+  };
 }
 
 // ------------------------------------------------------ pagador de teste
@@ -532,6 +572,10 @@ export class MercadoPago implements ProvedorDePagamento {
         external_reference?: string;
         date_approved?: string;
         transaction_amount_refunded?: number;
+        point_of_interaction?: {
+          type?: string;
+          transaction_data?: { subscription_id?: string };
+        };
       }>(`/v1/payments/${encodeURIComponent(externalId)}`);
 
       return {
@@ -547,6 +591,11 @@ export class MercadoPago implements ProvedorDePagamento {
         ),
         statusCru: p.status ?? null,
         detalheCru: p.status_detail ?? null,
+        // Cobrança de assinatura aponta o preapproval que a gerou. Confirmado
+        // na API real: `type: "SUBSCRIPTIONS"` e o `subscription_id` igual ao
+        // id do preapproval.
+        preapprovalId:
+          p.point_of_interaction?.transaction_data?.subscription_id ?? null,
         bruto: p,
       };
     } catch (erro) {
@@ -564,17 +613,68 @@ export class MercadoPago implements ProvedorDePagamento {
         status: string;
         external_reference?: string;
         next_payment_date?: string;
+        summarized?: { charged_quantity?: number | null };
       }>(`/preapproval/${encodeURIComponent(externalId)}`);
 
       return {
         externalId: a.id,
         status: traduzirStatusAssinatura(a.status ?? null),
+        statusCru: a.status ?? null,
         referenciaExterna: a.external_reference ?? null,
         proximaCobranca: a.next_payment_date
           ? new Date(a.next_payment_date)
           : null,
+        cobrancasRealizadas: a.summarized?.charged_quantity ?? null,
         bruto: a,
       };
+    } catch (erro) {
+      if (erro instanceof FalhaDoProvedor && erro.status === 404) return null;
+      throw erro;
+    }
+  }
+
+  /**
+   * `GET /authorized_payments/search?preapproval_id=`, página por página.
+   *
+   * O Mercado Pago devolve 12 por página por padrão. Uma mensal com dois anos
+   * já passa disso, e parar na primeira página esconderia exatamente as
+   * cobranças mais recentes — as que importam para renovar.
+   */
+  async listarFaturas(preapprovalId: string): Promise<FaturaDeAssinatura[]> {
+    const faturas: FaturaDeAssinatura[] = [];
+    // 12 é o teto da API, não uma escolha. Confirmado em produção: `limit=20`
+    // e `limit=50` respondem 400 "Invalid value for limit". A primeira versão
+    // deste método pedia 50 e teria quebrado toda renovação na primeira
+    // chamada real.
+    const limite = 12;
+
+    // Teto de segurança: 100 páginas × 12 = 1200 faturas, um século de
+    // mensal. Uma resposta que nunca acaba não pode prender o cron.
+    for (let pagina = 0; pagina < 100; pagina += 1) {
+      const resposta = await chamar<{
+        paging?: { total?: number; offset?: number; limit?: number };
+        results?: FaturaCrua[];
+      }>(
+        `/authorized_payments/search?preapproval_id=${encodeURIComponent(preapprovalId)}` +
+          `&offset=${pagina * limite}&limit=${limite}`,
+      );
+
+      const lote = Array.isArray(resposta.results) ? resposta.results : [];
+      faturas.push(...lote.map(traduzirFatura));
+
+      const total = resposta.paging?.total ?? 0;
+      if (lote.length === 0 || faturas.length >= total) break;
+    }
+
+    return faturas;
+  }
+
+  async consultarFatura(faturaId: string): Promise<FaturaDeAssinatura | null> {
+    try {
+      const f = await chamar<FaturaCrua>(
+        `/authorized_payments/${encodeURIComponent(faturaId)}`,
+      );
+      return traduzirFatura(f);
     } catch (erro) {
       if (erro instanceof FalhaDoProvedor && erro.status === 404) return null;
       throw erro;

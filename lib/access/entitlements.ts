@@ -82,7 +82,11 @@ export type Entitlement = {
   freePreviewEpisodes: number;
 };
 
-const STATUS_VIVOS: SubscriptionStatus[] = ["ACTIVE", "TRIALING"];
+// PAST_DUE está aqui de propósito: cobrança em atraso não corta acesso na
+// hora. `vigente()` ainda exige `currentPeriodEnd` ou `graceUntil` no futuro,
+// então o acesso dura o ciclo pago mais a tolerância — e acaba por data, não
+// no instante em que o provedor recusa ou pausa.
+const STATUS_VIVOS: SubscriptionStatus[] = ["ACTIVE", "TRIALING", "PAST_DUE"];
 
 /** Planos que dão catálogo inteiro. Inclui os nomes legados da Fase 01. */
 const PLANOS_ILIMITADOS: SubscriptionPlan[] = [

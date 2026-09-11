@@ -24,6 +24,7 @@ import type {
 import {
   concederAssinatura,
   concederTitulo,
+  ehViolacaoDeUnicidade,
   revogarDireitos,
 } from "@/lib/access/direitos";
 import { db } from "@/lib/db";
@@ -40,6 +41,7 @@ import { sanitizarFalha } from "./provedor";
 import type {
   ConsultaPagamento,
   EstadoProvedor,
+  FaturaDeAssinatura,
   MetodoPagamento,
 } from "./provedor";
 
@@ -351,6 +353,22 @@ export async function reconciliarPagamento(
     };
   }
 
+  // Cobrança de assinatura: o provedor aponta o preapproval, ou a tentativa
+  // original é de assinatura. Aprovada ou recusada, quem decide é o livro de
+  // ciclos — reembolso e chargeback seguem o caminho de devolução de sempre.
+  const tentativa = await localizarTentativa(consulta, provedor.nome);
+  const preapprovalId =
+    consulta.preapprovalId ??
+    (tentativa?.kind === "SUBSCRIPTION" ? tentativa.externalId : null);
+
+  if (
+    preapprovalId &&
+    consulta.status !== "REFUNDED" &&
+    consulta.status !== "CHARGEBACK"
+  ) {
+    return reconciliarCicloDeAssinatura(preapprovalId, { origem: "pagamento" });
+  }
+
   return aplicarConsulta(consulta, provedor.nome);
 }
 
@@ -370,16 +388,22 @@ async function aplicarConsulta(
   }
 
   return db.$transaction(async (tx) => {
-    await tx.paymentAttempt.update({
-      where: { id: tentativa.id },
-      data: {
-        status: mapaTentativa(consulta.status),
-        rawStatus: consulta.statusCru,
-        externalId: consulta.externalId,
-        method: consulta.metodo ?? tentativa.method,
-        failureCode: consulta.detalheCru,
-      },
-    });
+    // A tentativa de uma assinatura é o checkout que a pessoa fez: guarda o
+    // preapproval em `externalId` para sempre. Sobrescrevê-la com o id da
+    // cobrança do mês fazia a próxima reconsulta procurar a assinatura pelo
+    // id de um pagamento.
+    if (tentativa.kind !== "SUBSCRIPTION") {
+      await tx.paymentAttempt.update({
+        where: { id: tentativa.id },
+        data: {
+          status: mapaTentativa(consulta.status),
+          rawStatus: consulta.statusCru,
+          externalId: consulta.externalId,
+          method: consulta.metodo ?? tentativa.method,
+          failureCode: consulta.detalheCru,
+        },
+      });
+    }
 
     switch (consulta.status) {
       case "APPROVED":
@@ -582,33 +606,102 @@ export async function reconciliarMerchantOrder(
   );
 }
 
-/**
- * Sincroniza uma **assinatura recorrente** do provedor com o nosso banco.
- *
- * Irmã de `reconciliarPagamento`, e separada dela porque os dois objetos são
- * diferentes do lado do provedor: um `preapproval` não é um pagamento, e
- * pedi-lo em `/v1/payments/<id>` devolve 404. Passar um id de assinatura para
- * a função de pagamento não falha ruidosamente — ela simplesmente não acha
- * nada e devolve "inexistente", que foi como o acesso deixou de ser concedido
- * em silêncio.
- *
- * **É o único lugar que ativa uma assinatura.** O webhook, o retorno do
- * checkout e a tela de espera chamam esta função; nenhum deles decide nada por
- * conta própria. Antes havia três caminhos, e só o do webhook concedia direito
- * — quem voltava do checkout ficava com a tentativa aprovada e sem acesso.
- *
- * Idempotente: `ativarAssinatura` estende o ciclo a partir do fim vigente e
- * `concederAssinatura` reencontra o direito ativo em vez de criar outro. A
- * segunda entrega do mesmo evento converge para o mesmo estado.
- */
-export async function reconciliarAssinatura(
-  externalId: string,
-): Promise<ResultadoReconciliacao> {
-  const provedor = provedorDePagamento();
-  const consulta = await provedor.consultarAssinatura(externalId);
+// ---------------------------------------------------- ciclos de assinatura
+//
+// Uma cobrança real concede no máximo um ciclo. Um ciclo é pago por no
+// máximo uma cobrança.
+//
+// As duas metades moram no banco, não em `if`: `Payment` é único por
+// `(provider, externalId)` e por `(subscriptionId, cycleIndex)`. Reentrega de
+// webhook, retorno e polling ao mesmo tempo, cron rodando junto — tudo isso
+// esbarra numa das duas unicidades antes de conceder um mês a mais.
+//
+// Antes havia três portas para o mesmo evento, e cada uma decidia sozinha:
+// `ativarAssinatura` estendia o ciclo a cada pagamento aprovado, inclusive na
+// reentrega; a ativação pelo preapproval concedia o ciclo 1 sem registrar a
+// cobrança que o pagou, então o primeiro pagamento, quando aparecesse, ganharia
+// um segundo ciclo; e todo pagamento aprovado apagava `cancelAtPeriodEnd`.
 
-  if (!consulta) {
+/**
+ * Tolerância depois do fim do ciclo pago. Fixa a partir do `currentPeriodEnd`:
+ * uma retentativa recusada não recomeça a contagem, e uma recusa entregue três
+ * vezes não corta ninguém — cortar é decisão do tempo, não da contagem.
+ */
+const TOLERANCIA_MS = 3 * 86_400_000;
+
+export type OpcoesDeCiclo = {
+  /** Quem pediu a reconciliação. Vai para a auditoria de cada mudança. */
+  origem: string;
+  /**
+   * Autoriza vincular o ciclo já concedido de uma assinatura antiga — ativada
+   * antes do livro de ciclos existir — ao pagamento que o pagou.
+   *
+   * Desligado por padrão. Enquanto houver assinatura nesse estado, qualquer
+   * outra porta (webhook, polling, cron) devolve `vinculo-legado-pendente` e
+   * não escreve nada: a migração dessas assinaturas é um passo explícito.
+   */
+  permitirVinculoLegado?: boolean;
+};
+
+export type ResultadoDeCiclo = ResultadoReconciliacao & {
+  ciclosNovos: number;
+  recusasNovas: number;
+  vinculoLegadoPendente?: boolean;
+  /** Para a checagem cruzada da reconciliação periódica. */
+  conferencia?: { cobrancasNoProvedor: number | null; ciclosNoLivro: number };
+};
+
+type Assinatura = Prisma.SubscriptionGetPayload<object>;
+
+/**
+ * O que este preapproval é para a assinatura da pessoa.
+ *
+ *   novo    ainda não é o vigente: uma assinatura nova, que pode ativar
+ *   atual   é o `externalPreapprovalId` vigente: renova, recusa, cancela
+ *   antigo  foi substituído por um mais recente: registra, nunca estende
+ */
+type Papel = "novo" | "atual" | "antigo";
+
+type ContextoDeCiclo = {
+  preapprovalId: string;
+  tentativa: Tentativa;
+  plano: DefinicaoDePlano;
+  provedorNome: string;
+  opcoes: OpcoesDeCiclo;
+};
+
+class VinculoLegadoPendente extends Error {
+  constructor() {
+    super("vinculo-legado-pendente");
+    this.name = "VinculoLegadoPendente";
+  }
+}
+
+const PLANOS_PAGOS: SubscriptionPlan[] = ["MONTHLY", "ANNUAL", "PREMIUM", "VIP"];
+
+/**
+ * A única porta para o estado de uma assinatura recorrente.
+ *
+ * Ativação, renovação, recusa, retentativa aprovada, cancelamento e pausa: tudo
+ * sai daqui, a partir do que o provedor diz **agora** — preapproval, faturas e
+ * a cobrança de cada fatura. Nada vem do corpo de um webhook.
+ *
+ * Por isso a mesma chamada serve para o webhook de qualquer tópico, para o
+ * retorno do checkout, para a tela de espera e para o cron. Chamada duas vezes,
+ * converge para o mesmo estado; chamada em paralelo, uma das unicidades do
+ * `Payment` segura a outra.
+ */
+export async function reconciliarCicloDeAssinatura(
+  preapprovalId: string,
+  opcoes: OpcoesDeCiclo,
+): Promise<ResultadoDeCiclo> {
+  const provedor = provedorDePagamento();
+  const semEfeito = { ciclosNovos: 0, recusasNovas: 0 };
+
+  const pre = await provedor.consultarAssinatura(preapprovalId);
+  if (!pre) {
     return {
+      ...semEfeito,
       mudou: false,
       motivo: "assinatura inexistente no provedor",
       attemptId: null,
@@ -616,194 +709,711 @@ export async function reconciliarAssinatura(
     };
   }
 
-  // `external_reference` é o nosso id de tentativa viajando dentro do objeto
-  // deles: o caminho confiável. O `externalId` é a reserva para o fluxo em que
-  // a referência não volta.
-  const tentativa = consulta.referenciaExterna
-    ? await db.paymentAttempt.findUnique({
-        where: { id: consulta.referenciaExterna },
-      })
-    : await db.paymentAttempt.findFirst({
-        where: { provider: provedor.nome, externalId },
-      });
-
+  const tentativa = await localizarTentativaDaAssinatura(
+    pre.referenciaExterna,
+    preapprovalId,
+    provedor.nome,
+  );
   if (!tentativa) {
     return {
+      ...semEfeito,
       mudou: false,
       motivo: "sem tentativa correspondente",
       attemptId: null,
-      status: consulta.status,
-      snapshot: consulta,
+      status: pre.status,
+      snapshot: pre,
     };
   }
 
-  const assinatura = await db.subscription.findUnique({
+  const ctx: ContextoDeCiclo = {
+    preapprovalId,
+    tentativa,
+    plano: planoPorCodigo(tentativa.plan ?? "MONTHLY"),
+    provedorNome: provedor.nome,
+    opcoes,
+  };
+
+  const pendente = {
+    ...semEfeito,
+    mudou: false,
+    motivo: "vinculo-legado-pendente",
+    vinculoLegadoPendente: true,
+    attemptId: tentativa.id,
+    status: pre.status,
+    snapshot: pre,
+  };
+
+  // A trava da migração. Checada antes de qualquer escrita — inclusive a de
+  // cancelamento — para que "não mexer nas assinaturas antigas" seja literal.
+  const inicial = await db.subscription.findUnique({
     where: { userId: tentativa.userId },
   });
-
-  switch (consulta.status) {
-    case "APPROVED": {
-      const plano = planoPorCodigo(tentativa.plan ?? "MONTHLY");
-
-      // Reconciliar de novo o **mesmo** preapproval não é uma renovação: é a
-      // mesma autorização sendo relida — o webhook reentregue, o retorno
-      // reaberto, a tela de espera consultando. `ativarAssinatura` estende o
-      // ciclo a partir do fim vigente, então deixar passar daria um mês de
-      // graça a cada releitura.
-      //
-      // A renovação de verdade não chega por aqui: um ciclo cobrado vem como
-      // `subscription_authorized_payment`, que é um pagamento e segue por
-      // `reconciliarPagamento`.
-      const jaAtivaPorEste =
-        tentativa.status === "APPROVED" &&
-        assinatura?.status === "ACTIVE" &&
-        assinatura.plan === plano.code &&
-        assinatura.externalPreapprovalId === externalId;
-
-      if (jaAtivaPorEste) {
-        // `mudou: true` de propósito: o evento foi reconhecido e tratado, e
-        // gravá-lo como IGNORED faria a auditoria mentir sobre a reentrega.
-        return {
-          mudou: true,
-          motivo: "assinatura já ativa por este preapproval",
-          attemptId: tentativa.id,
-          status: consulta.status,
-          snapshot: consulta,
-        };
-      }
-
-      await db.$transaction(async (tx) => {
-        await tx.paymentAttempt.update({
-          where: { id: tentativa.id },
-          data: { status: "APPROVED", externalId, rawStatus: "authorized" },
-        });
-        // O dono do direito é `tentativa.userId` — a conta real de quem
-        // clicou. O `payer_email` mandado ao provedor pode ser o comprador de
-        // teste, e ele não entra nesta linha em momento algum.
-        await ativarAssinatura(tx, tentativa.userId, plano, provedor.nome, {
-          externalId,
-        });
-        await tx.subscription.update({
-          where: { userId: tentativa.userId },
-          data: { externalPreapprovalId: externalId },
-        });
-      });
-
-      // Sempre `true`, mesmo na reentrega: a transação rodou e convergiu. É o
-      // que mantém o evento repetido gravado como PROCESSED, e não IGNORED.
-      return {
-        mudou: true,
-        motivo: "assinatura ativada",
-        attemptId: tentativa.id,
-        status: consulta.status,
-        snapshot: consulta,
-      };
-    }
-
-    case "CANCELED": {
-      if (!assinatura) {
-        return {
-          mudou: false,
-          motivo: "cancelamento sem assinatura nossa",
-          attemptId: tentativa.id,
-          status: consulta.status,
-          snapshot: consulta,
-        };
-      }
-
-      // Não corta o acesso agora: quem pagou até o dia 30 assiste até o dia
-      // 30, e o direito expira sozinho no fim do ciclo.
-      await db.$transaction([
-        db.subscription.update({
-          where: { id: assinatura.id },
-          data: { cancelAtPeriodEnd: true, canceledAt: new Date() },
-        }),
-        db.subscriptionEvent.create({
-          data: {
-            subscriptionId: assinatura.id,
-            userId: tentativa.userId,
-            type: "CANCELED",
-            fromStatus: assinatura.status,
-            toStatus: assinatura.status,
-            periodEnd: assinatura.currentPeriodEnd,
-            payload: { origem: "reconciliacao" },
-          },
-        }),
-      ]);
-
-      return {
-        mudou: true,
-        motivo: "assinatura cancelada no provedor",
-        attemptId: tentativa.id,
-        status: consulta.status,
-        snapshot: consulta,
-      };
-    }
-
-    case "PENDING": {
-      // `paused` chega como PENDING — e `pending`, o preapproval que a pessoa
-      // ainda não autorizou, também. Os dois são indistinguíveis aqui, então
-      // só rebaixa a assinatura que **este** preapproval sustenta.
-      //
-      // Sem essa condição, a tela de espera consultando de segundo em segundo
-      // enquanto o cartão não é autorizado marcaria a conta como PAST_DUE e
-      // revogaria os direitos de quem nunca chegou a assinar. O webhook antigo
-      // escapava disso por acidente: só recebia evento de assinatura que já
-      // existia.
-      if (
-        !assinatura ||
-        assinatura.status !== "ACTIVE" ||
-        assinatura.externalPreapprovalId !== externalId
-      ) {
-        return {
-          mudou: false,
-          motivo: "assinatura ainda não autorizada",
-          attemptId: tentativa.id,
-          status: consulta.status,
-          snapshot: consulta,
-        };
-      }
-
-      await db.$transaction(async (tx) => {
-        await tx.subscription.update({
-          where: { id: assinatura.id },
-          data: { status: "PAST_DUE" },
-        });
-        await revogarDireitos(
-          { userId: tentativa.userId, subscriptionId: assinatura.id },
-          "assinatura pausada no provedor",
-          tx,
-        );
-        await tx.subscriptionEvent.create({
-          data: {
-            subscriptionId: assinatura.id,
-            userId: tentativa.userId,
-            type: "PAST_DUE",
-            fromStatus: assinatura.status,
-            toStatus: "PAST_DUE",
-            payload: { origem: "reconciliacao" },
-          },
-        });
-      });
-
-      return {
-        mudou: true,
-        motivo: "assinatura pausada no provedor",
-        attemptId: tentativa.id,
-        status: consulta.status,
-        snapshot: consulta,
-      };
-    }
-
-    default:
-      return {
-        mudou: false,
-        motivo: `estado ${consulta.status} não muda acesso`,
-        attemptId: tentativa.id,
-        status: consulta.status,
-        snapshot: consulta,
-      };
+  if (
+    inicial &&
+    !opcoes.permitirVinculoLegado &&
+    (await ehLegado(db, inicial, preapprovalId))
+  ) {
+    return pendente;
   }
+
+  // Ordem de débito, sempre. Webhook fora de ordem, página da API em outra
+  // ordem, dois caminhos ao mesmo tempo: todos atribuem o mesmo ciclo à mesma
+  // cobrança porque todos percorrem as faturas na mesma sequência.
+  const faturas = (await provedor.listarFaturas(preapprovalId))
+    .filter(
+      (f) =>
+        f.pagamento &&
+        (!f.preapprovalId || f.preapprovalId === preapprovalId),
+    )
+    .sort(porOrdemDeDebito);
+
+  let ciclosNovos = 0;
+  let recusasNovas = 0;
+
+  try {
+    for (const fatura of faturas) {
+      const status = fatura.pagamento!.status;
+      if (status === "APPROVED") {
+        if (await registrarCobrancaAprovada(ctx, fatura)) ciclosNovos += 1;
+      } else if (status === "REJECTED" || status === "CANCELED") {
+        if (await registrarCobrancaRecusada(ctx, fatura)) recusasNovas += 1;
+      }
+    }
+  } catch (erro) {
+    if (erro instanceof VinculoLegadoPendente) return pendente;
+    throw erro;
+  }
+
+  const estadoMudou = await aplicarEstadoDoPreapproval(ctx, pre.status, pre.statusCru ?? null);
+
+  const ciclosNoLivro = await db.payment.count({
+    where: {
+      attemptId: tentativa.id,
+      cycleIndex: { not: null },
+      status: "APPROVED",
+    },
+  });
+
+  const mudou = ciclosNovos > 0 || recusasNovas > 0 || estadoMudou;
+
+  return {
+    mudou,
+    motivo: mudou
+      ? `ciclos novos: ${ciclosNovos}, recusas novas: ${recusasNovas}` +
+        (estadoMudou ? ", estado do preapproval aplicado" : "")
+      : "nada novo no provedor",
+    attemptId: tentativa.id,
+    status: pre.status,
+    snapshot: pre,
+    ciclosNovos,
+    recusasNovas,
+    conferencia: {
+      cobrancasNoProvedor: pre.cobrancasRealizadas ?? null,
+      ciclosNoLivro,
+    },
+  };
+}
+
+/**
+ * `subscription_authorized_payment` traz o id da **fatura**.
+ *
+ * Confirmado contra a API real: `GET /v1/payments/<id da fatura>` responde
+ * 404. O caminho é fatura → preapproval → a reconciliação inteira.
+ */
+export async function reconciliarFatura(
+  faturaId: string,
+): Promise<ResultadoDeCiclo> {
+  const fatura = await provedorDePagamento().consultarFatura(faturaId);
+
+  if (!fatura?.preapprovalId) {
+    return {
+      mudou: false,
+      motivo: "fatura inexistente no provedor",
+      attemptId: null,
+      status: "UNKNOWN",
+      ciclosNovos: 0,
+      recusasNovas: 0,
+    };
+  }
+
+  return reconciliarCicloDeAssinatura(fatura.preapprovalId, {
+    origem: "webhook:subscription_authorized_payment",
+  });
+}
+
+/**
+ * Nome antigo, mesma porta. Retorno do checkout e tela de espera chamam por
+ * aqui; o comportamento é inteiro o de `reconciliarCicloDeAssinatura`.
+ */
+export async function reconciliarAssinatura(
+  externalId: string,
+): Promise<ResultadoDeCiclo> {
+  return reconciliarCicloDeAssinatura(externalId, { origem: "consulta" });
+}
+
+function porOrdemDeDebito(a: FaturaDeAssinatura, b: FaturaDeAssinatura) {
+  const ta = a.dataDebito?.getTime() ?? 0;
+  const tb = b.dataDebito?.getTime() ?? 0;
+  if (ta !== tb) return ta - tb;
+  return a.id.localeCompare(b.id);
+}
+
+async function localizarTentativaDaAssinatura(
+  referencia: string | null,
+  preapprovalId: string,
+  provedorNome: string,
+): Promise<Tentativa | null> {
+  if (referencia) {
+    const porReferencia = await db.paymentAttempt.findUnique({
+      where: { id: referencia },
+    });
+    if (porReferencia?.kind === "SUBSCRIPTION") return porReferencia;
+  }
+
+  return db.paymentAttempt.findFirst({
+    where: { provider: provedorNome, externalId: preapprovalId, kind: "SUBSCRIPTION" },
+  });
+}
+
+/**
+ * Assinatura cujo ciclo vigente foi concedido antes do livro de ciclos: plano
+ * pago, preapproval vigente igual a este, e nenhum ciclo registrado.
+ */
+async function ehLegado(
+  conexao: Conexao,
+  assinatura: Assinatura,
+  preapprovalId: string,
+): Promise<boolean> {
+  if (assinatura.externalPreapprovalId !== preapprovalId) return false;
+  if (!PLANOS_PAGOS.includes(assinatura.plan)) return false;
+  if (!assinatura.currentPeriodEnd) return false;
+
+  const ciclos = await conexao.payment.count({
+    where: { subscriptionId: assinatura.id, cycleIndex: { not: null } },
+  });
+  return ciclos === 0;
+}
+
+async function papelDoPreapproval(
+  conexao: Conexao,
+  assinatura: Assinatura | null,
+  ctx: ContextoDeCiclo,
+): Promise<Papel> {
+  if (!assinatura?.externalPreapprovalId) return "novo";
+  if (assinatura.externalPreapprovalId === ctx.preapprovalId) return "atual";
+
+  // Outro preapproval é o vigente. Este só assume se for mais recente — uma
+  // assinatura nova. Um checkout antigo, abandonado e pago depois, não tira o
+  // lugar de quem está valendo.
+  const vigente = await conexao.paymentAttempt.findFirst({
+    where: {
+      provider: ctx.provedorNome,
+      externalId: assinatura.externalPreapprovalId,
+      kind: "SUBSCRIPTION",
+    },
+  });
+  if (!vigente || ctx.tentativa.createdAt > vigente.createdAt) return "novo";
+  return "antigo";
+}
+
+function dadosDaCobranca(
+  ctx: ContextoDeCiclo,
+  fatura: FaturaDeAssinatura,
+  subscriptionId: string | null,
+) {
+  return {
+    userId: ctx.tentativa.userId,
+    subscriptionId,
+    invoiceId: fatura.id,
+    kind: "SUBSCRIPTION" as const,
+    plan: ctx.plano.code,
+    amountCents: fatura.valorCents,
+    currency: fatura.moeda,
+    provider: ctx.provedorNome,
+    externalId: fatura.pagamento!.id,
+    method: fatura.metodo,
+    attemptId: ctx.tentativa.id,
+    isDemo: ctx.tentativa.isDemo,
+  };
+}
+
+/**
+ * Relê-e-tenta. A checagem antes da escrita é otimização; quem garante é a
+ * unicidade — e quando ela dispara, outra passagem gravou primeiro, então
+ * relemos e decidimos de novo em vez de falhar.
+ */
+async function comConflitoIdempotente<T>(
+  pagamentoId: string,
+  provedorNome: string,
+  jaRegistrado: T,
+  gravar: () => Promise<T>,
+): Promise<T> {
+  for (let volta = 0; volta < 5; volta += 1) {
+    const existente = await db.payment.findFirst({
+      where: { provider: provedorNome, externalId: pagamentoId },
+      select: { id: true },
+    });
+    if (existente) return jaRegistrado;
+
+    try {
+      return await gravar();
+    } catch (erro) {
+      if (ehViolacaoDeUnicidade(erro)) continue;
+      throw erro;
+    }
+  }
+
+  throw new Error(`conflito persistente ao registrar a cobrança ${pagamentoId}`);
+}
+
+/** Devolve `true` se esta chamada concedeu (ou vinculou) um ciclo. */
+async function registrarCobrancaAprovada(
+  ctx: ContextoDeCiclo,
+  fatura: FaturaDeAssinatura,
+): Promise<boolean> {
+  return comConflitoIdempotente(fatura.pagamento!.id, ctx.provedorNome, false, () =>
+    db.$transaction((tx) => concederCiclo(tx, ctx, fatura)),
+  );
+}
+
+async function concederCiclo(
+  tx: Prisma.TransactionClient,
+  ctx: ContextoDeCiclo,
+  fatura: FaturaDeAssinatura,
+): Promise<boolean> {
+  const { tentativa, plano, preapprovalId, opcoes } = ctx;
+  const pagamentoId = fatura.pagamento!.id;
+  const cobradoEm = fatura.dataDebito ?? new Date();
+
+  const assinatura =
+    (await tx.subscription.findUnique({ where: { userId: tentativa.userId } })) ??
+    (await tx.subscription.create({
+      data: { userId: tentativa.userId, plan: "FREE", status: "ACTIVE" },
+    }));
+
+  const papel = await papelDoPreapproval(tx, assinatura, ctx);
+
+  if (papel === "antigo") {
+    // Dinheiro que entrou é receita e fica registrado — mas não é deste
+    // preapproval que o acesso depende, então não move data nenhuma.
+    await tx.payment.create({
+      data: { ...dadosDaCobranca(ctx, fatura, assinatura.id), status: "APPROVED" },
+    });
+    return false;
+  }
+
+  const ultimo = await tx.payment.findFirst({
+    where: { subscriptionId: assinatura.id, cycleIndex: { not: null } },
+    orderBy: { cycleIndex: "desc" },
+  });
+  const cycleIndex = (ultimo?.cycleIndex ?? 0) + 1;
+
+  const legado =
+    papel === "atual" &&
+    !ultimo &&
+    PLANOS_PAGOS.includes(assinatura.plan) &&
+    assinatura.currentPeriodEnd !== null;
+
+  if (legado) {
+    if (!opcoes.permitirVinculoLegado) throw new VinculoLegadoPendente();
+
+    // O ciclo 1 já foi concedido pelo caminho antigo. Vincular é só dizer qual
+    // cobrança o pagou: nenhuma data se move, nada de cancelamento muda.
+    await tx.payment.create({
+      data: {
+        ...dadosDaCobranca(ctx, fatura, assinatura.id),
+        status: "APPROVED",
+        cycleIndex,
+        periodStart: assinatura.currentPeriodStart ?? cobradoEm,
+        periodEnd: assinatura.currentPeriodEnd,
+      },
+    });
+    return true;
+  }
+
+  // Renovação encadeia no fim do ciclo anterior — não em "hoje" —, e é isso
+  // que torna o resultado igual em qualquer ordem de chegada. Assinatura nova
+  // começa na cobrança, sem apagar dias que a pessoa ainda tinha pagos.
+  let inicio: Date;
+  if (papel === "atual" && ultimo?.periodEnd) {
+    inicio = ultimo.periodEnd;
+  } else if (
+    assinatura.status === "ACTIVE" &&
+    PLANOS_PAGOS.includes(assinatura.plan) &&
+    assinatura.currentPeriodEnd &&
+    assinatura.currentPeriodEnd > cobradoEm
+  ) {
+    inicio = assinatura.currentPeriodEnd;
+  } else {
+    inicio = cobradoEm;
+  }
+  const fim = fimDoCiclo(plano, inicio);
+
+  // Primeira escrita da transação, de propósito: se a unicidade disparar, nada
+  // mais foi tocado.
+  await tx.payment.create({
+    data: {
+      ...dadosDaCobranca(ctx, fatura, assinatura.id),
+      status: "APPROVED",
+      cycleIndex,
+      periodStart: inicio,
+      periodEnd: fim,
+    },
+  });
+
+  // Nunca encurta: um ciclo chegando atrasado não rouba dias já registrados.
+  const fimVigente =
+    assinatura.currentPeriodEnd && assinatura.currentPeriodEnd > fim
+      ? assinatura.currentPeriodEnd
+      : fim;
+
+  await tx.subscription.update({
+    where: { id: assinatura.id },
+    data: {
+      plan: plano.code,
+      status: "ACTIVE",
+      provider: ctx.provedorNome,
+      priceCents: plano.precoCents,
+      externalPreapprovalId: preapprovalId,
+      currentPeriodStart: inicio,
+      currentPeriodEnd: fimVigente,
+      failedCharges: 0,
+      graceUntil: null,
+      // Só uma assinatura NOVA limpa um cancelamento. Cobrança do preapproval
+      // vigente — atrasada, reentregue, retentativa — nunca desfaz o pedido
+      // de quem cancelou.
+      ...(papel === "novo"
+        ? { startedAt: inicio, cancelAtPeriodEnd: false, canceledAt: null }
+        : {}),
+    },
+  });
+
+  await concederAssinatura(
+    {
+      userId: tentativa.userId,
+      kind:
+        plano.entitlementKind === "SUBSCRIPTION_ANNUAL"
+          ? "SUBSCRIPTION_ANNUAL"
+          : "SUBSCRIPTION_MONTHLY",
+      subscriptionId: assinatura.id,
+      endsAt: fimVigente,
+    },
+    tx,
+  );
+
+  await tx.subscriptionEvent.create({
+    data: {
+      subscriptionId: assinatura.id,
+      userId: tentativa.userId,
+      type: papel === "novo" ? "ACTIVATED" : "RENEWED",
+      fromStatus: assinatura.status,
+      toStatus: "ACTIVE",
+      periodEnd: fimVigente,
+      payload: {
+        origem: opcoes.origem,
+        paymentId: pagamentoId,
+        invoiceId: fatura.id,
+        cycleIndex,
+      } as Prisma.InputJsonValue,
+    },
+  });
+
+  // A tentativa original só muda de status na ativação, e nunca de id: ela é
+  // o checkout que a pessoa fez, não a última cobrança do ciclo.
+  if (papel === "novo" && tentativa.status !== "APPROVED") {
+    await tx.paymentAttempt.update({
+      where: { id: tentativa.id },
+      data: { status: "APPROVED", rawStatus: "authorized" },
+    });
+  }
+
+  return true;
+}
+
+/**
+ * Cobrança recusada. Conta uma vez por `paymentId` — a mesma recusa
+ * reentregue esbarra na unicidade — e não conta se a mesma fatura já foi paga
+ * por uma retentativa.
+ *
+ * Não corta acesso. Abre a tolerância a partir do fim do ciclo pago; quem
+ * encerra é o tempo, no cron, se nenhuma retentativa for aprovada até lá.
+ */
+async function registrarCobrancaRecusada(
+  ctx: ContextoDeCiclo,
+  fatura: FaturaDeAssinatura,
+): Promise<boolean> {
+  return comConflitoIdempotente(fatura.pagamento!.id, ctx.provedorNome, false, () =>
+    db.$transaction(async (tx) => {
+      const pagamento = fatura.pagamento!;
+      const assinatura = await tx.subscription.findUnique({
+        where: { userId: ctx.tentativa.userId },
+      });
+
+      await tx.payment.create({
+        data: {
+          ...dadosDaCobranca(ctx, fatura, assinatura?.id ?? null),
+          status: "FAILED",
+          failureCode: pagamento.detalheCru,
+          failureMessage: pagamento.statusCru,
+        },
+      });
+
+      if (!assinatura) return true;
+      if ((await papelDoPreapproval(tx, assinatura, ctx)) !== "atual") return true;
+
+      const faturaPaga = await tx.payment.findFirst({
+        where: { invoiceId: fatura.id, status: "APPROVED" },
+        select: { id: true },
+      });
+      if (faturaPaga) return true;
+
+      const base =
+        assinatura.currentPeriodEnd ?? fatura.dataDebito ?? new Date();
+
+      // `increment` e não `falhas + 1`: duas recusas diferentes em paralelo
+      // não podem virar uma só.
+      await tx.subscription.update({
+        where: { id: assinatura.id },
+        data: { failedCharges: { increment: 1 } },
+      });
+      // A tolerância é aberta uma vez e não recomeça a cada retentativa.
+      await tx.subscription.updateMany({
+        where: { id: assinatura.id, graceUntil: null },
+        data: { graceUntil: new Date(base.getTime() + TOLERANCIA_MS) },
+      });
+
+      await tx.subscriptionEvent.create({
+        data: {
+          subscriptionId: assinatura.id,
+          userId: ctx.tentativa.userId,
+          type: "PAYMENT_FAILED",
+          fromStatus: assinatura.status,
+          toStatus: assinatura.status,
+          periodEnd: assinatura.currentPeriodEnd,
+          payload: {
+            origem: ctx.opcoes.origem,
+            paymentId: pagamento.id,
+            invoiceId: fatura.id,
+            detalhe: pagamento.detalheCru,
+          } as Prisma.InputJsonValue,
+        },
+      });
+
+      return true;
+    }),
+  );
+}
+
+/**
+ * Cancelado ou pausado no provedor.
+ *
+ * Os dois só marcam — nenhum revoga. Cancelado mantém o acesso até o fim do
+ * ciclo pago; pausado (o provedor desistiu de cobrar) vira PAST_DUE e segue
+ * até o fim do ciclo mais a tolerância. Quem encerra, nos dois casos, é a
+ * data, no cron.
+ *
+ * `updateMany` com a condição no `where` torna isto idempotente mesmo em
+ * paralelo: só uma passagem vê a linha mudar e só ela grava o evento.
+ */
+async function aplicarEstadoDoPreapproval(
+  ctx: ContextoDeCiclo,
+  status: EstadoProvedor,
+  statusCru: string | null,
+): Promise<boolean> {
+  const assinatura = await db.subscription.findUnique({
+    where: { userId: ctx.tentativa.userId },
+  });
+  if (!assinatura || assinatura.externalPreapprovalId !== ctx.preapprovalId) {
+    return false;
+  }
+
+  if (status === "CANCELED") {
+    return db.$transaction(async (tx) => {
+      const { count } = await tx.subscription.updateMany({
+        where: { id: assinatura.id, cancelAtPeriodEnd: false },
+        data: { cancelAtPeriodEnd: true, canceledAt: new Date() },
+      });
+      if (count === 0) return false;
+
+      await tx.subscriptionEvent.create({
+        data: {
+          subscriptionId: assinatura.id,
+          userId: ctx.tentativa.userId,
+          type: "CANCELED",
+          fromStatus: assinatura.status,
+          toStatus: assinatura.status,
+          periodEnd: assinatura.currentPeriodEnd,
+          payload: {
+            origem: ctx.opcoes.origem,
+            providerStatus: statusCru,
+            externalPreapprovalId: ctx.preapprovalId,
+          } as Prisma.InputJsonValue,
+        },
+      });
+      return true;
+    });
+  }
+
+  if (statusCru === "paused") {
+    return db.$transaction(async (tx) => {
+      const base = assinatura.currentPeriodEnd ?? new Date();
+      const { count } = await tx.subscription.updateMany({
+        where: { id: assinatura.id, status: { not: "PAST_DUE" } },
+        data: {
+          status: "PAST_DUE",
+          graceUntil:
+            assinatura.graceUntil ?? new Date(base.getTime() + TOLERANCIA_MS),
+        },
+      });
+      if (count === 0) return false;
+
+      await tx.subscriptionEvent.create({
+        data: {
+          subscriptionId: assinatura.id,
+          userId: ctx.tentativa.userId,
+          type: "PAST_DUE",
+          fromStatus: assinatura.status,
+          toStatus: "PAST_DUE",
+          periodEnd: assinatura.currentPeriodEnd,
+          payload: {
+            origem: ctx.opcoes.origem,
+            providerStatus: statusCru,
+          } as Prisma.InputJsonValue,
+        },
+      });
+      return true;
+    });
+  }
+
+  return false;
+}
+
+export type ResumoDaReconciliacao = {
+  completa: boolean;
+  verificadas: number;
+  mudaram: number;
+  ciclosNovos: number;
+  recusasNovas: number;
+  pendentesDeVinculo: number;
+  divergencias: number;
+  falhas: number;
+};
+
+/**
+ * Reconciliação periódica: descobre sozinha o que o webhook deveria ter
+ * contado.
+ *
+ * Diária, só as assinaturas perto de virar o ciclo, em tolerância ou com
+ * cobrança falha — o suficiente para renovar antes de o cron de expiração
+ * cortar alguém que pagou. Completa (semanal), todas com preapproval — é
+ * a que pega cancelamento feito direto no painel do Mercado Pago.
+ *
+ * Incremental por construção: cobrança já registrada é pulada pela
+ * unicidade. Paginada no banco (lotes de 50) e no provedor
+ * (`listarFaturas`). Uma assinatura que falha não para as outras.
+ */
+export async function reconciliarAssinaturasPeriodicamente(
+  opcoes: { agora?: Date; completa?: boolean } = {},
+): Promise<ResumoDaReconciliacao> {
+  const agora = opcoes.agora ?? new Date();
+  const completa = opcoes.completa ?? false;
+  const limite = new Date(agora.getTime() + TOLERANCIA_MS);
+
+  const onde: Prisma.SubscriptionWhereInput = completa
+    ? {
+        externalPreapprovalId: { not: null },
+        status: { in: ["ACTIVE", "TRIALING", "PAST_DUE"] },
+      }
+    : {
+        externalPreapprovalId: { not: null },
+        OR: [
+          { status: "PAST_DUE" },
+          { failedCharges: { gt: 0 } },
+          { graceUntil: { not: null } },
+          {
+            status: { in: ["ACTIVE", "TRIALING"] },
+            currentPeriodEnd: { lte: limite },
+          },
+        ],
+      };
+
+  const resumo: ResumoDaReconciliacao = {
+    completa,
+    verificadas: 0,
+    mudaram: 0,
+    ciclosNovos: 0,
+    recusasNovas: 0,
+    pendentesDeVinculo: 0,
+    divergencias: 0,
+    falhas: 0,
+  };
+
+  let cursor: string | undefined;
+
+  for (;;) {
+    const lote = await db.subscription.findMany({
+      where: onde,
+      orderBy: { id: "asc" },
+      take: 50,
+      ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
+      select: { id: true, userId: true, externalPreapprovalId: true },
+    });
+    if (lote.length === 0) break;
+
+    for (const s of lote) {
+      resumo.verificadas += 1;
+      const preapprovalId = s.externalPreapprovalId!;
+
+      try {
+        const r = await reconciliarCicloDeAssinatura(preapprovalId, {
+          origem: completa ? "varredura" : "reconciliacao",
+        });
+
+        if (r.mudou) resumo.mudaram += 1;
+        resumo.ciclosNovos += r.ciclosNovos;
+        resumo.recusasNovas += r.recusasNovas;
+
+        if (r.vinculoLegadoPendente) {
+          resumo.pendentesDeVinculo += 1;
+          continue;
+        }
+
+        // Checagem cruzada: nunca corrige sozinha, só avisa.
+        const c = r.conferencia;
+        if (c && c.cobrancasNoProvedor !== null && c.cobrancasNoProvedor !== c.ciclosNoLivro) {
+          resumo.divergencias += 1;
+          void log.warn({
+            channel: "PAYMENTS",
+            message: "Cobranças do provedor e ciclos do livro não batem",
+            userId: s.userId,
+            context: { subscriptionId: s.id, preapprovalId, ...c },
+          });
+        }
+      } catch (erro) {
+        resumo.falhas += 1;
+        void log.error({
+          channel: "PAYMENTS",
+          message: "Reconciliação de assinatura falhou",
+          userId: s.userId,
+          context: {
+            subscriptionId: s.id,
+            preapprovalId,
+            provedor: sanitizarFalha(erro),
+          },
+        });
+      }
+    }
+
+    cursor = lote[lote.length - 1]!.id;
+  }
+
+  void log.info({
+    channel: "JOBS",
+    message: `Reconciliação de assinaturas (${completa ? "completa" : "diária"})`,
+    context: resumo,
+  });
+
+  return resumo;
 }
 
 async function aprovar(
@@ -812,6 +1422,17 @@ async function aprovar(
   consulta: ConsultaPagamento,
   provedorNome: string,
 ): Promise<ResultadoReconciliacao> {
+  // Cobrança de assinatura é assunto do livro de ciclos. Chegar aqui seria
+  // gravar um `Payment` sem ciclo — que depois bloquearia o ciclo de verdade.
+  if (tentativa.kind === "SUBSCRIPTION") {
+    return {
+      mudou: false,
+      motivo: "cobrança de assinatura é tratada por reconciliarCicloDeAssinatura",
+      attemptId: tentativa.id,
+      status: consulta.status,
+    };
+  }
+
   // A única em (provider, externalId) é o que torna esta função segura de
   // repetir: a segunda entrega do mesmo webhook reencontra a linha.
   const jaRegistrado = await tx.payment.findFirst({
@@ -888,103 +1509,12 @@ async function aprovar(
     };
   }
 
-  // Assinatura.
-  const plano = planoPorCodigo(tentativa.plan ?? "MONTHLY");
-  await ativarAssinatura(tx, tentativa.userId, plano, provedorNome, {
-    externalId: consulta.externalId,
-    pagamentoId: pagamento.id,
-  });
-
   return {
-    mudou: !jaRegistrado,
-    motivo: jaRegistrado ? "pagamento já registrado" : "assinatura ativada",
+    mudou: false,
+    motivo: "pagamento sem compra associada",
     attemptId: tentativa.id,
     status: consulta.status,
   };
-}
-
-/**
- * Liga (ou renova) a assinatura e concede o direito correspondente.
- *
- * Separado porque a renovação mensal chega por webhook sem passar por
- * `iniciarAssinatura`: é o mesmo caminho, disparado por outro evento.
- */
-export async function ativarAssinatura(
-  tx: Conexao,
-  userId: string,
-  plano: DefinicaoDePlano,
-  provedorNome: string,
-  refs: { externalId?: string | null; pagamentoId?: string | null } = {},
-): Promise<void> {
-  const agora = new Date();
-  const atual = await tx.subscription.findUnique({ where: { userId } });
-
-  // Renovar estende a partir do fim do ciclo vigente, não de hoje: quem paga
-  // adiantado não pode perder os dias que ainda tinha.
-  const base =
-    atual?.currentPeriodEnd && atual.currentPeriodEnd > agora
-      ? atual.currentPeriodEnd
-      : agora;
-  const fim = fimDoCiclo(plano, base);
-
-  const assinatura = await tx.subscription.upsert({
-    where: { userId },
-    create: {
-      userId,
-      plan: plano.code,
-      status: "ACTIVE",
-      provider: provedorNome,
-      externalId: refs.externalId ?? null,
-      priceCents: plano.precoCents,
-      startedAt: agora,
-      currentPeriodStart: agora,
-      currentPeriodEnd: fim,
-      failedCharges: 0,
-      graceUntil: null,
-      cancelAtPeriodEnd: false,
-      canceledAt: null,
-    },
-    update: {
-      plan: plano.code,
-      status: "ACTIVE",
-      provider: provedorNome,
-      externalId: refs.externalId ?? atual?.externalId ?? null,
-      priceCents: plano.precoCents,
-      currentPeriodStart: base,
-      currentPeriodEnd: fim,
-      failedCharges: 0,
-      graceUntil: null,
-      cancelAtPeriodEnd: false,
-      canceledAt: null,
-    },
-  });
-
-  await concederAssinatura(
-    {
-      userId,
-      kind: plano.entitlementKind === "SUBSCRIPTION_ANNUAL"
-        ? "SUBSCRIPTION_ANNUAL"
-        : "SUBSCRIPTION_MONTHLY",
-      subscriptionId: assinatura.id,
-      endsAt: fim,
-    },
-    tx,
-  );
-
-  await tx.subscriptionEvent.create({
-    data: {
-      subscriptionId: assinatura.id,
-      userId,
-      type: atual?.status === "ACTIVE" ? "RENEWED" : "ACTIVATED",
-      fromStatus: atual?.status ?? null,
-      toStatus: "ACTIVE",
-      periodEnd: fim,
-      payload: {
-        plano: plano.code,
-        pagamentoId: refs.pagamentoId ?? null,
-      } as Prisma.InputJsonValue,
-    },
-  });
 }
 
 async function recusar(
@@ -1003,67 +1533,12 @@ async function recusar(
     });
   }
 
-  if (tentativa.kind === "SUBSCRIPTION") {
-    await marcarFalhaDeCobranca(tx, tentativa.userId, consulta.detalheCru);
-  }
-
   return {
     mudou: true,
     motivo: "pagamento recusado",
     attemptId: tentativa.id,
     status: consulta.status,
   };
-}
-
-/**
- * Cobrança de assinatura falhou.
- *
- * O acesso não cai no primeiro erro: abre-se uma tolerância de três dias,
- * porque cartão recusado por limite temporário é o caso mais comum e cortar
- * na hora gera cancelamento que não precisava acontecer. Na terceira falha
- * seguida, a assinatura vai para `PAST_DUE` sem tolerância nova.
- */
-const TOLERANCIA_MS = 3 * 86_400_000;
-const FALHAS_ATE_CORTAR = 3;
-
-async function marcarFalhaDeCobranca(
-  tx: Prisma.TransactionClient,
-  userId: string,
-  detalhe: string | null,
-): Promise<void> {
-  const assinatura = await tx.subscription.findUnique({ where: { userId } });
-  if (!assinatura) return;
-
-  const falhas = assinatura.failedCharges + 1;
-  const cortar = falhas >= FALHAS_ATE_CORTAR;
-
-  await tx.subscription.update({
-    where: { userId },
-    data: {
-      failedCharges: falhas,
-      status: cortar ? "PAST_DUE" : assinatura.status,
-      graceUntil: cortar ? null : new Date(Date.now() + TOLERANCIA_MS),
-    },
-  });
-
-  if (cortar) {
-    await revogarDireitos(
-      { userId, subscriptionId: assinatura.id },
-      "cobranca falhou tres vezes",
-      tx,
-    );
-  }
-
-  await tx.subscriptionEvent.create({
-    data: {
-      subscriptionId: assinatura.id,
-      userId,
-      type: cortar ? "PAST_DUE" : "PAYMENT_FAILED",
-      fromStatus: assinatura.status,
-      toStatus: cortar ? "PAST_DUE" : assinatura.status,
-      payload: { falhas, detalhe } as Prisma.InputJsonValue,
-    },
-  });
 }
 
 async function devolver(

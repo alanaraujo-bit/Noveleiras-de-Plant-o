@@ -114,15 +114,61 @@ export type ConsultaPagamento = {
   /** Motivo da recusa, como o provedor descreveu. */
   statusCru: string | null;
   detalheCru: string | null;
+  /**
+   * Preapproval que gerou esta cobrança, quando é de assinatura. No Mercado
+   * Pago vem em `point_of_interaction.transaction_data.subscription_id`, com
+   * `point_of_interaction.type = "SUBSCRIPTIONS"`. É o que desvia a cobrança
+   * para o livro de ciclos em vez de tratá-la como pagamento solto.
+   */
+  preapprovalId?: string | null;
   bruto: unknown;
 };
 
 export type ConsultaAssinatura = {
   externalId: string;
   status: EstadoProvedor;
+  /**
+   * Status cru do provedor. `EstadoProvedor` junta `pending` e `paused` em
+   * PENDING, e para renovação os dois são opostos: um é quem ainda não
+   * autorizou, o outro é quem parou de pagar.
+   */
+  statusCru?: string | null;
   referenciaExterna: string | null;
   proximaCobranca: Date | null;
+  /** `summarized.charged_quantity`: quantas cobranças o provedor diz ter feito. */
+  cobrancasRealizadas?: number | null;
   bruto: unknown;
+};
+
+/**
+ * Uma fatura (`authorized_payment`) de assinatura.
+ *
+ * Estrutura confirmada contra a API real (preapproval da mensal de teste):
+ *
+ *   preapproval ──1:N──► fatura 7031821286 ──1:1──► payment 178365984346
+ *
+ * `GET /v1/payments/<id da fatura>` responde 404: o webhook
+ * `subscription_authorized_payment` traz o id **da fatura**, e é daqui que se
+ * chega ao pagamento.
+ */
+export type FaturaDeAssinatura = {
+  id: string;
+  preapprovalId: string | null;
+  statusCru: string | null;
+  referenciaExterna: string | null;
+  dataDebito: Date | null;
+  valorCents: number;
+  moeda: string;
+  metodo: string | null;
+  /** `retry_attempt`: a fatura pode ser cobrada mais de uma vez. */
+  retentativa: number | null;
+  /** A última cobrança da fatura. Nula enquanto nada foi cobrado. */
+  pagamento: {
+    id: string;
+    status: EstadoProvedor;
+    statusCru: string | null;
+    detalheCru: string | null;
+  } | null;
 };
 
 /** O que extraímos de um webhook antes de confiar em qualquer coisa. */
@@ -175,6 +221,16 @@ export interface ProvedorDePagamento {
   pagamentosDaMerchantOrder(merchantOrderId: string): Promise<string[]>;
 
   consultarAssinatura(externalId: string): Promise<ConsultaAssinatura | null>;
+
+  /**
+   * Todas as faturas de um preapproval, percorrendo a paginação inteira.
+   * É a fonte de verdade da renovação: o que foi cobrado, recusado ou ainda
+   * não aconteceu, independente de algum webhook ter chegado.
+   */
+  listarFaturas(preapprovalId: string): Promise<FaturaDeAssinatura[]>;
+
+  /** Uma fatura por id — o que `subscription_authorized_payment` entrega. */
+  consultarFatura(faturaId: string): Promise<FaturaDeAssinatura | null>;
 
   /**
    * Cancela a assinatura no provedor e devolve **o estado que ele confirmou**.
