@@ -33,6 +33,7 @@ import {
   type ResultadoReembolso,
   type WebhookLido,
 } from "./provedor";
+import { lerNotificacao } from "./notificacao";
 
 /** Segredo do webhook no modo mock. Fixo e público de propósito. */
 export const SEGREDO_MOCK = "mock-webhook-secret";
@@ -257,75 +258,17 @@ export class ProvedorMock implements ProvedorDePagamento {
   /**
    * Valida o webhook do mock com o mesmo algoritmo do Mercado Pago.
    *
-   * Reimplementar aqui em vez de aceitar qualquer coisa é o que faz o teste
-   * ter valor: se a montagem do manifesto estiver errada, o modo mock quebra
-   * junto — e não passamos meses achando que a validação funciona.
+   * Mesma leitura do Mercado Pago (`notificacao.ts`), só com o segredo fixo:
+   * se a montagem do manifesto ou a separação Webhook/IPN estiver errada, o
+   * modo mock quebra junto — e não passamos meses achando que a validação
+   * funciona.
    */
   async lerWebhook(
     corpoCru: string,
     cabecalhos: Headers,
     url: URL,
   ): Promise<WebhookLido> {
-    const { createHmac, timingSafeEqual } = await import("node:crypto");
-
-    let payload: Record<string, unknown> = {};
-    try {
-      payload = corpoCru ? (JSON.parse(corpoCru) as Record<string, unknown>) : {};
-    } catch {
-      payload = { corpoInvalido: corpoCru.slice(0, 500) };
-    }
-
-    const partes = new Map(
-      (cabecalhos.get("x-signature") ?? "").split(",").map((p) => {
-        const [k, ...v] = p.split("=");
-        return [k.trim(), v.join("=").trim()] as const;
-      }),
-    );
-
-    const dataId =
-      url.searchParams.get("data.id") ??
-      ((payload.data as { id?: unknown } | undefined)?.id !== undefined
-        ? String((payload.data as { id: unknown }).id)
-        : null);
-
-    const manifesto =
-      `id:${dataId ? dataId.toLowerCase() : ""};` +
-      `request-id:${cabecalhos.get("x-request-id") ?? ""};` +
-      `ts:${partes.get("ts") ?? ""};`;
-
-    const esperado = createHmac("sha256", SEGREDO_MOCK)
-      .update(manifesto)
-      .digest("hex");
-    const recebido = partes.get("v1") ?? "";
-
-    let valida = false;
-    if (esperado.length === recebido.length && recebido.length > 0) {
-      try {
-        valida = timingSafeEqual(
-          Buffer.from(esperado, "utf8"),
-          Buffer.from(recebido, "utf8"),
-        );
-      } catch {
-        valida = false;
-      }
-    }
-
-    const topico =
-      (typeof payload.type === "string" && payload.type) ||
-      url.searchParams.get("type") ||
-      "payment";
-
-    return {
-      assinaturaValida: valida,
-      eventId:
-        payload.id !== undefined && payload.id !== null
-          ? String(payload.id)
-          : `${topico}:${dataId ?? "sem-id"}`,
-      topico,
-      acao: typeof payload.action === "string" ? payload.action : null,
-      recursoId: dataId,
-      payload,
-    };
+    return lerNotificacao(corpoCru, cabecalhos, url, SEGREDO_MOCK);
   }
 
   // ------------------------------------------------ auxiliares só de teste

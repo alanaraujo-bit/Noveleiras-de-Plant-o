@@ -1543,6 +1543,20 @@ model WebhookEvent {
   // Recurso citado (id do pagamento, da assinatura) para reconsulta.
   resourceId String?
 
+  // WEBHOOK ou IPN. Nulo nas linhas anteriores a essa distincao.
+  format String?
+
+  // Notificacao que nao passou pela validacao (assinatura invalida, IPN)
+  // nunca ocupa a chave de idempotencia: grava `eventId` sintetico e unico, e
+  // o id que ela *alegava* fica aqui. Assim uma tentativa recusada nao
+  // bloqueia a reentrega valida do mesmo evento, e cada tentativa continua
+  // sendo uma linha auditavel.
+  claimedEventId String?
+
+  // Presenca e forma dos cabecalhos de assinatura, origem do data.id e
+  // live_mode. Nunca o valor de x-signature, v1, segredo ou token.
+  diagnostics Json?
+
   payload          Json
   // O que o provedor respondeu quando reconsultamos. E isto, e nao o corpo do
   // webhook, que autoriza mudanca de estado.
@@ -1556,6 +1570,7 @@ model WebhookEvent {
   updatedAt DateTime @updatedAt
 
   @@unique([provider, eventId])
+  @@index([claimedEventId])
   @@index([status, createdAt])
   @@index([resourceId])
 }

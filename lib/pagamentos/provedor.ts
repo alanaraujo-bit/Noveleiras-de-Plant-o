@@ -171,9 +171,33 @@ export type FaturaDeAssinatura = {
   } | null;
 };
 
+/** Canal da notificação: Webhook assinado ou IPN legado. */
+export type FormatoNotificacao = "WEBHOOK" | "IPN";
+
+export type OrigemDoDataId = "query-data.id" | "query-id" | "body-data.id";
+
+/**
+ * O que se pode gravar sobre a assinatura sem gravar a assinatura: presença e
+ * forma. Nunca o valor de `x-signature`, o `v1` ou o segredo.
+ */
+export type DiagnosticoNotificacao = {
+  formato: FormatoNotificacao;
+  hasXSignature: boolean;
+  hasXRequestId: boolean;
+  signatureHasTs: boolean;
+  signatureHasV1: boolean;
+  /** Ramo que forneceu o id do manifesto; nulo quando nenhum forneceu. */
+  dataIdSource: OrigemDoDataId | null;
+  liveMode: boolean | null;
+};
+
 /** O que extraímos de um webhook antes de confiar em qualquer coisa. */
 export type WebhookLido = {
-  /** Assinatura HMAC conferida. Falso não descarta: grava e audita. */
+  formato: FormatoNotificacao;
+  /**
+   * Assinatura HMAC conferida. Falso não descarta: grava e audita. Em IPN é
+   * sempre falso — não há assinatura de Webhook para conferir.
+   */
   assinaturaValida: boolean;
   /** Id estável do evento — base da idempotência. */
   eventId: string;
@@ -182,6 +206,7 @@ export type WebhookLido = {
   /** Recurso citado, para reconsulta. */
   recursoId: string | null;
   payload: unknown;
+  diagnostico: DiagnosticoNotificacao;
 };
 
 export type ResultadoReembolso = {

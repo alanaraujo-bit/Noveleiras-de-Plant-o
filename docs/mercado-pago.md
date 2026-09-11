@@ -69,6 +69,11 @@ https://noveleiras-de-plantao.vercel.app/api/pagamentos/webhook
 É ela que vai nos dois lugares: no cadastro de webhook do painel do Mercado
 Pago e em `MERCADOPAGO_NOTIFICATION_URL`.
 
+Na `notification_url` enviada em pagamentos, preferências e preapprovals, o
+app acrescenta `source_news=webhooks` (preservando os parâmetros que já
+existirem). É isso que pede ao Mercado Pago o formato **Webhook** assinado, e
+não o IPN legado.
+
 Teste (credenciais de teste) e produção usam **a mesma rota**; o que muda é o
 par de credenciais e, se você usar um preview, o domínio.
 
@@ -96,13 +101,28 @@ desconhecido só provocaria reentrega infinita.
 
 ## 5. O que a rota garante
 
+- **Webhook e IPN legado são separados pela forma.** Webhook = corpo com
+  `type`/`data.id`, exige `x-signature` e `x-request-id`, e só é processado
+  com HMAC válida. IPN = `?topic=…&id=…` ou corpo `{topic, resource}`: não
+  passa pela HMAC, é gravado com `format = IPN`, `status = IGNORED`, responde
+  `200` e **não altera** Payment, Subscription, Entitlement nem Purchase.
 - **Assinatura HMAC conferida** no formato deles
   (`id:<data.id>;request-id:<x-request-id>;ts:<ts>;`), com comparação em tempo
   constante. Webhook forjado responde `401` **e fica gravado** — tentativa de
   fraude é o que mais interessa auditar depois.
-- **Idempotência pelo banco**, não por código: `WebhookEvent` tem única em
-  `(provider, eventId)`. Reentrega esbarra na constraint antes de qualquer
-  efeito. Duas entregas simultâneas não viram dois acessos.
+- **Tentativa não validada nunca ocupa a chave de idempotência.** Assinatura
+  inválida e IPN gravam `eventId` sintético (`rejeitado:…` / `ipn:…`) e o id
+  alegado em `claimedEventId`. Cada tentativa é uma linha, e nenhuma bloqueia
+  a reentrega válida do mesmo evento.
+- **Idempotência pelo banco** para evento validado: `WebhookEvent` tem única
+  em `(provider, eventId)`. Reentrega de evento `PROCESSED`/`IGNORED` esbarra
+  na constraint antes de qualquer efeito; uma `FAILED` (erro nosso) é
+  reivindicada e reprocessada por atualização condicional — duas reentregas
+  simultâneas não processam duas vezes.
+- **Diagnóstico sem segredo** em `WebhookEvent.diagnostics`: `formato`,
+  `hasXSignature`, `hasXRequestId`, `signatureHasTs`, `signatureHasV1`,
+  `dataIdSource` e `liveMode`. Nunca o valor de `x-signature`, `v1`, segredo
+  ou token.
 - **O corpo do webhook nunca autoriza nada.** Ele só diz que algo mudou; quem
   decide é a releitura autenticada do recurso no provedor.
 - **Erro nosso responde `500`**, de propósito, para provocar reentrega — que é

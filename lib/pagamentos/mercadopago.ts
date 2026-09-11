@@ -13,8 +13,6 @@
  * Documentação das variáveis: `docs/mercado-pago.md`.
  */
 
-import { createHmac, timingSafeEqual } from "node:crypto";
-
 import {
   FalhaDoProvedor,
   ProvedorNaoConfigurado,
@@ -30,8 +28,9 @@ import {
   type ResultadoReembolso,
   type WebhookLido,
 } from "./provedor";
+import { lerNotificacao } from "./notificacao";
 
-const API = "https://api.mercadopago.com";
+const API ="https://api.mercadopago.com";
 
 type Credenciais = {
   accessToken: string;
@@ -51,9 +50,30 @@ function lerCredenciais(): Credenciais {
   return {
     accessToken,
     webhookSecret,
-    notificationUrl:
+    notificationUrl: comoWebhook(
       process.env.MERCADOPAGO_NOTIFICATION_URL?.trim() || null,
+    ),
   };
+}
+
+/**
+ * Pede ao Mercado Pago o formato **Webhook** nesta URL, não o IPN legado.
+ *
+ * Sem `source_news=webhooks`, a `notification_url` de um pagamento ou
+ * preferência recebe as duas notificações — e o IPN, que não tem a
+ * assinatura do Webhook, chega ao receptor como se fosse forjado. Os
+ * parâmetros que a URL já tiver continuam lá.
+ */
+export function comoWebhook(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    u.searchParams.set("source_news", "webhooks");
+    return u.toString();
+  } catch {
+    // URL malformada: o Mercado Pago a recusa do mesmo jeito que antes.
+    return url;
+  }
 }
 
 /**
@@ -742,15 +762,12 @@ export class MercadoPago implements ProvedorDePagamento {
   }
 
   /**
-   * Confere a assinatura HMAC do webhook.
+   * Confere a assinatura HMAC do webhook e separa Webhook de IPN legado.
    *
    * O manifesto é montado exatamente como eles especificam —
-   * `id:<data.id>;request-id:<x-request-id>;ts:<ts>;` — e o `data.id` sai da
-   * **query string**, não do corpo: o corpo pode ser reserializado por
-   * qualquer proxy no caminho e a conferência quebraria.
-   *
-   * A comparação é em tempo constante. Comparar hash com `===` vaza, por
-   * diferença de tempo, quantos bytes iniciais o atacante acertou.
+   * `id:<data.id>;request-id:<x-request-id>;ts:<ts>;` — com comparação em
+   * tempo constante. A leitura mora em `notificacao.ts`, compartilhada com o
+   * mock.
    */
   async lerWebhook(
     corpoCru: string,
@@ -758,74 +775,6 @@ export class MercadoPago implements ProvedorDePagamento {
     url: URL,
   ): Promise<WebhookLido> {
     const { webhookSecret } = lerCredenciais();
-
-    let payload: Record<string, unknown> = {};
-    try {
-      payload = corpoCru ? (JSON.parse(corpoCru) as Record<string, unknown>) : {};
-    } catch {
-      payload = { corpoInvalido: corpoCru.slice(0, 500) };
-    }
-
-    const assinatura = cabecalhos.get("x-signature") ?? "";
-    const requestId = cabecalhos.get("x-request-id") ?? "";
-
-    const partes = new Map(
-      assinatura.split(",").map((p) => {
-        const [k, ...v] = p.split("=");
-        return [k.trim(), v.join("=").trim()] as const;
-      }),
-    );
-    const ts = partes.get("ts") ?? "";
-    const v1 = partes.get("v1") ?? "";
-
-    const dataId =
-      url.searchParams.get("data.id") ??
-      url.searchParams.get("id") ??
-      (typeof (payload.data as { id?: unknown } | undefined)?.id === "string" ||
-      typeof (payload.data as { id?: unknown } | undefined)?.id === "number"
-        ? String((payload.data as { id: unknown }).id)
-        : null);
-
-    // Eles normalizam ids alfanuméricos para minúsculas antes de assinar.
-    const idNormalizado = dataId ? dataId.toLowerCase() : "";
-    const manifesto = `id:${idNormalizado};request-id:${requestId};ts:${ts};`;
-
-    const esperado = createHmac("sha256", webhookSecret)
-      .update(manifesto)
-      .digest("hex");
-
-    const assinaturaValida = comparaSegura(esperado, v1);
-
-    const topico =
-      (typeof payload.type === "string" && payload.type) ||
-      (typeof payload.topic === "string" && payload.topic) ||
-      url.searchParams.get("type") ||
-      url.searchParams.get("topic") ||
-      "desconhecido";
-
-    const acao = typeof payload.action === "string" ? payload.action : null;
-
-    return {
-      assinaturaValida,
-      // O `id` do envelope é o do evento; quando falta, o par recurso+ação é
-      // estável o bastante para barrar reentrega da mesma notificação.
-      eventId:
-        (payload.id !== undefined && payload.id !== null
-          ? String(payload.id)
-          : null) ?? `${topico}:${acao ?? "sem-acao"}:${dataId ?? "sem-id"}`,
-      topico,
-      acao,
-      recursoId: dataId,
-      payload,
-    };
-  }
-}
-
-function comparaSegura(a: string, b: string): boolean {
-  if (!a || !b || a.length !== b.length) return false;
-  try {
-    return timingSafeEqual(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
-  } catch {
-    return false;
+    return lerNotificacao(corpoCru, cabecalhos, url, webhookSecret);
   }
 }

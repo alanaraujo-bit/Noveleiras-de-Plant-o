@@ -120,8 +120,15 @@ async function limpar() {
     await db.user.delete({ where: { id: userId } }).catch(() => {});
   }
 
+  // Tentativa recusada grava `eventId` sintético; o id da prova fica em
+  // `claimedEventId`.
   await db.webhookEvent.deleteMany({
-    where: { eventId: { startsWith: "prova-" } },
+    where: {
+      OR: [
+        { eventId: { startsWith: "prova-" } },
+        { claimedEventId: { startsWith: "prova-" } },
+      ],
+    },
   });
 }
 
@@ -330,7 +337,7 @@ async function main() {
   );
   checar(forjadoWebhook.status === 401, "webhook forjado recusado com 401");
   const registroForjado = await db.webhookEvent.findFirst({
-    where: { eventId: "prova-w2" },
+    where: { claimedEventId: "prova-w2" },
   });
   checar(
     registroForjado?.signatureValid === false,
