@@ -58,16 +58,41 @@ function ocupado(provider: string, eventId: string, exceto?: string) {
   );
 }
 
-function erroDeUnicidade() {
-  return Object.assign(new Error("Unique constraint failed"), { code: "P2002" });
+/** Como o Prisma reporta: código P2002 e o alvo da constraint violada. */
+function erroDeUnicidade(target: unknown = ["provider", "eventId"]) {
+  return Object.assign(new Error("Unique constraint failed"), {
+    code: "P2002",
+    meta: { target },
+  });
 }
+
+/**
+ * Cada `create` que falha é uma query falha — e em produção o Prisma a
+ * registra como `prisma:error` antes de o nosso `catch` ver. Contar as
+ * falhas é o que prova que duplicata normal não gera erro operacional.
+ */
+const banco = {
+  creates: 0,
+  createsFalhos: 0,
+  /** Força um P2002 de outra constraint no próximo `create`. */
+  proximoCreateViolaOutra: false,
+};
 
 const bancoFalso = {
   webhookEvent: {
     create: async ({ data }: { data: Record<string, unknown> }) => {
+      banco.creates += 1;
+      if (banco.proximoCreateViolaOutra) {
+        banco.proximoCreateViolaOutra = false;
+        banco.createsFalhos += 1;
+        throw erroDeUnicidade(["id"]);
+      }
       const provider = data.provider as string;
       const eventId = data.eventId as string;
-      if (ocupado(provider, eventId)) throw erroDeUnicidade();
+      if (ocupado(provider, eventId)) {
+        banco.createsFalhos += 1;
+        throw erroDeUnicidade();
+      }
       const linha = {
         attempts: 0,
         error: null,
@@ -182,6 +207,9 @@ function efeitosComerciais() {
 
 beforeEach(() => {
   eventos.length = 0;
+  banco.creates = 0;
+  banco.createsFalhos = 0;
+  banco.proximoCreateViolaOutra = false;
   comercial.pagamento.length = 0;
   comercial.pedido.length = 0;
   comercial.fatura.length = 0;
@@ -289,6 +317,59 @@ describe("Webhook válido", () => {
     expect(comercial.pedido).toEqual(["44343262753"]);
     expect(comercial.fatura).toEqual(["fat-1"]);
     expect(comercial.assinatura).toEqual(["pre-1"]);
+  });
+});
+
+describe("duplicata sem erro operacional", () => {
+  it("reentrega de evento PROCESSED não tenta criar nem gera query falha", async () => {
+    const w = webhook();
+    await w.entregar();
+    const criadosAntes = banco.creates;
+
+    const repetido = await w.entregar();
+
+    expect(repetido).toEqual({ status: 200, corpo: { ok: true, duplicado: true } });
+    expect(banco.creates).toBe(criadosAntes);
+    expect(banco.createsFalhos).toBe(0);
+    expect(comercial.pagamento).toHaveLength(1);
+  });
+
+  it("o caso real do painel: mesmo event.id com outro data.id é duplicata", async () => {
+    await webhook({ eventId: "123456", dataId: "123456" }).entregar();
+    const r = await webhook({ eventId: "123456", dataId: "987654321012" }).entregar();
+
+    expect(r.corpo).toMatchObject({ duplicado: true });
+    expect(banco.createsFalhos).toBe(0);
+    expect(comercial.pagamento).toEqual(["123456"]);
+  });
+
+  it("reentrega de FAILED reprocessa sem query falha", async () => {
+    comercial.falharPagamento = 1;
+    const w = webhook();
+    await w.entregar();
+    const r = await w.entregar();
+
+    expect(r.status).toBe(200);
+    expect(banco.createsFalhos).toBe(0);
+    expect(eventos[0].status).toBe("PROCESSED");
+  });
+
+  it("corrida entre entregas simultâneas: o P2002 da chave é absorvido", async () => {
+    const w = webhook();
+    const [a, b] = await Promise.all([w.entregar(), w.entregar()]);
+
+    expect([a.status, b.status]).toEqual([200, 200]);
+    expect(comercial.pagamento).toHaveLength(1);
+    expect(eventos).toHaveLength(1);
+  });
+
+  it("P2002 de outra constraint não é escondido", async () => {
+    banco.proximoCreateViolaOutra = true;
+    await expect(webhook().entregar()).rejects.toMatchObject({
+      code: "P2002",
+      meta: { target: ["id"] },
+    });
+    expect(efeitosComerciais()).toBe(0);
   });
 });
 

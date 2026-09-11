@@ -173,17 +173,39 @@ async function gravarNaoValidado(
   });
 }
 
-function violouUnicidade(erro: unknown): boolean {
-  return (erro as { code?: unknown } | null)?.code === "P2002";
+/**
+ * P2002 **da chave de idempotência** — e só dela. O Prisma informa o alvo como
+ * lista de campos ou como nome do índice, dependendo da versão; qualquer
+ * outra constraint violada é falha de verdade e precisa subir.
+ */
+export function colidiuNaChaveDoEvento(erro: unknown): boolean {
+  const e = erro as { code?: unknown; meta?: { target?: unknown } } | null;
+  if (e?.code !== "P2002") return false;
+  const alvo = e.meta?.target;
+  if (Array.isArray(alvo)) {
+    return (
+      alvo.length === 2 && alvo.includes("provider") && alvo.includes("eventId")
+    );
+  }
+  return alvo === "WebhookEvent_provider_eventId_key";
 }
 
 /**
  * Obtém a linha de um evento **validado** para processá-lo, ou `null` se ele
  * não deve ser processado agora.
  *
- * A criação é a trava: duas entregas simultâneas não passam as duas, porque
- * a unicidade `(provider, eventId)` barra a segunda no banco. Quando barra, a
- * linha existente decide:
+ * A duplicata é o caso comum (o Mercado Pago reentrega, e a simulação do
+ * painel repete `id: "123456"`), então o evento é **relido antes** de tentar
+ * criar. Tentar criar primeiro fazia toda duplicata normal virar uma query
+ * falha — e o log do Prisma registra `prisma:error` antes de o nosso `catch`
+ * ter chance de dizer que era esperado.
+ *
+ * A criação continua sendo a trava: duas entregas simultâneas que passam
+ * juntas pela releitura não criam as duas, porque a unicidade
+ * `(provider, eventId)` barra a segunda no banco. Só essa corrida rara ainda
+ * produz um P2002 — tratado como esperado apenas quando o alvo é essa chave.
+ *
+ * A linha existente decide:
  *
  *   PROCESSED / IGNORED     duplicata legítima → `null`
  *   RECEIVED recente        outra entrega em andamento → `null`
@@ -199,32 +221,44 @@ async function reivindicar(
 ): Promise<string | null> {
   const diagnostics = lido.diagnostico as Prisma.InputJsonValue;
 
+  const chave = {
+    provider_eventId: { provider, eventId: lido.eventId },
+  };
+
   for (let tentativa = 0; tentativa < 2; tentativa++) {
-    try {
-      const evento = await db.webhookEvent.create({
-        data: {
-          provider,
-          eventId: lido.eventId,
-          format: lido.formato,
-          topic: lido.topico,
-          action: lido.acao,
-          signatureValid: true,
-          resourceId: lido.recursoId,
-          diagnostics,
-          status: "RECEIVED",
-          payload: lido.payload as Prisma.InputJsonValue,
-        },
-      });
-      return evento.id;
-    } catch (erro) {
-      // Qualquer outra falha é nossa: sobe, vira 500 e o provedor reentrega.
-      if (!violouUnicidade(erro)) throw erro;
+    let existente = await db.webhookEvent.findUnique({ where: chave });
+
+    if (!existente) {
+      try {
+        const evento = await db.webhookEvent.create({
+          data: {
+            provider,
+            eventId: lido.eventId,
+            format: lido.formato,
+            topic: lido.topico,
+            action: lido.acao,
+            signatureValid: true,
+            resourceId: lido.recursoId,
+            diagnostics,
+            status: "RECEIVED",
+            payload: lido.payload as Prisma.InputJsonValue,
+          },
+        });
+        return evento.id;
+      } catch (erro) {
+        // Qualquer outra falha é nossa — inclusive P2002 de outra
+        // constraint: sobe, vira 500 e o provedor reentrega.
+        if (!colidiuNaChaveDoEvento(erro)) throw erro;
+      }
+
+      // Outra entrega simultânea criou entre a releitura e o `create`.
+      existente = await db.webhookEvent.findUnique({ where: chave });
+      if (!existente) continue;
     }
 
-    const existente = await db.webhookEvent.findUnique({
-      where: { provider_eventId: { provider, eventId: lido.eventId } },
-    });
-    if (!existente) continue;
+    console.debug(
+      `[webhook] evento ${lido.eventId} já registrado (${existente.status}); aplicando a regra de reentrega`,
+    );
 
     if (!existente.signatureValid) {
       await db.webhookEvent.updateMany({
