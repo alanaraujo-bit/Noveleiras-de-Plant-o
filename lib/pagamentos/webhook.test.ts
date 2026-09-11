@@ -75,7 +75,7 @@ const bancoFalso = {
         id: `evt-${++sequencia}`,
         createdAt: new Date(),
         updatedAt: new Date(),
-      } as Linha;
+      } as unknown as Linha;
       eventos.push(linha);
       return { ...linha };
     },
