@@ -646,6 +646,8 @@ export type OpcoesDeCiclo = {
 export type ResultadoDeCiclo = ResultadoReconciliacao & {
   ciclosNovos: number;
   recusasNovas: number;
+  /** Faturas do preapproval que já têm cobrança — aprovada, recusada ou pendente. */
+  cobrancasEncontradas: number;
   vinculoLegadoPendente?: boolean;
   /** Para a checagem cruzada da reconciliação periódica. */
   conferencia?: { cobrancasNoProvedor: number | null; ciclosNoLivro: number };
@@ -696,7 +698,7 @@ export async function reconciliarCicloDeAssinatura(
   opcoes: OpcoesDeCiclo,
 ): Promise<ResultadoDeCiclo> {
   const provedor = provedorDePagamento();
-  const semEfeito = { ciclosNovos: 0, recusasNovas: 0 };
+  const semEfeito = { ciclosNovos: 0, recusasNovas: 0, cobrancasEncontradas: 0 };
 
   const pre = await provedor.consultarAssinatura(preapprovalId);
   if (!pre) {
@@ -807,6 +809,7 @@ export async function reconciliarCicloDeAssinatura(
     snapshot: pre,
     ciclosNovos,
     recusasNovas,
+    cobrancasEncontradas: faturas.length,
     conferencia: {
       cobrancasNoProvedor: pre.cobrancasRealizadas ?? null,
       ciclosNoLivro,
@@ -833,6 +836,7 @@ export async function reconciliarFatura(
       status: "UNKNOWN",
       ciclosNovos: 0,
       recusasNovas: 0,
+      cobrancasEncontradas: 0,
     };
   }
 
@@ -1289,8 +1293,17 @@ async function aplicarEstadoDoPreapproval(
 }
 
 export type ResumoDaReconciliacao = {
+  iniciadoEm: string;
+  concluidoEm: string | null;
+  duracaoMs: number | null;
   completa: boolean;
   verificadas: number;
+  /** Faturas com cobrança vistas no provedor, somadas entre as assinaturas. */
+  cobrancasEncontradas: number;
+  /** `summarized.charged_quantity` somado: o que o provedor diz ter cobrado. */
+  cobrancasNoProvedor: number;
+  /** Ciclos aprovados no nosso livro, somados. Tem de bater com a linha acima. */
+  ciclosNoLivro: number;
   mudaram: number;
   ciclosNovos: number;
   recusasNovas: number;
@@ -1337,9 +1350,16 @@ export async function reconciliarAssinaturasPeriodicamente(
         ],
       };
 
+  const inicio = Date.now();
   const resumo: ResumoDaReconciliacao = {
+    iniciadoEm: new Date(inicio).toISOString(),
+    concluidoEm: null,
+    duracaoMs: null,
     completa,
     verificadas: 0,
+    cobrancasEncontradas: 0,
+    cobrancasNoProvedor: 0,
+    ciclosNoLivro: 0,
     mudaram: 0,
     ciclosNovos: 0,
     recusasNovas: 0,
@@ -1372,6 +1392,7 @@ export async function reconciliarAssinaturasPeriodicamente(
         if (r.mudou) resumo.mudaram += 1;
         resumo.ciclosNovos += r.ciclosNovos;
         resumo.recusasNovas += r.recusasNovas;
+        resumo.cobrancasEncontradas += r.cobrancasEncontradas;
 
         if (r.vinculoLegadoPendente) {
           resumo.pendentesDeVinculo += 1;
@@ -1380,9 +1401,13 @@ export async function reconciliarAssinaturasPeriodicamente(
 
         // Checagem cruzada: nunca corrige sozinha, só avisa.
         const c = r.conferencia;
+        if (c) {
+          resumo.cobrancasNoProvedor += c.cobrancasNoProvedor ?? 0;
+          resumo.ciclosNoLivro += c.ciclosNoLivro;
+        }
         if (c && c.cobrancasNoProvedor !== null && c.cobrancasNoProvedor !== c.ciclosNoLivro) {
           resumo.divergencias += 1;
-          void log.warn({
+          await log.warn({
             channel: "PAYMENTS",
             message: "Cobranças do provedor e ciclos do livro não batem",
             userId: s.userId,
@@ -1391,7 +1416,7 @@ export async function reconciliarAssinaturasPeriodicamente(
         }
       } catch (erro) {
         resumo.falhas += 1;
-        void log.error({
+        await log.error({
           channel: "PAYMENTS",
           message: "Reconciliação de assinatura falhou",
           userId: s.userId,
@@ -1407,9 +1432,27 @@ export async function reconciliarAssinaturasPeriodicamente(
     cursor = lote[lote.length - 1]!.id;
   }
 
-  void log.info({
+  resumo.concluidoEm = new Date().toISOString();
+  resumo.duracaoMs = Date.now() - inicio;
+
+  // Uma linha por execução. INFO só quando há algo a ler — ciclo novo, recusa,
+  // divergência, erro, vínculo pendente; execução sem novidade fica em DEBUG:
+  // registrada, para provar que rodou, sem poluir o painel todo dia.
+  //
+  // `await`, e não `void`: numa função serverless a resposta pode sair antes
+  // de um log solto terminar de gravar, e o registro da execução se perderia.
+  const temNovidade =
+    resumo.mudaram > 0 ||
+    resumo.divergencias > 0 ||
+    resumo.falhas > 0 ||
+    resumo.pendentesDeVinculo > 0;
+  await (temNovidade ? log.info : log.debug)({
     channel: "JOBS",
-    message: `Reconciliação de assinaturas (${completa ? "completa" : "diária"})`,
+    message:
+      `Reconciliação de assinaturas (${completa ? "varredura completa" : "diária"}): ` +
+      `${resumo.verificadas} verificada(s), ${resumo.cobrancasEncontradas} cobrança(s) encontrada(s), ` +
+      `${resumo.ciclosNovos} ciclo(s) novo(s), ${resumo.divergencias} divergência(s), ` +
+      `${resumo.falhas} erro(s)`,
     context: resumo,
   });
 

@@ -987,3 +987,30 @@ describe("listarFaturas contra o contrato da API", () => {
     }
   });
 });
+
+// ------------------------------------------------------ chave do cron
+
+describe("ASSINATURAS_RECONCILIAR", () => {
+  it("aceita 1, true e sim; qualquer outra coisa deixa desligada", async () => {
+    const { reconciliacaoLigada } = await import("./cron");
+    const original = process.env.ASSINATURAS_RECONCILIAR;
+
+    try {
+      // `true` é o valor que qualquer um escreveria — e a primeira versão, que
+      // só aceitava "1", o ignorava em silêncio.
+      for (const v of ["1", "true", "TRUE", " sim "]) {
+        process.env.ASSINATURAS_RECONCILIAR = v;
+        expect(reconciliacaoLigada()).toBe(true);
+      }
+      for (const v of ["0", "false", "", "ligado"]) {
+        process.env.ASSINATURAS_RECONCILIAR = v;
+        expect(reconciliacaoLigada()).toBe(false);
+      }
+      delete process.env.ASSINATURAS_RECONCILIAR;
+      expect(reconciliacaoLigada()).toBe(false);
+    } finally {
+      if (original === undefined) delete process.env.ASSINATURAS_RECONCILIAR;
+      else process.env.ASSINATURAS_RECONCILIAR = original;
+    }
+  });
+});
