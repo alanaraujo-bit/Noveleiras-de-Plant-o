@@ -301,9 +301,11 @@ describe("Mercado Pago falha", () => {
     const contexto = erro!.context as Record<string, unknown>;
     expect(contexto.externalPreapprovalId).toBe(PREAPPROVAL);
     expect(contexto.subscriptionId).toBe("sub-anual");
-    // Só a mensagem, nunca o objeto de erro inteiro — ele carrega o corpo da
-    // resposta do provedor.
-    expect(typeof contexto.erro).toBe("string");
+    // Campos escolhidos, nunca o corpo cru do provedor.
+    const provedor = contexto.provedor as Record<string, unknown>;
+    expect(typeof provedor.message).toBe("string");
+    expect(provedor).toHaveProperty("httpStatus");
+    expect(provedor).toHaveProperty("requestId");
   });
 
   it("a mensagem devolvida diz que nada mudou e convida a tentar de novo", async () => {
@@ -452,5 +454,141 @@ describe("o corpo enviado ao Mercado Pago", () => {
       globalThis.fetch = fetchOriginal;
       process.env = originais;
     }
+  });
+});
+
+// ------------------------------------------------- diagnostico sanitizado
+
+/**
+ * O que vai para a auditoria quando o provedor recusa.
+ *
+ * A primeira tentativa real de cancelamento gravou apenas "respondeu 400" e a
+ * investigação parou aí: sem `message`, sem `cause`, sem request id, um 400 é
+ * indiagnosticável. Estes testes fixam o que passa e, principalmente, o que
+ * **não** passa — token, cabeçalho de autorização e dado de cartão não podem
+ * cair numa tabela que meio time lê.
+ */
+describe("sanitizarFalha", () => {
+  it("extrai os campos que o Mercado Pago manda num 400", async () => {
+    const { FalhaDoProvedor, sanitizarFalha } = await import("./provedor");
+
+    const falha = new FalhaDoProvedor(
+      "Mercado Pago respondeu 400 em /preapproval/abc",
+      400,
+      {
+        message: "Invalid preapproval status",
+        error: "bad_request",
+        status: 400,
+        cause: [{ code: 2034, description: "status attribute is invalid" }],
+      },
+      "req-9f2c",
+    );
+
+    expect(sanitizarFalha(falha)).toEqual({
+      httpStatus: 400,
+      message: "Invalid preapproval status",
+      error: "bad_request",
+      code: null,
+      status: 400,
+      cause: [{ code: 2034, description: "status attribute is invalid" }],
+      requestId: "req-9f2c",
+    });
+  });
+
+  it("nao carrega token, authorization nem dado de cartao", async () => {
+    const { FalhaDoProvedor, sanitizarFalha } = await import("./provedor");
+
+    const falha = new FalhaDoProvedor("respondeu 400", 400, {
+      message: "recusado",
+      // Tudo isto existe em respostas reais e nao pode vazar.
+      access_token: "APP_USR-3530880950-secreto",
+      headers: { authorization: "Bearer APP_USR-3530880950-secreto" },
+      card: { last_four_digits: "4321", token: "tok_abc" },
+      payer: { email: "pagador@exemplo.com", identification: "123.456.789-00" },
+    });
+
+    const limpo = JSON.stringify(sanitizarFalha(falha));
+
+    for (const proibido of [
+      "APP_USR",
+      "Bearer",
+      "authorization",
+      "4321",
+      "tok_abc",
+      "pagador@exemplo.com",
+      "123.456.789-00",
+    ]) {
+      expect(limpo).not.toContain(proibido);
+    }
+    expect(sanitizarFalha(falha).message).toBe("recusado");
+  });
+
+  it("um timeout vira mensagem, sem inventar campos do provedor", async () => {
+    const { sanitizarFalha } = await import("./provedor");
+
+    const limpo = sanitizarFalha(
+      new Error("The operation was aborted due to timeout"),
+    );
+
+    expect(limpo.httpStatus).toBeNull();
+    expect(limpo.requestId).toBeNull();
+    expect(limpo.cause).toEqual([]);
+    expect(limpo.message).toContain("timeout");
+  });
+
+  it("trunca texto longo e limita a lista de causas", async () => {
+    const { FalhaDoProvedor, sanitizarFalha } = await import("./provedor");
+
+    const limpo = sanitizarFalha(
+      new FalhaDoProvedor("x", 400, {
+        message: "a".repeat(5000),
+        cause: Array.from({ length: 40 }, (_, i) => ({
+          code: i,
+          description: "b".repeat(5000),
+        })),
+      }),
+    );
+
+    expect(limpo.message!.length).toBeLessThanOrEqual(300);
+    expect(limpo.cause).toHaveLength(5);
+    expect(limpo.cause[0]!.description!.length).toBeLessThanOrEqual(300);
+  });
+});
+
+describe("o log da falha de cancelamento", () => {
+  it("carrega o diagnostico do provedor e o status que foi enviado", async () => {
+    const { FalhaDoProvedor } = await import("./provedor");
+
+    aoCancelar = async () => {
+      throw new FalhaDoProvedor(
+        "Mercado Pago respondeu 400 em /preapproval/abc",
+        400,
+        {
+          message: "Invalid preapproval status",
+          error: "bad_request",
+          cause: [{ code: 2034, description: "status attribute is invalid" }],
+        },
+        "req-9f2c",
+      );
+    };
+
+    await expect(cancelarAssinaturaDoUsuario(USUARIO)).rejects.toThrow();
+
+    const erro = registrados.find((r) => r.nivel === "ERROR")!;
+    const contexto = erro.context as Record<string, unknown>;
+    const provedor = contexto.provedor as Record<string, unknown>;
+
+    expect(contexto.statusEnviado).toBe("canceled");
+    expect(provedor.httpStatus).toBe(400);
+    expect(provedor.message).toBe("Invalid preapproval status");
+    expect(provedor.error).toBe("bad_request");
+    expect(provedor.requestId).toBe("req-9f2c");
+    expect(provedor.cause).toEqual([
+      { code: 2034, description: "status attribute is invalid" },
+    ]);
+
+    // E o essencial segue valendo: nada mudou no banco.
+    expect(assinatura().cancelAtPeriodEnd).toBe(false);
+    esperarAcessoPreservado();
   });
 });

@@ -222,8 +222,103 @@ export class FalhaDoProvedor extends Error {
     message: string,
     public readonly status?: number,
     public readonly corpo?: unknown,
+    /** `x-request-id` do provedor: o que o suporte deles pede para investigar. */
+    public readonly requestId?: string | null,
   ) {
     super(message);
     this.name = "FalhaDoProvedor";
   }
+}
+
+/**
+ * O que um erro do provedor pode contar sem contar demais.
+ *
+ * Campos escolhidos a dedo, e não o corpo inteiro. Guardar a resposta crua
+ * numa tabela de auditoria é como esse tipo de log vaza identificador de
+ * conta, e-mail do pagador ou os quatro últimos do cartão — dados que não
+ * ajudam a diagnosticar e que passam a viver num lugar que muita gente lê.
+ *
+ * O motivo de existir: um 400 sem corpo é indiagnosticável. A primeira
+ * tentativa real de cancelamento gravou apenas "respondeu 400", e a
+ * investigação parou aí, sem conseguir dizer **por quê**.
+ */
+export type FalhaSanitizada = {
+  httpStatus: number | null;
+  /** Descrição do provedor. Ex.: "Invalid preapproval status". */
+  message: string | null;
+  /** Classe do erro. Ex.: "bad_request". */
+  error: string | null;
+  /** Código do provedor, quando vem no topo. */
+  code: string | number | null;
+  /** Status que o provedor devolveu no corpo — nem sempre igual ao HTTP. */
+  status: string | number | null;
+  /** `cause` do Mercado Pago: lista de `{ code, description }`. */
+  cause: Array<{ code: string | number | null; description: string | null }>;
+  requestId: string | null;
+};
+
+/** Corta textos longos: log de auditoria não é lugar para página inteira. */
+function texto(valor: unknown, limite = 300): string | null {
+  if (typeof valor === "string") return valor.slice(0, limite);
+  if (typeof valor === "number") return String(valor);
+  return null;
+}
+
+function escalar(valor: unknown): string | number | null {
+  if (typeof valor === "string") return valor.slice(0, 120);
+  if (typeof valor === "number") return valor;
+  return null;
+}
+
+/**
+ * Extrai de um erro qualquer a parte que pode ser registrada.
+ *
+ * Aceita `unknown` de propósito: o chamador está num `catch`, e o que chega
+ * ali pode ser um `FalhaDoProvedor`, um `TypeError` de rede, ou o
+ * `TimeoutError` do `AbortSignal`. Todos viram a mesma forma.
+ */
+export function sanitizarFalha(erro: unknown): FalhaSanitizada {
+  const vazio: FalhaSanitizada = {
+    httpStatus: null,
+    message: null,
+    error: null,
+    code: null,
+    status: null,
+    cause: [],
+    requestId: null,
+  };
+
+  if (!(erro instanceof FalhaDoProvedor)) {
+    // Rede, timeout, JSON quebrado: só a mensagem, que aqui é nossa ou do
+    // runtime — nunca conteúdo do provedor.
+    return {
+      ...vazio,
+      message: erro instanceof Error ? texto(erro.message) : texto(String(erro)),
+    };
+  }
+
+  const corpo =
+    erro.corpo && typeof erro.corpo === "object"
+      ? (erro.corpo as Record<string, unknown>)
+      : null;
+
+  const causas = Array.isArray(corpo?.cause) ? corpo.cause : [];
+
+  return {
+    httpStatus: erro.status ?? null,
+    // O corpo do provedor tem precedência: "Invalid status" diz muito mais que
+    // o nosso "respondeu 400 em /preapproval/...".
+    message: texto(corpo?.message) ?? texto(erro.message),
+    error: texto(corpo?.error, 120),
+    code: escalar(corpo?.code),
+    status: escalar(corpo?.status),
+    cause: causas.slice(0, 5).map((c) => {
+      const item = c && typeof c === "object" ? (c as Record<string, unknown>) : {};
+      return {
+        code: escalar(item.code),
+        description: texto(item.description),
+      };
+    }),
+    requestId: erro.requestId ?? null,
+  };
 }

@@ -36,6 +36,7 @@ import {
   PRECO_AVULSO_CENTS,
   type DefinicaoDePlano,
 } from "./planos";
+import { sanitizarFalha } from "./provedor";
 import type {
   ConsultaPagamento,
   EstadoProvedor,
@@ -1314,10 +1315,12 @@ async function confirmarCancelamentoNoProvedor(
 
   if (status === "CANCELED") return status;
 
-  // Só a mensagem, nunca o objeto de erro inteiro: ele carrega o corpo da
-  // resposta do provedor, que pode trazer identificadores da conta.
-  const detalhe =
-    motivo instanceof Error ? motivo.message : motivo ? String(motivo) : null;
+  // Campos escolhidos, não o corpo cru: `message`, `error`, `code`, `status`,
+  // `cause` e o `x-request-id`. É o bastante para saber **por que** o provedor
+  // recusou — um 400 sem isso é indiagnosticável, como a primeira tentativa
+  // real provou — sem arrastar para a auditoria token, cabeçalho de
+  // autorização ou dado de cartão.
+  const detalhe = sanitizarFalha(motivo);
 
   void log.error({
     channel: "PAYMENTS",
@@ -1327,7 +1330,9 @@ async function confirmarCancelamentoNoProvedor(
       subscriptionId,
       externalPreapprovalId: externalId,
       providerStatus: status,
-      erro: detalhe,
+      // O que foi enviado, para que o log baste sozinho na investigação.
+      statusEnviado: "canceled",
+      provedor: detalhe,
     },
   });
 

@@ -273,6 +273,10 @@ async function chamar<T>(
       `Mercado Pago respondeu ${resposta.status} em ${caminho}`,
       resposta.status,
       corpo,
+      // É o identificador que o suporte deles pede para rastrear uma chamada.
+      // Sem guardá-lo, abrir chamado sobre um 400 vira descrição de memória.
+      resposta.headers.get("x-request-id") ??
+        resposta.headers.get("x-requestid"),
     );
   }
 
