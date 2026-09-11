@@ -674,6 +674,161 @@ describe("cobrança recusada", () => {
   });
 });
 
+// ------------------------------------------- checkout inicial recusado
+
+/**
+ * O caso real de 11/09: a primeira cobrança de um preapproval novo recusada
+ * com `cc_rejected_high_risk`. O Mercado Pago cancela o preapproval sozinho
+ * (`charged_quantity 1`, `charged_amount 0`), e a tentativa ficava em PENDING
+ * para sempre, com a tela de espera girando.
+ */
+describe("checkout inicial recusado", () => {
+  const PRE_NOVO = "1784de9e3f864a01bd75721b02348f86";
+  const ATT_NOVO = "cmtwi5rfd000rl904imm401q2";
+  const D0 = new Date("2026-09-11T05:15:17.000Z");
+
+  /** A fatura e o pagamento reais, como a API devolveu. */
+  const recusada = () => ({
+    ...fatura("7031838455", "177454871237", "REJECTED", D0, { pre: PRE_NOVO }),
+    referenciaExterna: ATT_NOVO,
+    pagamento: {
+      id: "177454871237",
+      status: "REJECTED" as const,
+      statusCru: "rejected",
+      detalheCru: "cc_rejected_high_risk",
+    },
+  });
+
+  beforeEach(() => {
+    // Conta limpa: sem assinatura paga, só a linha FREE e o título comprado.
+    tabelas.paymentAttempt = [
+      tentativa({ id: ATT_NOVO, externalId: PRE_NOVO, isDemo: false, createdAt: D0 }),
+    ];
+    tabelas.payment = [{ ...PAGAMENTO_TITULO }];
+    provedor.preapprovals = {
+      [PRE_NOVO]: preapproval(PRE_NOVO, ATT_NOVO, "cancelled", 1),
+    };
+    provedor.faturas = { [PRE_NOVO]: [recusada()] };
+  });
+
+  const tentativaNova = () => tabelas.paymentAttempt.find((a) => a.id === ATT_NOVO)!;
+
+  it("fecha a tentativa como REJECTED, com o detalhe no código e uma frase para a tela", async () => {
+    const r = await reconciliarOutro(PRE_NOVO);
+
+    expect(r.mudou).toBe(true);
+    expect(r.recusasNovas).toBe(1);
+    // É este `attemptId` que faz a tela de espera reler o status e sair do
+    // "aguardando": sem ele, a linha vira REJECTED e a tela continua girando.
+    expect(r.attemptId).toBe(ATT_NOVO);
+    expect(tentativaNova()).toMatchObject({
+      status: "REJECTED",
+      rawStatus: "rejected",
+      failureCode: "cc_rejected_high_risk",
+    });
+    // A frase é para quem paga: sem código do provedor.
+    expect(tentativaNova().failureMessage).toBe(
+      "Não foi possível aprovar este pagamento. Tente outro cartão ou meio de pagamento.",
+    );
+    expect(String(tentativaNova().failureMessage)).not.toContain("cc_rejected");
+  });
+
+  it("não ativa, não cria ciclo, não concede premium", async () => {
+    await reconciliarOutro(PRE_NOVO);
+
+    expect(assinatura()).toMatchObject({ plan: "FREE", externalPreapprovalId: null });
+    expect(ciclos()).toHaveLength(0);
+    expect(direitosDeAssinatura()).toHaveLength(0);
+    expect(eventos()).toHaveLength(0);
+    // A recusa fica no livro, sem ciclo.
+    expect(tabelas.payment.filter((p) => p.status === "FAILED")).toMatchObject([
+      { externalId: "177454871237", cycleIndex: null, failureCode: "cc_rejected_high_risk" },
+    ]);
+    esperarTituloIntacto();
+  });
+
+  it("payment.created, authorized_payment, polling e reentrega: a mesma recusa escreve uma vez", async () => {
+    // O que chegou em produção, na ordem: webhook de payment, webhook da
+    // fatura, e a tela de espera perguntando enquanto isso.
+    await reconciliarOutro(PRE_NOVO);
+    const depoisDaPrimeira = { ...tentativaNova() };
+
+    await reconciliarFatura("7031838455");
+    await reconciliarOutro(PRE_NOVO);
+    await reconciliarFatura("7031838455");
+
+    expect(tentativaNova()).toEqual(depoisDaPrimeira);
+    expect(tabelas.payment.filter((p) => p.status === "FAILED")).toHaveLength(1);
+    expect(eventos()).toHaveLength(0);
+    expect(ciclos()).toHaveLength(0);
+  });
+
+  it("nova assinatura aprovada depois usa a própria tentativa; a recusada fica como histórico", async () => {
+    await reconciliarOutro(PRE_NOVO);
+
+    // Segundo checkout, outro preapproval, outra tentativa.
+    const D1b = new Date("2026-09-11T06:00:00.000Z");
+    tabelas.paymentAttempt.push(
+      tentativa({ id: "att-2", externalId: "pre-2", isDemo: false, createdAt: D1b }),
+    );
+    provedor.preapprovals["pre-2"] = preapproval("pre-2", "att-2", "authorized", 1);
+    provedor.faturas["pre-2"] = [
+      { ...fatura("fat-2", "pay-2", "APPROVED", D1b, { pre: "pre-2" }), referenciaExterna: "att-2" },
+    ];
+
+    await reconciliarOutro("pre-2");
+
+    expect(tabelas.paymentAttempt.find((a) => a.id === "att-2")).toMatchObject({
+      status: "APPROVED",
+      externalId: "pre-2",
+    });
+    expect(tentativaNova()).toMatchObject({
+      status: "REJECTED",
+      externalId: PRE_NOVO,
+      failureCode: "cc_rejected_high_risk",
+    });
+    expect(assinatura()).toMatchObject({ plan: "MONTHLY", externalPreapprovalId: "pre-2" });
+    expect(ciclos()).toHaveLength(1);
+    expect(ciclos()[0]).toMatchObject({ attemptId: "att-2", cycleIndex: 1 });
+    expect(direitosDeAssinatura()).toHaveLength(1);
+  });
+
+  it("preapproval ainda vivo (pending/authorized) não fecha a tentativa: uma retentativa pode aprovar", async () => {
+    provedor.preapprovals[PRE_NOVO] = preapproval(PRE_NOVO, ATT_NOVO, "authorized", 1);
+
+    await reconciliarOutro(PRE_NOVO);
+
+    expect(tentativaNova().status).toBe("PENDING");
+    expect(tabelas.payment.filter((p) => p.status === "FAILED")).toHaveLength(1);
+  });
+
+  it("recusa de renovação de uma assinatura ativa não mexe na tentativa original", async () => {
+    // Volta ao cenário padrão: mensal ativa pelo ciclo 1.
+    tabelas.paymentAttempt = [tentativa()];
+    provedor.preapprovals = { [PRE]: preapproval(PRE, ATT) };
+    provedor.faturas = { [PRE]: [F1()] };
+    await reconciliar();
+    expect(tabelas.paymentAttempt[0]!.status).toBe("APPROVED");
+
+    provedor.preapprovals[PRE] = preapproval(PRE, ATT, "cancelled", 2);
+    provedor.faturas[PRE] = [F1(), fatura("7031821287", "pay-2-recusado", "REJECTED", D2)];
+    await reconciliar();
+
+    expect(tabelas.paymentAttempt[0]!.status).toBe("APPROVED");
+    expect(assinatura().failedCharges).toBe(1);
+  });
+
+  it("erro técnico do provedor não vira recusa: sobe, e a tentativa continua PENDING", async () => {
+    provedor.falhar.add(PRE_NOVO);
+
+    await expect(reconciliarOutro(PRE_NOVO)).rejects.toThrow("Mercado Pago respondeu 500");
+
+    expect(tentativaNova().status).toBe("PENDING");
+    expect(tentativaNova().failureCode ?? null).toBeNull();
+    expect(tabelas.payment.filter((p) => p.status === "FAILED")).toHaveLength(0);
+  });
+});
+
 describe("pausado no provedor", () => {
   it("vira PAST_DUE sem revogar, e o acesso acaba por data", async () => {
     await reconciliar();

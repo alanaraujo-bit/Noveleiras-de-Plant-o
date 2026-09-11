@@ -171,14 +171,14 @@ export function EstadoDoPagamento({
         </div>
         <h1 className="mt-5 text-[1.5rem] leading-tight">Pagamento recusado</h1>
         <p className="mt-2 text-[0.875rem] text-cream-400">
-          O pagamento não foi autorizado e nada foi cobrado. Isso costuma ser
-          limite, dados do cartão ou uma trava do banco.
+          {/* A frase já vem traduzida do servidor; o código do provedor
+              (`cc_rejected_…`) fica no log, nunca aqui. */}
+          {cobranca.mensagem ??
+            "Não foi possível aprovar este pagamento. Tente outro cartão ou meio de pagamento."}
         </p>
-        {cobranca.mensagem ? (
-          <p className="mt-2 text-[0.75rem] text-cream-600">
-            {cobranca.mensagem}
-          </p>
-        ) : null}
+        <p className="mt-2 text-[0.75rem] text-cream-600">
+          Nada foi cobrado.
+        </p>
 
         <Botao
           tamanho="grande"

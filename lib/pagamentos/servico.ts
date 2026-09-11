@@ -39,6 +39,7 @@ import {
 } from "./planos";
 import { sanitizarFalha } from "./provedor";
 import type {
+  ConsultaAssinatura,
   ConsultaPagamento,
   EstadoProvedor,
   FaturaDeAssinatura,
@@ -822,15 +823,27 @@ export async function reconciliarCicloDeAssinatura(
     },
   });
 
+  const checkoutRecusado = await encerrarCheckoutRecusado(
+    ctx,
+    pre,
+    faturas,
+    ciclosNoLivro,
+  );
+
   const mudou =
-    ciclosNovos > 0 || recusasNovas > 0 || estadoMudou || tolerancia.mudou;
+    ciclosNovos > 0 ||
+    recusasNovas > 0 ||
+    estadoMudou ||
+    tolerancia.mudou ||
+    checkoutRecusado;
 
   return {
     mudou,
     motivo: mudou
       ? `ciclos novos: ${ciclosNovos}, recusas novas: ${recusasNovas}` +
         (estadoMudou ? ", estado do preapproval aplicado" : "") +
-        (tolerancia.mudou ? ", tolerância de renovação aberta" : "")
+        (tolerancia.mudou ? ", tolerância de renovação aberta" : "") +
+        (checkoutRecusado ? ", checkout recusado" : "")
       : "nada novo no provedor",
     attemptId: tentativa.id,
     status: pre.status,
@@ -844,6 +857,81 @@ export async function reconciliarCicloDeAssinatura(
       ciclosNoLivro,
     },
   };
+}
+
+/**
+ * O checkout de assinatura foi recusado de vez: fecha a tentativa.
+ *
+ * Quando a **primeira** cobrança de um preapproval é recusada, o Mercado Pago
+ * cancela o preapproval sozinho — visto em produção com
+ * `cc_rejected_high_risk`: preapproval `cancelled`, `charged_amount 0`. A
+ * recusa entrava no livro (`Payment` FAILED) mas a tentativa ficava em
+ * PENDING para sempre, e a tela de espera girava para uma cobrança que já
+ * tinha morrido.
+ *
+ * Só fecha o que é definitivo, e só o checkout inicial:
+ *
+ *   - nenhum ciclo aprovado no livro para esta tentativa (é ativação, não
+ *     renovação — recusa de renovação vai para a tolerância, não para cá);
+ *   - o preapproval está cancelado no provedor (enquanto está `pending` ou
+ *     `authorized`, uma retentativa ainda pode aprovar);
+ *   - a última cobrança das faturas foi recusada.
+ *
+ * Idempotente pela atualização condicional: só sai de CREATED/PENDING. Os
+ * três webhooks, o polling e o cron passam por aqui e só o primeiro escreve.
+ * Uma nova assinatura cria uma tentativa nova; esta fica como histórico.
+ */
+async function encerrarCheckoutRecusado(
+  ctx: ContextoDeCiclo,
+  pre: ConsultaAssinatura,
+  faturas: FaturaDeAssinatura[],
+  ciclosNoLivro: number,
+): Promise<boolean> {
+  if (ciclosNoLivro > 0) return false;
+  if (pre.status !== "CANCELED") return false;
+
+  const ultima = faturas[faturas.length - 1]?.pagamento;
+  if (!ultima || (ultima.status !== "REJECTED" && ultima.status !== "CANCELED")) {
+    return false;
+  }
+
+  const { count } = await db.paymentAttempt.updateMany({
+    where: { id: ctx.tentativa.id, status: { in: ["CREATED", "PENDING"] } },
+    data: {
+      status: "REJECTED",
+      rawStatus: ultima.statusCru ?? "rejected",
+      failureCode: ultima.detalheCru,
+      failureMessage: mensagemDeRecusa(ultima.detalheCru),
+    },
+  });
+  return count === 1;
+}
+
+/**
+ * O que a pessoa lê quando a cobrança é recusada.
+ *
+ * O `status_detail` do provedor (`cc_rejected_high_risk`,
+ * `cc_rejected_insufficient_amount`…) é para o log e para o suporte, não
+ * para a tela. Aqui só o que ajuda a decidir o próximo passo.
+ */
+export function mensagemDeRecusa(detalheCru: string | null): string {
+  switch (detalheCru) {
+    case "cc_rejected_insufficient_amount":
+      return "O cartão não tem limite suficiente para esta cobrança. Tente outro cartão ou meio de pagamento.";
+    case "cc_rejected_bad_filled_card_number":
+    case "cc_rejected_bad_filled_date":
+    case "cc_rejected_bad_filled_security_code":
+    case "cc_rejected_bad_filled_other":
+      return "Algum dado do cartão foi digitado errado. Confira e tente de novo.";
+    case "cc_rejected_call_for_authorize":
+      return "O banco pediu para você autorizar esta cobrança. Ligue para o emissor do cartão ou use outro meio de pagamento.";
+    case "cc_rejected_card_disabled":
+      return "Este cartão está desativado. Ligue para o emissor ou use outro meio de pagamento.";
+    case "cc_rejected_duplicated_payment":
+      return "Você já fez um pagamento com este valor há pouco. Se precisar pagar de novo, use outro cartão.";
+    default:
+      return "Não foi possível aprovar este pagamento. Tente outro cartão ou meio de pagamento.";
+  }
 }
 
 /**
