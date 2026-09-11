@@ -582,30 +582,35 @@ export class MercadoPago implements ProvedorDePagamento {
   }
 
   /**
-   * `"canceled"`, com **um** L — e isso não é descuido de digitação.
+   * `"cancelled"`, com **dois** L — decidido pela API, não pela documentação.
    *
-   * A documentação do Mercado Pago diverge de si mesma. "Gerenciamento de
-   * assinaturas → Cancelar ou pausar" manda enviar `status` com o valor
-   * `canceled`, e `/preapproval/export` lista os estados como
-   * `authorized,canceled,paused`. Já as páginas que descrevem o ciclo de vida
-   * da assinatura escrevem `cancelled`, com dois L.
+   * A documentação do Mercado Pago diverge de si mesma: "Gerenciamento de
+   * assinaturas → Cancelar ou pausar" e `/preapproval/export` mandam enviar
+   * `canceled`, com um L; as páginas de ciclo de vida usam `cancelled`.
    *
-   * O que vale para **escrever** é a página de cancelamento: é ela que
-   * documenta esta chamada. Para **ler**, `traduzirStatusAssinatura` aceita as
-   * duas grafias — não reconhecer um cancelamento vindo deles seria pior que
-   * tolerar uma inconsistência que é deles.
+   * Quem desempatou foi a própria API, em produção:
    *
-   * Errar aqui é caro e silencioso: status inválido devolve 400 genérico, sem
-   * dizer que a string é o problema. A confirmação obrigatória em
+   *     PUT /preapproval/<id>  {"status":"canceled"}
+   *     → 400  "Invalid preapproval status param: canceled"
+   *        x-request-id 40b129c6-ce73-40f1-af44-bed81e05eb5b
+   *
+   * Ou seja, a página de cancelamento está desatualizada. Para **ler**,
+   * `traduzirStatusAssinatura` continua aceitando as duas grafias: não
+   * reconhecer um cancelamento vindo deles é pior que tolerar a
+   * inconsistência.
+   *
+   * Errar esta string é caro e silencioso, e custou quatro tentativas reais
+   * para ser nomeado. A confirmação obrigatória em
    * `confirmarCancelamentoNoProvedor` é a rede embaixo disso — sem `CANCELED`
-   * confirmado, nada é gravado do nosso lado.
+   * confirmado, nada é gravado do nosso lado, e foi ela que impediu quatro
+   * "cancelamentos" falsos no banco.
    */
   async cancelarAssinatura(externalId: string): Promise<EstadoProvedor> {
     const resposta = await chamar<{ status?: string }>(
       `/preapproval/${encodeURIComponent(externalId)}`,
       {
         method: "PUT",
-        body: JSON.stringify({ status: "canceled" }),
+        body: JSON.stringify({ status: "cancelled" }),
       },
     );
 

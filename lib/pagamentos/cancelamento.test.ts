@@ -408,18 +408,18 @@ describe("o que o cancelamento nunca toca", () => {
 /**
  * O valor enviado no `PUT /preapproval/{id}`.
  *
- * A documentação do Mercado Pago diverge de si mesma: "Gerenciamento de
- * assinaturas → Cancelar ou pausar" e `/preapproval/export` usam `canceled`
- * (um L); as páginas de ciclo de vida usam `cancelled` (dois L). Para
- * **escrever** vale a primeira.
+ * A documentação do Mercado Pago diverge de si mesma — a página de
+ * cancelamento e o `/preapproval/export` dizem `canceled`, com um L; as de
+ * ciclo de vida dizem `cancelled`. Quem desempatou foi a API em produção:
  *
- * Este teste existe porque errar aqui é invisível: status inválido devolve
- * 400 genérico, sem dizer que a string é o problema. Alguém "corrigindo" a
- * grafia de volta quebraria o cancelamento inteiro sem quebrar nenhum outro
- * teste.
+ *     {"status":"canceled"} → 400 "Invalid preapproval status param: canceled"
+ *
+ * Este teste existe porque errar a string é invisível: o 400 não aponta o
+ * campo culpado, e nenhum outro teste pegaria a regressão. Quem for
+ * "corrigir" a grafia pela documentação esbarra aqui primeiro.
  */
 describe("o corpo enviado ao Mercado Pago", () => {
-  it("manda status canceled, com um L, e le as duas grafias de volta", async () => {
+  it("manda status cancelled, com dois L, e le as duas grafias de volta", async () => {
     const { MercadoPago } = await import("./mercadopago");
 
     const originais = { ...process.env };
@@ -434,9 +434,9 @@ describe("o corpo enviado ao Mercado Pago", () => {
         metodo: init?.method,
         corpo: init?.body ? JSON.parse(String(init.body)) : null,
       });
-      // Responde com a grafia de dois L, que e a que as paginas de ciclo de
-      // vida usam: a leitura tem de reconhece-la mesmo assim.
-      return new Response(JSON.stringify({ status: "cancelled" }), {
+      // Responde com a grafia de UM L, que a documentacao usa: a leitura tem
+      // de reconhece-la mesmo assim.
+      return new Response(JSON.stringify({ status: "canceled" }), {
         status: 200,
         headers: { "content-type": "application/json" },
       });
@@ -448,7 +448,7 @@ describe("o corpo enviado ao Mercado Pago", () => {
       expect(enviados).toHaveLength(1);
       expect(enviados[0]!.metodo).toBe("PUT");
       expect(enviados[0]!.url).toContain("/preapproval/pre-1");
-      expect(enviados[0]!.corpo).toEqual({ status: "canceled" });
+      expect(enviados[0]!.corpo).toEqual({ status: "cancelled" });
       expect(estado).toBe("CANCELED");
     } finally {
       globalThis.fetch = fetchOriginal;

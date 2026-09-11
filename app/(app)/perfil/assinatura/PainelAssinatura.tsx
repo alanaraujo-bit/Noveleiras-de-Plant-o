@@ -81,6 +81,15 @@ export function PainelAssinatura({
   const [confirmando, setConfirmando] = useState(false);
 
   async function cancelar() {
+    // Dois cliques rápidos viravam duas chamadas ao Mercado Pago — foi
+    // observado em produção, com dois `x-request-id` distintos a 32 segundos
+    // um do outro. O `disabled` do botão não basta: o clique do meio do
+    // caminho já entrou na fila antes do React repintar.
+    //
+    // Trava só de interface. A regra de negócio não muda: o servidor continua
+    // aceitando quantos pedidos vierem, e o cancelamento segue idempotente —
+    // uma assinatura já cancelada no provedor é reconhecida pela reconsulta.
+    if (cancelando) return;
     setCancelando(true);
     try {
       const resposta = await fetch("/api/pagamentos/assinatura", {
