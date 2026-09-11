@@ -51,13 +51,21 @@ export type ResultadoDoCron = {
 export async function executarCronDeAssinaturas(opcoes: {
   completa: boolean;
 }): Promise<ResultadoDoCron> {
+  // 1 e 2. Mercado Pago → reconciliação, que já decide pendência e
+  // tolerância: renovação pendente vira PAST_DUE com `graceUntil`, e é esse
+  // `graceUntil` que tira a assinatura da expiração logo abaixo.
   const reconciliacao = reconciliacaoLigada()
     ? await reconciliarAssinaturasPeriodicamente({ completa: opcoes.completa })
     : "desligada";
 
+  // 3. Só então expirar. Assinatura cuja reconciliação falhou nesta execução
+  // fica de fora dela: sem saber o que o provedor diz, cortar pode ser cortar
+  // um pagante. A próxima execução decide.
+  const ignorar = reconciliacao === "desligada" ? [] : reconciliacao.falhasIds;
+
   // Primeiro as assinaturas, que revogam os direitos ligados a elas; depois a
   // varredura solta, que pega direitos órfãos de compra ou concessão manual.
-  const assinaturas = await expirarAssinaturasVencidas();
+  const assinaturas = await expirarAssinaturasVencidas(new Date(), { ignorar });
   const direitos = await expirarDireitosVencidos();
 
   if (assinaturas > 0 || direitos > 0) {

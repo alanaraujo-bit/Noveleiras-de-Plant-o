@@ -629,6 +629,17 @@ export async function reconciliarMerchantOrder(
  */
 const TOLERANCIA_MS = 3 * 86_400_000;
 
+/**
+ * Por quanto tempo uma assinatura já EXPIRED continua sendo reconciliada.
+ *
+ * Uma cobrança pode aprovar depois de a tolerância acabar — retentativa do
+ * provedor, pagamento em análise. Sem esta janela, a assinatura expirada nunca
+ * mais seria olhada e o cliente que pagou ficaria sem o ciclo. Com prazo, e
+ * não para sempre: o histórico inteiro não precisa de uma ida ao provedor por
+ * dia.
+ */
+const JANELA_DE_RECUPERACAO_MS = 30 * 86_400_000;
+
 export type OpcoesDeCiclo = {
   /** Quem pediu a reconciliação. Vai para a auditoria de cada mudança. */
   origem: string;
@@ -648,6 +659,8 @@ export type ResultadoDeCiclo = ResultadoReconciliacao & {
   recusasNovas: number;
   /** Faturas do preapproval que já têm cobrança — aprovada, recusada ou pendente. */
   cobrancasEncontradas: number;
+  /** O ciclo pago acabou e a renovação ainda não foi aprovada: em tolerância. */
+  renovacaoPendente: boolean;
   vinculoLegadoPendente?: boolean;
   /** Para a checagem cruzada da reconciliação periódica. */
   conferencia?: { cobrancasNoProvedor: number | null; ciclosNoLivro: number };
@@ -698,7 +711,12 @@ export async function reconciliarCicloDeAssinatura(
   opcoes: OpcoesDeCiclo,
 ): Promise<ResultadoDeCiclo> {
   const provedor = provedorDePagamento();
-  const semEfeito = { ciclosNovos: 0, recusasNovas: 0, cobrancasEncontradas: 0 };
+  const semEfeito = {
+    ciclosNovos: 0,
+    recusasNovas: 0,
+    cobrancasEncontradas: 0,
+    renovacaoPendente: false,
+  };
 
   const pre = await provedor.consultarAssinatura(preapprovalId);
   if (!pre) {
@@ -761,12 +779,11 @@ export async function reconciliarCicloDeAssinatura(
   // Ordem de débito, sempre. Webhook fora de ordem, página da API em outra
   // ordem, dois caminhos ao mesmo tempo: todos atribuem o mesmo ciclo à mesma
   // cobrança porque todos percorrem as faturas na mesma sequência.
-  const faturas = (await provedor.listarFaturas(preapprovalId))
-    .filter(
-      (f) =>
-        f.pagamento &&
-        (!f.preapprovalId || f.preapprovalId === preapprovalId),
-    )
+  const todasFaturas = (await provedor.listarFaturas(preapprovalId)).filter(
+    (f) => !f.preapprovalId || f.preapprovalId === preapprovalId,
+  );
+  const faturas = todasFaturas
+    .filter((f) => f.pagamento)
     .sort(porOrdemDeDebito);
 
   let ciclosNovos = 0;
@@ -788,6 +805,15 @@ export async function reconciliarCicloDeAssinatura(
 
   const estadoMudou = await aplicarEstadoDoPreapproval(ctx, pre.status, pre.statusCru ?? null);
 
+  // Depois das cobranças e do estado do preapproval — e antes de qualquer
+  // expiração, que só roda depois desta função: o ciclo pago acabou sem
+  // renovação aprovada? Então tolerância, não corte.
+  const tolerancia = await abrirToleranciaDeRenovacao(
+    ctx,
+    pre.status,
+    faturaPendenteDe(todasFaturas),
+  );
+
   const ciclosNoLivro = await db.payment.count({
     where: {
       attemptId: tentativa.id,
@@ -796,13 +822,15 @@ export async function reconciliarCicloDeAssinatura(
     },
   });
 
-  const mudou = ciclosNovos > 0 || recusasNovas > 0 || estadoMudou;
+  const mudou =
+    ciclosNovos > 0 || recusasNovas > 0 || estadoMudou || tolerancia.mudou;
 
   return {
     mudou,
     motivo: mudou
       ? `ciclos novos: ${ciclosNovos}, recusas novas: ${recusasNovas}` +
-        (estadoMudou ? ", estado do preapproval aplicado" : "")
+        (estadoMudou ? ", estado do preapproval aplicado" : "") +
+        (tolerancia.mudou ? ", tolerância de renovação aberta" : "")
       : "nada novo no provedor",
     attemptId: tentativa.id,
     status: pre.status,
@@ -810,6 +838,7 @@ export async function reconciliarCicloDeAssinatura(
     ciclosNovos,
     recusasNovas,
     cobrancasEncontradas: faturas.length,
+    renovacaoPendente: tolerancia.pendente,
     conferencia: {
       cobrancasNoProvedor: pre.cobrancasRealizadas ?? null,
       ciclosNoLivro,
@@ -837,6 +866,7 @@ export async function reconciliarFatura(
       ciclosNovos: 0,
       recusasNovas: 0,
       cobrancasEncontradas: 0,
+      renovacaoPendente: false,
     };
   }
 
@@ -1292,6 +1322,91 @@ async function aplicarEstadoDoPreapproval(
   return false;
 }
 
+/** A fatura mais recente ainda sem desfecho: sem cobrança, ou cobrança pendente. */
+function faturaPendenteDe(faturas: FaturaDeAssinatura[]): string | null {
+  const pendentes = faturas
+    .filter(
+      (f) =>
+        !f.pagamento ||
+        f.pagamento.status === "PENDING" ||
+        f.pagamento.status === "UNKNOWN",
+    )
+    .sort(porOrdemDeDebito);
+  return pendentes.length ? pendentes[pendentes.length - 1]!.id : null;
+}
+
+/**
+ * Renovação em andamento: o ciclo pago acabou, o preapproval segue
+ * autorizado, ninguém pediu cancelamento e nenhuma cobrança aprovada cobriu o
+ * ciclo seguinte ainda.
+ *
+ * É o cliente potencialmente pagante — a cobrança pode estar pendente, em
+ * análise, ou nem ter aparecido no provedor. Antes, a expiração do cron o
+ * tratava como quem não pagou: EXPIRED, e fora da reconciliação para sempre.
+ *
+ * Aqui ele vai para PAST_DUE com tolerância fixa a partir do fim do ciclo
+ * pago — rodar o cron dez vezes não empurra a data —, mantém o acesso só até
+ * lá e continua na mira da reconciliação diária. Se a cobrança aprovar,
+ * `concederCiclo` normaliza tudo; se não, a expiração corta quando a
+ * tolerância acabar.
+ *
+ * Quem pediu cancelamento não entra aqui: termina no fim do que pagou.
+ */
+async function abrirToleranciaDeRenovacao(
+  ctx: ContextoDeCiclo,
+  status: EstadoProvedor,
+  faturaPendente: string | null,
+): Promise<{ mudou: boolean; pendente: boolean }> {
+  const agora = new Date();
+  const assinatura = await db.subscription.findUnique({
+    where: { userId: ctx.tentativa.userId },
+  });
+
+  if (
+    !assinatura ||
+    assinatura.externalPreapprovalId !== ctx.preapprovalId ||
+    status !== "APPROVED" ||
+    assinatura.cancelAtPeriodEnd ||
+    !["ACTIVE", "TRIALING", "PAST_DUE"].includes(assinatura.status) ||
+    !assinatura.currentPeriodEnd ||
+    assinatura.currentPeriodEnd > agora
+  ) {
+    return { mudou: false, pendente: false };
+  }
+
+  const graceUntil =
+    assinatura.graceUntil ??
+    new Date(assinatura.currentPeriodEnd.getTime() + TOLERANCIA_MS);
+
+  const mudou = await db.$transaction(async (tx) => {
+    const { count } = await tx.subscription.updateMany({
+      where: { id: assinatura.id, status: { not: "PAST_DUE" } },
+      data: { status: "PAST_DUE", graceUntil },
+    });
+    if (count === 0) return false;
+
+    await tx.subscriptionEvent.create({
+      data: {
+        subscriptionId: assinatura.id,
+        userId: ctx.tentativa.userId,
+        type: "PAST_DUE",
+        fromStatus: assinatura.status,
+        toStatus: "PAST_DUE",
+        periodEnd: assinatura.currentPeriodEnd,
+        payload: {
+          origem: ctx.opcoes.origem,
+          motivo: "renovacao-pendente",
+          faturaPendente,
+          graceUntil: graceUntil.toISOString(),
+        } as Prisma.InputJsonValue,
+      },
+    });
+    return true;
+  });
+
+  return { mudou, pendente: true };
+}
+
 export type ResumoDaReconciliacao = {
   iniciadoEm: string;
   concluidoEm: string | null;
@@ -1304,6 +1419,14 @@ export type ResumoDaReconciliacao = {
   cobrancasNoProvedor: number;
   /** Ciclos aprovados no nosso livro, somados. Tem de bater com a linha acima. */
   ciclosNoLivro: number;
+  /** Assinaturas cujo ciclo acabou com a renovação ainda não aprovada. */
+  renovacoesPendentes: number;
+  /**
+   * Assinaturas cuja reconciliação falhou nesta execução. A expiração as pula
+   * nesta rodada: sem saber o que o provedor diz, cortar pode ser cortar um
+   * pagante.
+   */
+  falhasIds: string[];
   mudaram: number;
   ciclosNovos: number;
   recusasNovas: number;
@@ -1332,21 +1455,40 @@ export async function reconciliarAssinaturasPeriodicamente(
   const completa = opcoes.completa ?? false;
   const limite = new Date(agora.getTime() + TOLERANCIA_MS);
 
+  // Expiradas recentemente continuam na mira, nas duas execuções: é por aqui
+  // que uma aprovação tardia recupera quem o cron já tinha cortado.
+  const expiradaRecente: Prisma.SubscriptionWhereInput = {
+    status: "EXPIRED",
+    currentPeriodEnd: {
+      gte: new Date(agora.getTime() - JANELA_DE_RECUPERACAO_MS),
+    },
+  };
+
   const onde: Prisma.SubscriptionWhereInput = completa
     ? {
         externalPreapprovalId: { not: null },
-        status: { in: ["ACTIVE", "TRIALING", "PAST_DUE"] },
+        OR: [
+          { status: { in: ["ACTIVE", "TRIALING", "PAST_DUE"] } },
+          expiradaRecente,
+        ],
       }
     : {
         externalPreapprovalId: { not: null },
         OR: [
-          { status: "PAST_DUE" },
-          { failedCharges: { gt: 0 } },
-          { graceUntil: { not: null } },
           {
-            status: { in: ["ACTIVE", "TRIALING"] },
-            currentPeriodEnd: { lte: limite },
+            // Só assinaturas vivas. `graceUntil` e `failedCharges` continuam
+            // gravados numa assinatura que expirou; sem este filtro de status,
+            // uma EXPIRED que passou por tolerância seria consultada todo dia,
+            // para sempre. Expiradas entram só pela janela de recuperação.
+            status: { in: ["ACTIVE", "TRIALING", "PAST_DUE"] },
+            OR: [
+              { status: "PAST_DUE" },
+              { failedCharges: { gt: 0 } },
+              { graceUntil: { not: null } },
+              { currentPeriodEnd: { lte: limite } },
+            ],
           },
+          expiradaRecente,
         ],
       };
 
@@ -1360,6 +1502,8 @@ export async function reconciliarAssinaturasPeriodicamente(
     cobrancasEncontradas: 0,
     cobrancasNoProvedor: 0,
     ciclosNoLivro: 0,
+    renovacoesPendentes: 0,
+    falhasIds: [],
     mudaram: 0,
     ciclosNovos: 0,
     recusasNovas: 0,
@@ -1393,6 +1537,7 @@ export async function reconciliarAssinaturasPeriodicamente(
         resumo.ciclosNovos += r.ciclosNovos;
         resumo.recusasNovas += r.recusasNovas;
         resumo.cobrancasEncontradas += r.cobrancasEncontradas;
+        if (r.renovacaoPendente) resumo.renovacoesPendentes += 1;
 
         if (r.vinculoLegadoPendente) {
           resumo.pendentesDeVinculo += 1;
@@ -1416,6 +1561,7 @@ export async function reconciliarAssinaturasPeriodicamente(
         }
       } catch (erro) {
         resumo.falhas += 1;
+        resumo.falhasIds.push(s.id);
         await log.error({
           channel: "PAYMENTS",
           message: "Reconciliação de assinatura falhou",
@@ -1443,6 +1589,7 @@ export async function reconciliarAssinaturasPeriodicamente(
   // de um log solto terminar de gravar, e o registro da execução se perderia.
   const temNovidade =
     resumo.mudaram > 0 ||
+    resumo.renovacoesPendentes > 0 ||
     resumo.divergencias > 0 ||
     resumo.falhas > 0 ||
     resumo.pendentesDeVinculo > 0;
@@ -1451,7 +1598,8 @@ export async function reconciliarAssinaturasPeriodicamente(
     message:
       `Reconciliação de assinaturas (${completa ? "varredura completa" : "diária"}): ` +
       `${resumo.verificadas} verificada(s), ${resumo.cobrancasEncontradas} cobrança(s) encontrada(s), ` +
-      `${resumo.ciclosNovos} ciclo(s) novo(s), ${resumo.divergencias} divergência(s), ` +
+      `${resumo.ciclosNovos} ciclo(s) novo(s), ${resumo.renovacoesPendentes} renovação(ões) pendente(s), ` +
+      `${resumo.divergencias} divergência(s), ` +
       `${resumo.falhas} erro(s)`,
     context: resumo,
   });
@@ -1870,9 +2018,11 @@ async function confirmarCancelamentoNoProvedor(
  */
 export async function expirarAssinaturasVencidas(
   agora: Date = new Date(),
+  opcoes: { ignorar?: string[] } = {},
 ): Promise<number> {
   const vencidas = await db.subscription.findMany({
     where: {
+      ...(opcoes.ignorar?.length ? { id: { notIn: opcoes.ignorar } } : {}),
       status: { in: ["ACTIVE", "TRIALING", "PAST_DUE"] },
       currentPeriodEnd: { not: null, lte: agora },
       OR: [{ graceUntil: null }, { graceUntil: { lte: agora } }],

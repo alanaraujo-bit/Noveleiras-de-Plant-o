@@ -17,7 +17,7 @@
  * antes de qualquer uma gravar. Um duplo que aceitasse tudo passaria os
  * testes sem provar nada.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { carteiraDe } from "@/lib/access/entitlements";
 
@@ -43,28 +43,41 @@ const tabelas = {
 
 const pausa = () => new Promise<void>((r) => setImmediate(r));
 
+const num = (v: unknown) => (v instanceof Date ? v.getTime() : (v as number));
+
+/**
+ * Operadores combinados valem juntos, como no Prisma:
+ * `{ not: null, lte: agora }` exige as duas coisas.
+ */
 function casaValor(atual: unknown, esperado: unknown): boolean {
   if (esperado === null) return atual == null;
   if (esperado instanceof Date) {
     return atual instanceof Date && atual.getTime() === esperado.getTime();
   }
-  if (esperado && typeof esperado === "object") {
-    const e = esperado as Record<string, unknown>;
-    if ("not" in e) return !casaValor(atual, e.not);
-    if ("in" in e) return (e.in as unknown[]).includes(atual);
-    if ("gt" in e) return typeof atual === "number" && atual > (e.gt as number);
-    if ("lte" in e) {
-      return atual instanceof Date && atual.getTime() <= (e.lte as Date).getTime();
-    }
+  if (esperado && typeof esperado === "object" && !Array.isArray(esperado)) {
+    return Object.entries(esperado as Record<string, unknown>).every(([op, v]) => {
+      switch (op) {
+        case "not": return !casaValor(atual, v);
+        case "in": return (v as unknown[]).includes(atual);
+        case "notIn": return !(v as unknown[]).includes(atual);
+        case "gt": return atual != null && num(atual) > num(v);
+        case "gte": return atual != null && num(atual) >= num(v);
+        case "lt": return atual != null && num(atual) < num(v);
+        case "lte": return atual != null && num(atual) <= num(v);
+        default: throw new Error(`duplo: operador nao suportado ${op}`);
+      }
+    });
   }
   return atual === esperado;
 }
 
 function casa(linha: Linha, where: Linha | undefined): boolean {
   if (!where) return true;
-  return Object.entries(where).every(([campo, valor]) =>
-    casaValor(linha[campo], valor),
-  );
+  return Object.entries(where).every(([campo, valor]) => {
+    if (campo === "OR") return (valor as Linha[]).some((w) => casa(linha, w));
+    if (campo === "AND") return (valor as Linha[]).every((w) => casa(linha, w));
+    return casaValor(linha[campo], valor);
+  });
 }
 
 function aplicar(linha: Linha, data: Linha) {
@@ -108,6 +121,21 @@ function tabela(nome: keyof typeof tabelas) {
         });
       }
       return achadas[0] ?? null;
+    },
+    findMany: async ({
+      where,
+      take,
+      skip,
+      cursor,
+    }: { where?: Linha; take?: number; skip?: number; cursor?: { id: string } } = {}) => {
+      await pausa();
+      const todas = linhas()
+        .filter((l) => casa(l, where))
+        .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+      const inicio = cursor
+        ? todas.findIndex((l) => l.id === cursor.id) + (skip ?? 0)
+        : (skip ?? 0);
+      return todas.slice(inicio, take === undefined ? undefined : inicio + take);
     },
     count: async ({ where }: { where?: Linha } = {}) => {
       await pausa();
@@ -179,7 +207,7 @@ const bancoFalso = {
 
 vi.mock("@/lib/db", () => ({ db: bancoFalso }));
 vi.mock("@/lib/painel/log", () => ({
-  log: { info: () => {}, warn: () => {}, error: () => {} },
+  log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
 }));
 
 // -------------------------------------------------------- provedor falso
@@ -194,13 +222,17 @@ const provedor = {
   faturas: {} as Record<string, FaturaDeAssinatura[]>,
   pagamentos: {} as Record<string, ConsultaPagamento>,
   pagamentosConsultados: [] as string[],
+  falhar: new Set<string>(),
 };
 
 vi.mock("./index", () => ({
   podeUsarMock: () => false,
   provedorDePagamento: () => ({
     nome: "mercadopago",
-    consultarAssinatura: async (id: string) => provedor.preapprovals[id] ?? null,
+    consultarAssinatura: async (id: string) => {
+      if (provedor.falhar.has(id)) throw new Error("Mercado Pago respondeu 500");
+      return provedor.preapprovals[id] ?? null;
+    },
     listarFaturas: async (id: string) => [...(provedor.faturas[id] ?? [])],
     consultarFatura: async (id: string) =>
       Object.values(provedor.faturas).flat().find((f) => f.id === id) ?? null,
@@ -266,8 +298,14 @@ function fatura(
       ? {
           id: pagamentoId,
           status,
-          statusCru: status === "APPROVED" ? "approved" : "rejected",
-          detalheCru: status === "APPROVED" ? "accredited" : "cc_rejected_insufficient_amount",
+          statusCru:
+            status === "APPROVED" ? "approved" : status === "PENDING" ? "in_process" : "rejected",
+          detalheCru:
+            status === "APPROVED"
+              ? "accredited"
+              : status === "PENDING"
+                ? "pending_contingency"
+                : "cc_rejected_insufficient_amount",
         }
       : null,
   };
@@ -340,7 +378,18 @@ function semearGratuita(over: Linha = {}) {
   ];
 }
 
+/** "Agora" padrão: dentro do ciclo 1 da mensal. Os testes de vencimento movem o relógio. */
+const AGORA_PADRAO = new Date("2026-09-11T12:00:00.000Z");
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 beforeEach(() => {
+  // Só o Date: setImmediate continua real, e as passagens concorrentes seguem
+  // se intercalando.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(AGORA_PADRAO);
   tabelas.paymentAttempt = [tentativa()];
   semearGratuita();
   tabelas.payment = [{ ...PAGAMENTO_TITULO }];
@@ -366,6 +415,7 @@ beforeEach(() => {
     },
   };
   provedor.pagamentosConsultados = [];
+  provedor.falhar = new Set();
   antesDeCriarPagamento = null;
 });
 
@@ -1012,5 +1062,294 @@ describe("ASSINATURAS_RECONCILIAR", () => {
       if (original === undefined) delete process.env.ASSINATURAS_RECONCILIAR;
       else process.env.ASSINATURAS_RECONCILIAR = original;
     }
+  });
+});
+
+// ------------------------------------------ vencimento com renovação pendente
+
+/**
+ * A lacuna que estes testes fecham: no vencimento, a cobrança do próximo ciclo
+ * existe mas está PENDENTE. Antes, a expiração do cron transformava a
+ * assinatura em EXPIRED — e, se o pagamento aprovasse depois, nada voltava a
+ * olhá-la. O cliente pagava e ficava sem acesso.
+ *
+ * Aqui tudo passa pelo cron real (`executarCronDeAssinaturas`), na ordem que
+ * produção usa: reconciliar, decidir tolerância, só então expirar.
+ */
+describe("vencimento com renovação pendente", () => {
+  const H = 3_600_000;
+  const DIA = 24 * H;
+  const E = fimDoCiclo(PLANO_MENSAL, D1); // fim do ciclo 1 da mensal
+  const F2pendente = () => fatura("7031821287", "pay-ciclo-2", "PENDING", E);
+  const F2aprovada = () => fatura("7031821287", "pay-ciclo-2", "APPROVED", E);
+  const F2recusada = () => fatura("7031821287", "pay-ciclo-2-rec", "REJECTED", E);
+
+  const chaveOriginal = process.env.ASSINATURAS_RECONCILIAR;
+  beforeEach(() => {
+    process.env.ASSINATURAS_RECONCILIAR = "true";
+  });
+  afterEach(() => {
+    if (chaveOriginal === undefined) delete process.env.ASSINATURAS_RECONCILIAR;
+    else process.env.ASSINATURAS_RECONCILIAR = chaveOriginal;
+  });
+
+  const cron = async (quando: Date, completa = false) => {
+    vi.setSystemTime(quando);
+    const { executarCronDeAssinaturas } = await import("./cron");
+    return executarCronDeAssinaturas({ completa });
+  };
+
+  /** A carteira como a sessão a montaria, no instante dado. */
+  const premiumEm = (quando: Date) => {
+    const direitos = tabelas.entitlement
+      .filter((e) => e.status === "ACTIVE")
+      .map((e) => ({
+        kind: e.kind as "SUBSCRIPTION_MONTHLY",
+        novelaId: (e.novelaId as string | null) ?? null,
+        startsAt: e.startsAt as Date,
+        endsAt: (e.endsAt as Date | null) ?? null,
+      }));
+    return carteiraDe(assinatura() as never, direitos, quando).premium;
+  };
+
+  /** Ciclo 1 ativo e, no vencimento, a fatura do ciclo 2 pendente no provedor. */
+  async function mensalComRenovacaoPendente() {
+    await reconciliar();
+    provedor.faturas[PRE] = [F1(), F2pendente()];
+  }
+
+  it("no vencimento com cobrança PENDING: tolerância, não expiração", async () => {
+    await mensalComRenovacaoPendente();
+
+    const r = await cron(new Date(E.getTime() + 7 * H)); // o cron das 05:00
+
+    expect(r.assinaturas).toBe(0); // nada expirado
+    expect(assinatura()).toMatchObject({
+      status: "PAST_DUE",
+      currentPeriodEnd: E,
+      graceUntil: new Date(E.getTime() + 3 * DIA),
+    });
+    expect(ciclos()).toHaveLength(1);
+    expect(eventos("PAST_DUE")).toHaveLength(1);
+    expect(eventos("PAST_DUE")[0]!.payload).toMatchObject({
+      motivo: "renovacao-pendente",
+      faturaPendente: "7031821287",
+    });
+    expect(r.reconciliacao).toMatchObject({ renovacoesPendentes: 1, falhas: 0 });
+    esperarTituloIntacto();
+  });
+
+  it("a tolerância concede acesso até o fim, e só até o fim", async () => {
+    await mensalComRenovacaoPendente();
+    await cron(new Date(E.getTime() + 7 * H));
+
+    expect(premiumEm(new Date(E.getTime() + 7 * H))).toBe(true);
+    expect(premiumEm(new Date(E.getTime() + 3 * DIA - 60_000))).toBe(true);
+    expect(premiumEm(new Date(E.getTime() + 3 * DIA + 60_000))).toBe(false);
+
+    // E quando a tolerância acaba sem aprovação, o cron encerra.
+    const r = await cron(new Date(E.getTime() + 3 * DIA + H));
+    expect(r.assinaturas).toBe(1);
+    expect(assinatura()).toMatchObject({ status: "EXPIRED", plan: "FREE" });
+    expect(premiumEm(new Date(E.getTime() + 3 * DIA + H))).toBe(false);
+  });
+
+  it("o cron rodando várias vezes durante a pendência não muda nada depois da primeira", async () => {
+    await mensalComRenovacaoPendente();
+
+    await cron(new Date(E.getTime() + 7 * H));
+    const graca = assinatura().graceUntil;
+    await cron(new Date(E.getTime() + 1 * DIA));
+    await cron(new Date(E.getTime() + 2 * DIA));
+    await cron(new Date(E.getTime() + 2 * DIA + 5 * H), true);
+
+    expect(assinatura()).toMatchObject({ status: "PAST_DUE", graceUntil: graca });
+    expect(eventos("PAST_DUE")).toHaveLength(1);
+    expect(ciclos()).toHaveLength(1);
+    expect(tabelas.payment.filter((p) => p.status === "FAILED")).toHaveLength(0);
+  });
+
+  it("pendente → aprovada depois do vencimento: exatamente um ciclo, e tudo normalizado", async () => {
+    await mensalComRenovacaoPendente();
+    await cron(new Date(E.getTime() + 7 * H));
+
+    provedor.faturas[PRE] = [F1(), F2aprovada()];
+    await cron(new Date(E.getTime() + 1 * DIA));
+
+    const fim2 = fimDoCiclo(PLANO_MENSAL, E);
+    expect(ciclos()).toHaveLength(2);
+    expect(ciclos()[1]).toMatchObject({
+      cycleIndex: 2,
+      externalId: "pay-ciclo-2",
+      periodStart: E,
+      periodEnd: fim2,
+    });
+    expect(assinatura()).toMatchObject({
+      status: "ACTIVE",
+      plan: "MONTHLY",
+      currentPeriodEnd: fim2,
+      graceUntil: null,
+      failedCharges: 0,
+    });
+    expect(eventos("RENEWED")).toHaveLength(1);
+    expect(premiumEm(new Date(E.getTime() + 20 * DIA))).toBe(true);
+  });
+
+  it("pendente → recusada: conta uma vez, e o fim continua sendo o da tolerância", async () => {
+    await mensalComRenovacaoPendente();
+    await cron(new Date(E.getTime() + 7 * H));
+
+    provedor.faturas[PRE] = [F1(), F2recusada()];
+    await cron(new Date(E.getTime() + 1 * DIA));
+    await cron(new Date(E.getTime() + 1 * DIA + H));
+    await reconciliar("webhook reentregue");
+
+    expect(assinatura()).toMatchObject({
+      status: "PAST_DUE",
+      failedCharges: 1,
+      graceUntil: new Date(E.getTime() + 3 * DIA),
+    });
+    expect(tabelas.payment.filter((p) => p.status === "FAILED")).toHaveLength(1);
+    expect(eventos("PAYMENT_FAILED")).toHaveLength(1);
+
+    await cron(new Date(E.getTime() + 3 * DIA + H));
+    expect(assinatura().status).toBe("EXPIRED");
+  });
+
+  it("EXPIRED recente é recuperada por aprovação tardia, e o pagamento repetido não duplica", async () => {
+    await mensalComRenovacaoPendente();
+    await cron(new Date(E.getTime() + 7 * H));
+    await cron(new Date(E.getTime() + 3 * DIA + H)); // tolerância acabou: expira
+    expect(assinatura()).toMatchObject({ status: "EXPIRED", plan: "FREE" });
+    expect(direitosDeAssinatura()).toHaveLength(0);
+
+    // A retentativa do provedor aprova dois dias depois do corte.
+    provedor.faturas[PRE] = [F1(), F2aprovada()];
+    provedor.pagamentos["pay-ciclo-2"] = {
+      ...provedor.pagamentos["178365984346"]!,
+      externalId: "pay-ciclo-2",
+      aprovadoEm: E,
+    };
+    const r = await cron(new Date(E.getTime() + 5 * DIA));
+
+    const fim2 = fimDoCiclo(PLANO_MENSAL, E);
+    expect(r.reconciliacao).toMatchObject({ verificadas: 1, ciclosNovos: 1 });
+    expect(assinatura()).toMatchObject({
+      status: "ACTIVE",
+      plan: "MONTHLY",
+      currentPeriodEnd: fim2,
+    });
+    expect(direitosDeAssinatura()).toHaveLength(1);
+    expect(direitosDeAssinatura()[0]!.endsAt).toEqual(fim2);
+
+    // O mesmo pagamento tardio, por todas as portas.
+    await cron(new Date(E.getTime() + 5 * DIA + H));
+    await cron(new Date(E.getTime() + 6 * DIA), true);
+    await reconciliarPagamento("pay-ciclo-2");
+    await reconciliarFatura("7031821287");
+
+    expect(ciclos()).toHaveLength(2);
+    expect(eventos("RENEWED")).toHaveLength(1);
+    expect(assinatura().currentPeriodEnd).toEqual(fim2);
+    esperarTituloIntacto();
+  });
+
+  it("a janela de recuperação tem prazo: expirada há mais de 30 dias não é mais consultada", async () => {
+    await mensalComRenovacaoPendente();
+    await cron(new Date(E.getTime() + 7 * H));
+    await cron(new Date(E.getTime() + 3 * DIA + H));
+
+    provedor.faturas[PRE] = [F1(), F2aprovada()];
+    // Nem a diária nem a completa. `graceUntil` e `failedCharges` ficam
+    // gravados numa expirada, e não podem mantê-la na mira para sempre — a
+    // primeira versão deixava a diária consultá-la indefinidamente por eles.
+    const diaria = await cron(new Date(E.getTime() + 40 * DIA));
+    const completa = await cron(new Date(E.getTime() + 40 * DIA + H), true);
+
+    expect(diaria.reconciliacao).toMatchObject({ verificadas: 0 });
+    expect(completa.reconciliacao).toMatchObject({ verificadas: 0 });
+    expect(ciclos()).toHaveLength(1);
+    expect(assinatura().status).toBe("EXPIRED");
+  });
+
+  it("se a reconciliação falhar, a assinatura não é expirada nessa rodada", async () => {
+    await mensalComRenovacaoPendente();
+    provedor.falhar.add(PRE);
+
+    const r = await cron(new Date(E.getTime() + 7 * H));
+
+    expect(r.reconciliacao).toMatchObject({ falhas: 1 });
+    expect(r.assinaturas).toBe(0);
+    expect(assinatura().status).toBe("ACTIVE");
+
+    // O provedor volta: a próxima execução decide — e decide tolerância.
+    provedor.falhar.clear();
+    await cron(new Date(E.getTime() + 1 * DIA));
+    expect(assinatura()).toMatchObject({ status: "PAST_DUE" });
+  });
+
+  it("cancelada: termina no fim do que pagou, sem tolerância e sem ciclo por cobrança antiga", async () => {
+    await reconciliar();
+    Object.assign(assinatura(), {
+      cancelAtPeriodEnd: true,
+      canceledAt: new Date("2026-09-11T00:20:18.373Z"),
+    });
+    provedor.preapprovals[PRE] = preapproval(PRE, ATT, "cancelled");
+    provedor.faturas[PRE] = [F1()];
+
+    const r = await cron(new Date(E.getTime() + 7 * H));
+
+    expect(r.assinaturas).toBe(1);
+    expect(assinatura()).toMatchObject({
+      status: "EXPIRED",
+      cancelAtPeriodEnd: true,
+      canceledAt: new Date("2026-09-11T00:20:18.373Z"),
+      graceUntil: null,
+    });
+    expect(eventos("PAST_DUE")).toHaveLength(0);
+    expect(ciclos()).toHaveLength(1);
+
+    // A janela de recuperação a consulta, mas cobrança antiga não vira ciclo
+    // e nada a descancela.
+    await cron(new Date(E.getTime() + 2 * DIA), true);
+    expect(ciclos()).toHaveLength(1);
+    expect(assinatura()).toMatchObject({ status: "EXPIRED", cancelAtPeriodEnd: true });
+  });
+
+  it("cancelada localmente com o preapproval ainda autorizado também não ganha tolerância", async () => {
+    await reconciliar();
+    Object.assign(assinatura(), { cancelAtPeriodEnd: true, canceledAt: new Date("2026-09-20T00:00:00Z") });
+    provedor.faturas[PRE] = [F1(), F2pendente()];
+
+    await cron(new Date(E.getTime() + 7 * H));
+
+    expect(assinatura()).toMatchObject({ status: "EXPIRED", cancelAtPeriodEnd: true });
+    expect(eventos("PAST_DUE")).toHaveLength(0);
+  });
+
+  it("anual: pendente no vencimento, aprovada depois, doze meses a mais", async () => {
+    tabelas.paymentAttempt = [tentativa({ plan: "ANNUAL" })];
+    provedor.faturas[PRE] = [fatura("fat-a1", "pay-a1", "APPROVED", D1, { valor: 9990 })];
+    await reconciliar();
+
+    const Ea = fimDoCiclo(PLANO_ANUAL, D1);
+    provedor.faturas[PRE] = [
+      fatura("fat-a1", "pay-a1", "APPROVED", D1, { valor: 9990 }),
+      fatura("fat-a2", "pay-a2", "PENDING", Ea, { valor: 9990 }),
+    ];
+    await cron(new Date(Ea.getTime() + 7 * H));
+    expect(assinatura()).toMatchObject({ status: "PAST_DUE", plan: "ANNUAL" });
+
+    provedor.faturas[PRE] = [
+      fatura("fat-a1", "pay-a1", "APPROVED", D1, { valor: 9990 }),
+      fatura("fat-a2", "pay-a2", "APPROVED", Ea, { valor: 9990 }),
+    ];
+    await cron(new Date(Ea.getTime() + 2 * DIA));
+
+    const fimA2 = fimDoCiclo(PLANO_ANUAL, Ea);
+    expect(fimA2.getUTCFullYear()).toBe(2028);
+    expect(assinatura()).toMatchObject({ status: "ACTIVE", plan: "ANNUAL", currentPeriodEnd: fimA2 });
+    expect(ciclos()).toHaveLength(2);
+    expect(direitosDeAssinatura()[0]).toMatchObject({ kind: "SUBSCRIPTION_ANNUAL", endsAt: fimA2 });
   });
 });
