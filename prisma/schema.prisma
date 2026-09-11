@@ -1156,7 +1156,6 @@ model Payment {
   periodStart   DateTime?
   periodEnd     DateTime?
 
-  // Marca dado de demonstracao: o painel separa receita real de receita fake.
   // Assinatura: qual ciclo esta cobranca pagou. Nulo em compra avulsa, em
   // cobranca recusada e em cobranca de um preapproval que ja nao e o vigente
   // — nenhuma dessas concede ciclo.
@@ -1172,6 +1171,7 @@ model Payment {
   // fatura ja foi paga por uma retentativa posterior.
   invoiceId  String?
 
+  // Marca dado de demonstracao: o painel separa receita real de receita fake.
   // O modo mock da fase comercial grava tudo com isto ligado.
   isDemo    Boolean  @default(false)
   createdAt DateTime @default(now())
@@ -1196,16 +1196,16 @@ model Payment {
   // virar duas linhas de receita. Parcial (nulo permitido) porque os
   // pagamentos da Fase 01 nao tem referencia externa.
   @@unique([provider, externalId])
-  @@index([userId, createdAt])
   // Um ciclo, uma cobranca. A outra metade do principio da renovacao.
   @@unique([subscriptionId, cycleIndex])
+  @@index([userId, createdAt])
   @@index([status, createdAt])
   @@index([createdAt])
   @@index([purchaseId])
   @@index([attemptId])
-}
   @@index([subscriptionId])
   @@index([invoiceId])
+}
 
 // -------------------------------------------------------------- moderacao
 
