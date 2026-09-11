@@ -18,7 +18,7 @@
 import type { SubscriptionPlan, SubscriptionStatus } from "@prisma/client";
 
 /**
- * Quantos episódios de cada novela qualquer conta autenticada vê de graça.
+ * Quantos episódios de cada novela qualquer pessoa vê de graça, mesmo sem conta.
  *
  * Regra oficial do produto. Era 2 na Fase 01; virou 5. O número mora aqui e
  * em lugar nenhum mais — textos de tela leem daqui.
@@ -189,15 +189,15 @@ export function canWatchEpisode(
   entitlement: Entitlement,
   signedIn: boolean,
 ): AccessDecision {
-  if (!signedIn) return { allowed: false, reason: "precisa-conta" };
-
   if (episode.openAccess) return { allowed: true, reason: "aberta" };
 
   // A regra do produto: os N primeiros de qualquer novela, para qualquer
-  // conta. Não depende de plano nem de `accessTier`.
+  // pessoa, incluindo visitantes. Não depende de plano nem de `accessTier`.
   if (episode.episodeIndex <= entitlement.freePreviewEpisodes) {
     return { allowed: true, reason: "gratuito" };
   }
+
+  if (!signedIn) return { allowed: false, reason: "precisa-conta" };
 
   if (entitlement.premium) return { allowed: true, reason: "assinatura" };
 

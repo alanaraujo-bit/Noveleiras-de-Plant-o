@@ -15,6 +15,7 @@ import {
   IconeVolume,
 } from "@/components/ui/icones";
 import { useGestosDoReel } from "@/lib/player/gestos";
+import { foiBloqueioDeAutoplay } from "@/lib/player/estado-reel";
 import {
   renovarFonte,
   useRegistroDeProgresso,
@@ -22,6 +23,7 @@ import {
   type Fonte,
 } from "@/lib/player/reproducao";
 import type { LaminaReel } from "@/lib/repositories/reel";
+import { lerProgressoVisitante } from "@/lib/player/visitante";
 
 /**
  * Uma lâmina do reel: um episódio ocupando a tela inteira.
@@ -46,6 +48,8 @@ import type { LaminaReel } from "@/lib/repositories/reel";
 const ESPERA_PARA_IMERGIR_MS = 4500;
 
 type Props = {
+  visitante?: boolean;
+  aoPedirConta?: () => void;
   lamina: LaminaReel;
   /** Posicao na fila. Vai para o DOM: e por ele que o observador identifica quem entrou em cena. */
   indice: number;
@@ -69,6 +73,8 @@ type Props = {
 };
 
 export function Lamina({
+  visitante = false,
+  aoPedirConta,
   lamina,
   indice,
   ativa,
@@ -87,6 +93,8 @@ export function Lamina({
 }: Props) {
   const { track } = useTelemetry();
   const videoRef = useRef<HTMLVideoElement>(null);
+  const ativaRef = useRef(ativa);
+  ativaRef.current = ativa;
   const [fonte, setFonte] = useState<Fonte | null>(lamina.fonte);
   const [falhou, setFalhou] = useState(false);
   const [tocando, setTocando] = useState(false);
@@ -147,6 +155,7 @@ export function Lamina({
 
   const { enviar, aoAtualizarTempo, marcarInicioDeContagem, pararContagem } =
     useRegistroDeProgresso({
+      visitante,
       videoRef,
       episodeId: lamina.episodio.id,
       duracaoPadraoSec: lamina.episodio.duracaoSec,
@@ -188,16 +197,19 @@ export function Lamina({
       }
     }
 
+    const local = lerProgressoVisitante();
+    const retomarEm = local?.episodeId === lamina.episodio.id && !local.completed
+      ? local.positionSec : lamina.retomarEm;
     if (
       !retomadaAplicadaRef.current &&
-      lamina.retomarEm > 0 &&
+      retomarEm > 0 &&
       Number.isFinite(video.duration) &&
-      lamina.retomarEm < video.duration - 2
+      retomarEm < video.duration - 2
     ) {
       retomadaAplicadaRef.current = true;
-      video.currentTime = lamina.retomarEm;
+      video.currentTime = retomarEm;
     }
-  }, [lamina.retomarEm]);
+  }, [lamina.retomarEm, lamina.episodio.id]);
 
   /** Pede uma fonte nova guardando onde a agulha estava. */
   const trocarFonte = useCallback(() => {
@@ -234,11 +246,16 @@ export function Lamina({
     try {
       await video.play();
       return;
-    } catch {
-      /* tentativa com som barrada */
+    } catch (erro) {
+      // Sair da lamina enquanto play() esta pendente gera AbortError. Isso nao
+      // e bloqueio de autoplay e nunca deve desligar o som das proximas cenas.
+      if (!ativaRef.current || !foiBloqueioDeAutoplay(erro)) {
+        if (ativaRef.current) setTocando(false);
+        return;
+      }
     }
 
-    if (!video.muted) {
+    if (!video.muted && ativaRef.current) {
       video.muted = true;
       aoBarrarSom();
       try {
@@ -619,10 +636,11 @@ export function Lamina({
             </h2>
             <p className="mx-auto mt-2.5 max-w-[20rem] text-[0.9375rem] leading-relaxed text-cream-400">
               {lamina.bloqueio === "precisa-conta"
-                ? "Sua conta guarda o progresso e libera os episódios."
+                ? "Os capítulos gratuitos terminaram. Crie sua conta para guardar seu progresso e conhecer as opções de assinatura ou compra desta novela."
                 : "Assine tudo, ou compre só esta novela e ela é sua para sempre."}
             </p>
             <Link
+              onClick={lamina.bloqueio === "precisa-conta" && aoPedirConta ? (e) => { e.preventDefault(); aoPedirConta(); } : undefined}
               href={
                 lamina.bloqueio === "precisa-conta"
                   ? "/entrar"

@@ -11,32 +11,32 @@ export function MolduraConta({
   subtitulo,
   children,
   rodape,
-  voltarPara = "/bem-vindo",
+  voltarPara = "/plantao",
+  destaque,
 }: {
   titulo: string;
   subtitulo: string;
   children: ReactNode;
   rodape?: ReactNode;
   voltarPara?: string;
+  destaque?: { imagemUrl: string; etiqueta: string; titulo: string };
 }) {
   return (
-    <div
-      className="relative mx-auto flex min-h-[100dvh] max-w-lg flex-col px-6"
-      style={{
-        paddingTop: "calc(var(--safe-t) + 1.25rem)",
-        paddingBottom: "calc(var(--safe-b) + 1.5rem)",
-      }}
-    >
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-x-0 top-0 h-64"
-        style={{
-          background:
-            "radial-gradient(110% 100% at 20% 0%, rgb(196 42 85 / 0.32), transparent 70%)",
-        }}
-      />
+    <div className="relative min-h-[100dvh] overflow-hidden bg-ink-950 lg:grid lg:grid-cols-[minmax(24rem,1.08fr)_minmax(25rem,0.92fr)]">
+      <section className="relative h-[17rem] overflow-hidden lg:h-[100dvh]" aria-label="Sua história continua">
+        <div
+          aria-hidden
+          className="absolute inset-0 scale-[1.03] bg-cover bg-center"
+          style={{ backgroundImage: `url(${destaque?.imagemUrl ?? "/api/arte/hero/herdeira-do-silencio"})` }}
+        />
+        <div aria-hidden className="absolute inset-0 bg-[linear-gradient(to_bottom,rgb(19_8_16/0.08),rgb(19_8_16/0.42)_62%,#130810)] lg:bg-[linear-gradient(90deg,rgb(19_8_16/0.08),rgb(19_8_16/0.2)_55%,#130810)]" />
+      </section>
 
-      <div className="relative flex items-center gap-2">
+      <main
+        className="relative z-10 -mt-9 flex min-h-[calc(100dvh-14.75rem)] flex-col rounded-t-[2rem] bg-ink-950 px-6 lg:mt-0 lg:min-h-[100dvh] lg:justify-center lg:rounded-none lg:px-10 xl:px-16"
+        style={{ paddingBottom: "calc(var(--safe-b) + 1.5rem)" }}
+      >
+      <div className="flex items-center gap-2 pt-5 lg:absolute lg:left-10 lg:top-5 xl:left-16">
         <Link
           href={voltarPara}
           aria-label="Voltar"
@@ -47,21 +47,30 @@ export function MolduraConta({
         <span className="text-rose-500">
           <IconeMarca tamanho={24} />
         </span>
-        <span className="font-display text-[0.875rem] font-semibold text-cream-200">
+        <span className="font-display text-[0.875rem] font-semibold leading-tight text-cream-200">
           Noveleiras de Plantão
         </span>
       </div>
 
-      <header className="relative mt-9">
-        <h1 className="text-[2rem] leading-[1.08] text-balance-pt">{titulo}</h1>
-        <p className="mt-2.5 text-[0.9375rem] leading-relaxed text-cream-400">
+      <div className="mx-auto w-full max-w-[27rem]">
+      <header className="mt-7 lg:mt-0">
+        <h1 className="text-[2.25rem] leading-[1.04] text-balance-pt">{titulo}</h1>
+        <p className="mt-3 text-[0.9375rem] leading-relaxed text-cream-200">
           {subtitulo}
         </p>
+        {destaque ? (
+          <p className="mt-4 border-l-2 border-gold-400/70 pl-3 text-[0.8125rem] leading-relaxed text-cream-400">
+            <span className="font-semibold text-gold-300">{destaque.etiqueta}:</span>{" "}
+            {destaque.titulo}
+          </p>
+        ) : null}
       </header>
 
-      <div className="relative mt-7 flex-1">{children}</div>
+      <div className="mt-6">{children}</div>
 
-      {rodape ? <div className="relative mt-6">{rodape}</div> : null}
+      {rodape ? <div className="mt-6">{rodape}</div> : null}
+      </div>
+      </main>
     </div>
   );
 }
@@ -151,6 +160,49 @@ export function BotaoEnviar({
       ) : (
         children
       )}
+    </button>
+  );
+}
+
+function IconeGoogle() {
+  return (
+    <svg aria-hidden viewBox="0 0 24 24" className="size-5">
+      <path fill="#4285F4" d="M21.6 12.2c0-.7-.1-1.4-.2-2H12v3.9h5.4a4.6 4.6 0 0 1-2 3v2.6h3.3c1.9-1.8 2.9-4.4 2.9-7.5Z" />
+      <path fill="#34A853" d="M12 22c2.7 0 5-.9 6.7-2.3l-3.3-2.6c-.9.6-2.1 1-3.4 1-2.6 0-4.8-1.8-5.6-4.2H3v2.7A10 10 0 0 0 12 22Z" />
+      <path fill="#FBBC05" d="M6.4 13.9A6 6 0 0 1 6.1 12c0-.7.1-1.3.3-1.9V7.4H3A10 10 0 0 0 2 12c0 1.7.4 3.2 1 4.6l3.4-2.7Z" />
+      <path fill="#EA4335" d="M12 5.9c1.5 0 2.8.5 3.8 1.5l2.9-2.8A9.7 9.7 0 0 0 12 2a10 10 0 0 0-9 5.4l3.4 2.7C7.2 7.7 9.4 5.9 12 5.9Z" />
+    </svg>
+  );
+}
+
+export function BotaoGoogle({
+  href,
+  children,
+}: {
+  href?: string;
+  children: ReactNode;
+}) {
+  const conteudo = (
+    <>
+      <IconeGoogle />
+      {children}
+    </>
+  );
+
+  return href ? (
+    <Link
+      href={href}
+      className="tap flex h-13 w-full items-center justify-center gap-3 rounded-2xl bg-cream-50 px-4 text-[0.9375rem] font-bold text-ink-950 shadow-[0_0.75rem_1.75rem_-0.85rem_rgb(0_0_0/0.75)] hover:bg-white"
+    >
+      {conteudo}
+    </Link>
+  ) : (
+    <button
+      type="button"
+      disabled
+      className="flex h-13 w-full items-center justify-center gap-3 rounded-2xl border border-white/12 bg-white/6 px-4 text-[0.9375rem] font-bold text-cream-400 opacity-75"
+    >
+      {conteudo}
     </button>
   );
 }

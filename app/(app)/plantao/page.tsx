@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { redirect } from "next/navigation";
+import { cookies } from "next/headers";
 
 import { Reel } from "@/components/reel/Reel";
 import { getViewer } from "@/lib/auth/session";
 import { continuacaoDaNovela, filaInicial } from "@/lib/repositories/reel";
 import { track } from "@/lib/analytics/track";
 import { db } from "@/lib/db";
+import { ANONYMOUS_ENTITLEMENT } from "@/lib/access/entitlements";
 
 export const metadata: Metadata = {
   title: "Plantão",
@@ -30,11 +31,13 @@ type PlantaoProps = {
 
 export default async function PlantaoPage({ searchParams }: PlantaoProps) {
   const viewer = await getViewer();
-  if (!viewer) redirect("/bem-vindo");
 
   const episodioParam = (await searchParams).episodio;
+  const jar = await cookies();
   const episodioId =
-    typeof episodioParam === "string" ? episodioParam : undefined;
+    typeof episodioParam === "string" ? episodioParam : !viewer
+      ? jar.get("nvl_visitante_episodio")?.value.slice(0, 200)
+      : undefined;
   const episodio = episodioId
     ? await db.episode.findUnique({
         where: { id: episodioId },
@@ -47,21 +50,21 @@ export default async function PlantaoPage({ searchParams }: PlantaoProps) {
         laminas: await continuacaoDaNovela({
           novelaId: episodio.novelaId,
           apartirDoEpisodioId: episodio.id,
-          incluirAtual: true,
-          viewerId: viewer.id,
-          entitlement: viewer.entitlement,
+          incluirAtual: typeof episodioParam === "string" || Boolean(viewer) || jar.get("nvl_visitante_concluido")?.value !== "1",
+          viewerId: viewer?.id ?? null,
+          entitlement: viewer?.entitlement ?? ANONYMOUS_ENTITLEMENT,
         }),
         retomando: false,
       }
     : await filaInicial({
-        viewerId: viewer.id,
-        entitlement: viewer.entitlement,
+        viewerId: viewer?.id ?? null,
+        entitlement: viewer?.entitlement ?? ANONYMOUS_ENTITLEMENT,
       });
 
   await track({
     type: "REEL_OPEN",
-    userId: viewer.id,
-    sessionId: viewer.appSessionId,
+    userId: viewer?.id ?? null,
+    sessionId: viewer?.appSessionId ?? null,
     payload: {
       laminas: fila.laminas.length,
       retomando: fila.retomando,
@@ -69,17 +72,25 @@ export default async function PlantaoPage({ searchParams }: PlantaoProps) {
     },
   });
 
+  if (fila.laminas.length === 0 && episodio) {
+    fila.laminas = (await filaInicial({ viewerId: viewer?.id ?? null, entitlement: viewer?.entitlement ?? ANONYMOUS_ENTITLEMENT })).laminas;
+  }
   if (fila.laminas.length === 0) return <CatalogoVazio />;
 
   return (
     <Reel
+      key={`${viewer?.id ?? "visitante"}:${fila.laminas[0].episodio.id}`}
       laminasIniciais={fila.laminas}
-      economiaDeDados={viewer.preferences.dataSaver}
-      viewer={{
-        nome: viewer.name,
-        avatarSeed: viewer.avatarSeed,
-        avatarUrl: viewer.avatarUrl,
-      }}
+      economiaDeDados={viewer?.preferences.dataSaver ?? false}
+      viewer={
+        viewer
+          ? {
+              nome: viewer.name,
+              avatarSeed: viewer.avatarSeed,
+              avatarUrl: viewer.avatarUrl,
+            }
+          : null
+      }
     />
   );
 }

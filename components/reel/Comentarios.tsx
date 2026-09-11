@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { PEDIR_CONTA } from "./ConviteConta";
 import { useCallback, useEffect, useOptimistic, useRef, useState } from "react";
 import { AnimatePresence, motion, useDragControls } from "motion/react";
 
@@ -581,6 +582,11 @@ export function Comentarios({
           >
             <Link
               href="/entrar"
+              onClick={(e) => {
+                e.preventDefault();
+                aoFechar();
+                window.dispatchEvent(new CustomEvent(PEDIR_CONTA, { detail: "conversa" }));
+              }}
               className="tap flex h-11 items-center justify-center rounded-full bg-cream-50 text-[0.875rem] font-bold text-ink-950"
             >
               Entrar para comentar

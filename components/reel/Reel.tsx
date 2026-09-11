@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 
 import { Comentarios } from "@/components/reel/Comentarios";
+import { ConviteConta, PEDIR_CONTA } from "@/components/reel/ConviteConta";
 import { FolhaEnviar } from "@/components/reel/FolhaEnviar";
 import { Lamina } from "@/components/reel/Lamina";
 import { useTelemetry } from "@/components/sistema/TelemetryProvider";
@@ -17,6 +18,7 @@ import {
   registrarDescarte,
   registrarPermanencia,
 } from "@/lib/actions/reel";
+import { pontoDeExtensao } from "@/lib/player/estado-reel";
 import { ouvirAbaReativada } from "@/lib/shell/aba-reativada";
 import type { LaminaReel } from "@/lib/repositories/reel";
 
@@ -61,7 +63,7 @@ export function Reel({
 }: {
   laminasIniciais: LaminaReel[];
   economiaDeDados: boolean;
-  /** Quem está assistindo. Nulo só existiria numa fila pública, que ainda não há. */
+  /** Nulo enquanto a visitante explora os capítulos gratuitos. */
   viewer: { nome: string; avatarSeed: string; avatarUrl: string | null } | null;
 }) {
   const temConta = viewer !== null;
@@ -73,6 +75,7 @@ export function Reel({
   const [somLigado, setSomLigado] = useState(true);
   const [contabilizavel, setContabilizavel] = useState(false);
   const [folha, setFolha] = useState<Folha>(null);
+  const [conviteAberto, setConviteAberto] = useState(false);
 
   const trilhoRef = useRef<HTMLDivElement>(null);
   const laminasRef = useRef(laminas);
@@ -156,20 +159,32 @@ export function Reel({
    */
   const emendarAbaixo = useCallback(
     async (lamina: LaminaReel) => {
-      if (emendandoRef.current.has(lamina.episodio.id)) return;
-      emendandoRef.current.add(lamina.episodio.id);
+      const filaAoPedir = laminasRef.current;
+      const indiceAtual = filaAoPedir.findIndex(
+        (item) => item.episodio.id === lamina.episodio.id,
+      );
+      const ponto = pontoDeExtensao(filaAoPedir, indiceAtual);
+      if (!ponto || emendandoRef.current.has(ponto.ancora.episodio.id)) return;
+      emendandoRef.current.add(ponto.ancora.episodio.id);
 
       const resultado = await emendarSerie({
         novelaId: lamina.novela.id,
-        depoisDoEpisodioId: lamina.episodio.id,
-        jaNaFila: laminasRef.current.map((l) => l.episodio.id),
+        depoisDoEpisodioId: ponto.ancora.episodio.id,
+        jaNaFila: filaAoPedir.map((l) => l.episodio.id),
       }).catch(() => null);
 
-      if (!resultado || resultado.laminas.length === 0) return;
+      // Falha de rede nao pode transformar o fim deste lote no fim da novela.
+      // Libera a ancora para a proxima lamina tentar novamente. Resultado
+      // vazio, por outro lado, e o fim real da obra e permanece memorizado.
+      if (!resultado) {
+        emendandoRef.current.delete(ponto.ancora.episodio.id);
+        return;
+      }
+      if (resultado.laminas.length === 0) return;
 
       setLaminas((atual) => {
         const posicao = atual.findIndex(
-          (l) => l.episodio.id === lamina.episodio.id,
+          (l) => l.episodio.id === ponto.ancora.episodio.id,
         );
         if (posicao < 0) return atual;
         const conhecidos = new Set(atual.map((l) => l.episodio.id));
@@ -202,6 +217,11 @@ export function Reel({
     const laminasAgora = laminasRef.current;
     const lamina = laminasAgora.find((l) => l.episodio.id === idEmCena);
     if (!lamina) return;
+
+    // Uma serie ja escolhida antecipa o proximo lote assim que entra em cena.
+    // Isso garante tanto a sequencia de assinantes quanto a lamina de bloqueio
+    // logo depois do quinto episodio gratuito, mesmo com swipes rapidos.
+    if (lamina.origem === "serie") void emendarAbaixo(lamina);
 
     const anterior = entradaRef.current;
 
@@ -279,7 +299,7 @@ export function Reel({
   const curtir = useCallback(
     (laminaId: string) => {
       if (!temConta) {
-        toast.show("Entre para curtir episódios.", "neutro");
+        window.dispatchEvent(new CustomEvent(PEDIR_CONTA, { detail: "curtir" }));
         return;
       }
 
@@ -457,7 +477,9 @@ export function Reel({
               // Amarrar `ativa` à folha pausava o episódio no instante em que a
               // pessoa ia falar sobre ele — e um reel que congela ao ser
               // comentado deixa de ser um reel.
-              ativa={indice === ativo}
+              ativa={indice === ativo && !conviteAberto}
+              visitante={!temConta}
+              aoPedirConta={() => window.dispatchEvent(new CustomEvent(PEDIR_CONTA, { detail: "limite" }))}
               // O cromo some enquanto o painel está de pé: a faixa de vídeo que
               // sobra é estreita, e a coluna de ações competiria com ela.
               recuada={folha !== null}
@@ -481,6 +503,13 @@ export function Reel({
             />
         ))}
       </div>
+
+      {!temConta && laminas[ativo] && <ConviteConta
+        episodioId={laminas[ativo].episodio.id}
+        titulo={laminas[ativo].novela.titulo}
+        suspenso={folha !== null}
+        aoAbrir={setConviteAberto}
+      />}
 
       {/* Indicador da recarga. Uma pílula que desce do topo, some sozinha e
           nunca cobre a cena — o oposto de uma tela de carregamento. */}

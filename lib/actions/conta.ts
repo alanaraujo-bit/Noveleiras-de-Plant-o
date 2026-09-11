@@ -2,7 +2,6 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { headers } from "next/headers";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
@@ -13,7 +12,7 @@ import {
   issueSessionCookie,
 } from "@/lib/auth/session";
 import { track } from "@/lib/analytics/track";
-import { lerDispositivo } from "@/lib/analytics/dispositivo";
+import { abrirSessaoDoApp } from "@/lib/auth/app-session";
 import { destinoSeguro, ROTA_INICIAL } from "@/lib/auth/destino";
 
 export type FormState = { erro?: string; campo?: string } | null;
@@ -29,29 +28,6 @@ const senhaSchema = z
   .string()
   .min(8, "A senha precisa de pelo menos 8 caracteres.")
   .max(120);
-
-async function openAppSession(userId: string) {
-  const headerList = await headers();
-  const userAgent = headerList.get("user-agent") ?? undefined;
-  // Sistema e navegador saem do User-Agent aqui mesmo: o cliente refina isso
-  // logo depois (tela, fuso, se está instalado), mas se ele nunca chegar a
-  // rodar, a sessão continua sabendo de onde veio em vez de virar um buraco
-  // na análise de dispositivos.
-  const dispositivo = lerDispositivo(userAgent);
-  const session = await db.appSession.create({
-    data: {
-      userId,
-      deviceId: "pendente",
-      osName: dispositivo.osName,
-      browser: dispositivo.browser,
-      platform: dispositivo.platform,
-      userAgent: userAgent?.slice(0, 400),
-      referrer: headerList.get("referer")?.slice(0, 300) ?? null,
-    },
-    select: { id: true },
-  });
-  return session.id;
-}
 
 const cadastroSchema = z.object({
   nome: z
@@ -108,17 +84,18 @@ export async function criarConta(
       handle,
       passwordHash: await hashPassword(senha),
       avatarSeed: String((handle.length % 9) + 1),
+      onboardedAt: new Date(),
       preference: { create: {} },
       subscription: { create: { plan: "FREE", status: "ACTIVE" } },
     },
     select: { id: true },
   });
 
-  const sessionId = await openAppSession(user.id);
+  const sessionId = await abrirSessaoDoApp(user.id);
   await issueSessionCookie(user.id, sessionId);
   await track({ type: "SIGN_UP", userId: user.id, sessionId });
 
-  redirect("/bem-vindo");
+  redirect(destinoSeguro(formData.get("destino")) ?? ROTA_INICIAL);
 }
 
 const entrarSchema = z.object({
@@ -150,7 +127,7 @@ export async function entrar(
   if (!user || user.status !== "ACTIVE") return generic;
   if (!(await verifyPassword(senha, user.passwordHash))) return generic;
 
-  const sessionId = await openAppSession(user.id);
+  const sessionId = await abrirSessaoDoApp(user.id);
   await issueSessionCookie(user.id, sessionId);
   await db.user.update({
     where: { id: user.id },
@@ -159,7 +136,7 @@ export async function entrar(
   await track({ type: "SIGN_IN", userId: user.id, sessionId });
 
   const destino = destinoSeguro(formData.get("destino"));
-  redirect(destino ?? (user.onboardedAt ? ROTA_INICIAL : "/bem-vindo"));
+  redirect(destino ?? ROTA_INICIAL);
 }
 
 export async function sair() {

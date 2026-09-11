@@ -285,7 +285,6 @@ export async function carregarMaisLaminas(novelasNaFila: string[]) {
  */
 export async function recarregarFila() {
   const viewer = await getViewer();
-  if (!viewer) return FALHA_SEM_CONTA;
 
   // A semente do relógio é o que faz uma recarga trazer outra ordem. Ela
   // varia por minuto, não por milissegundo: dois toques seguidos por engano
@@ -293,15 +292,15 @@ export async function recarregarFila() {
   const semente = Math.floor(Date.now() / 60_000);
 
   const { laminas, retomando } = await filaInicial({
-    viewerId: viewer.id,
-    entitlement: viewer.entitlement,
+    viewerId: viewer?.id ?? null,
+    entitlement: viewer?.entitlement ?? ANONYMOUS_ENTITLEMENT,
     semente,
   });
 
   await track({
     type: "REEL_OPEN",
-    userId: viewer.id,
-    sessionId: viewer.appSessionId,
+    userId: viewer?.id ?? null,
+    sessionId: viewer?.appSessionId ?? null,
     payload: { laminas: laminas.length, retomando, origem: "recarga", semente },
   });
 

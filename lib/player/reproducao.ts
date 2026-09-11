@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
+import { limparProgressoVisitante, salvarProgressoVisitante } from "./visitante";
 
 /**
  * Núcleo de reprodução compartilhado entre o player de tela cheia
@@ -122,6 +123,7 @@ export function useRegistroDeProgresso({
   sessionId,
   deveGravar,
   ativo = true,
+  visitante = false,
 }: {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   episodeId: string;
@@ -129,6 +131,7 @@ export function useRegistroDeProgresso({
   sessionId: () => string | null;
   deveGravar: () => boolean;
   ativo?: boolean;
+  visitante?: boolean;
 }) {
   const assistidoMsRef = useRef(0);
   const ultimoTiqueRef = useRef(0);
@@ -137,8 +140,8 @@ export function useRegistroDeProgresso({
   // O envio roda dentro de limpeza de efeito e de ouvintes de janela. Guardar
   // as dependências num ref mantém a função estável — do contrário cada quadro
   // de vídeo remontaria os ouvintes de `pagehide`.
-  const contextoRef = useRef({ episodeId, duracaoPadraoSec, sessionId, deveGravar });
-  contextoRef.current = { episodeId, duracaoPadraoSec, sessionId, deveGravar };
+  const contextoRef = useRef({ episodeId, duracaoPadraoSec, sessionId, deveGravar, visitante });
+  contextoRef.current = { episodeId, duracaoPadraoSec, sessionId, deveGravar, visitante };
 
   const enviar = useCallback(
     (opcoes: OpcoesDeEnvio = {}) => {
@@ -167,6 +170,16 @@ export function useRegistroDeProgresso({
       assistidoMsRef.current = 0;
       salvoAteRef.current = posicao;
 
+      if (ctx.visitante) {
+        if (deltaMs > 0 || opcoes.completo) salvarProgressoVisitante({
+          episodeId: ctx.episodeId,
+          positionSec: posicao,
+          completed: Boolean(opcoes.completo),
+          atualizadoEm: Date.now(),
+        }, deltaMs);
+        return;
+      }
+
       const corpo = JSON.stringify({
         episodeId: ctx.episodeId,
         positionSec: posicao,
@@ -189,7 +202,7 @@ export function useRegistroDeProgresso({
         headers: { "Content-Type": "application/json" },
         body: corpo,
         keepalive: true,
-      }).catch(() => {});
+      }).then((r) => { if (r.ok) limparProgressoVisitante(ctx.episodeId); }).catch(() => {});
     },
     [videoRef],
   );

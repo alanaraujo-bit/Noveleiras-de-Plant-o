@@ -163,11 +163,19 @@ describe("canWatchEpisode: a regra dos episódios gratuitos", () => {
     );
   });
 
-  it("visitante sem conta não assiste nem o primeiro", () => {
+  it("visitante assiste o primeiro capítulo sem criar conta", () => {
     expect(canWatchEpisode(episodio(1), ANONYMOUS_ENTITLEMENT, false)).toEqual({
-      allowed: false,
-      reason: "precisa-conta",
+      allowed: true,
+      reason: "gratuito",
     });
+  });
+
+  it("visitante vê todos os gratuitos, mas precisa de conta no primeiro pago", () => {
+    expect(canWatchEpisode(episodio(EPISODIOS_GRATUITOS), ANONYMOUS_ENTITLEMENT, false).allowed).toBe(true);
+    expect(canWatchEpisode(episodio(EPISODIOS_GRATUITOS + 1), ANONYMOUS_ENTITLEMENT, false))
+      .toEqual({ allowed: false, reason: "precisa-conta" });
+    expect(canWatchEpisode({ ...episodio(500), openAccess: true }, ANONYMOUS_ENTITLEMENT, false))
+      .toEqual({ allowed: true, reason: "aberta" });
   });
 
   it("obra aberta de propósito libera tudo", () => {

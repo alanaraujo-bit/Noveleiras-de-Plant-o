@@ -195,9 +195,9 @@ function montarLamina({
       thumbKey: episodio.thumbKey,
       durationSec: episodio.durationSec,
     });
-    const assinada = viewerId
-      ? assinarUrl(bruta.url, episodio.mediaKey, viewerId, segredoDeMidia())
-      : { url: bruta.url, expiraEm: null };
+    const assinada = assinarUrl(
+      bruta.url, episodio.mediaKey, viewerId ?? "anonimo", segredoDeMidia(),
+    );
     fonte = {
       kind: bruta.kind,
       url: assinada.url,
@@ -661,21 +661,23 @@ export async function filaInicial({
   const episodiosUsados = new Set<string>();
 
   if (viewerId) {
-    const pendentes = await db.watchProgress.findMany({
-      where: { userId: viewerId, completed: false },
+    const retomadas = await db.watchProgress.findMany({
+      where: { userId: viewerId },
       orderBy: { updatedAt: "desc" },
       // Uma linha por novela: a mais recente. `distinct` do Prisma respeita a
       // ordenação, então isto devolve o ponto real de parada de cada obra.
       distinct: ["novelaId"],
       take: NOVELAS_EM_ANDAMENTO,
-      select: { episodeId: true, novelaId: true },
+      select: { episodeId: true, novelaId: true, completed: true },
     });
 
-    for (const pendente of pendentes) {
+    for (const retomada of retomadas) {
       const bloco = await continuacaoDaNovela({
-        novelaId: pendente.novelaId,
-        apartirDoEpisodioId: pendente.episodeId,
-        incluirAtual: true,
+        novelaId: retomada.novelaId,
+        apartirDoEpisodioId: retomada.episodeId,
+        // Se o Ãºltimo capÃ­tulo terminou, a retomada Ã© o prÃ³ximo. Caso
+        // contrÃ¡rio, volta ao ponto salvo dentro do episÃ³dio atual.
+        incluirAtual: !retomada.completed,
         viewerId,
         entitlement,
         excluir: episodiosUsados,
@@ -684,7 +686,7 @@ export async function filaInicial({
         laminas.push(lamina);
         episodiosUsados.add(lamina.episodio.id);
       }
-      novelasUsadas.add(pendente.novelaId);
+      novelasUsadas.add(retomada.novelaId);
     }
   }
 

@@ -34,6 +34,7 @@ model User {
   handle       String     @unique
   avatarSeed   String     @default("1")
   avatarKey    String?
+  googleSubject String?   @unique
   role         Role       @default(USER)
   status       UserStatus @default(ACTIVE)
 
