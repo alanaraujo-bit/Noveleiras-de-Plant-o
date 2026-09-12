@@ -266,9 +266,13 @@ export function PainelNovela({
                 <p className="text-[0.8125rem] font-semibold leading-snug text-cream-50">
                   {pessoa.name}
                 </p>
-                <p className="mt-0.5 text-[0.75rem] leading-snug text-cream-600">
-                  {pessoa.role}
-                </p>
+                {/* Sem papel, sem linha: a origem do catálogo importado dá o
+                    nome de quem atua, não o personagem. */}
+                {pessoa.role ? (
+                  <p className="mt-0.5 text-[0.75rem] leading-snug text-cream-600">
+                    {pessoa.role}
+                  </p>
+                ) : null}
               </div>
             ))}
             <span className="w-1 shrink-0" aria-hidden />

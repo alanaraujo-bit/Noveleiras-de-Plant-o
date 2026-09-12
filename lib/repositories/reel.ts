@@ -12,6 +12,10 @@ import {
   pontuar,
   type Pontuacao,
 } from "@/lib/repositories/afinidade";
+import {
+  tendenciaDoCatalogo,
+  valorDaTendencia,
+} from "@/lib/repositories/tendencia";
 import type { Fonte } from "@/lib/player/reproducao";
 
 /**
@@ -545,8 +549,11 @@ export async function ganchosDeDescoberta({
   /** Muda a cada recarga para variar a ordem dentro das faixas de pontuação. */
   semente?: number;
 }): Promise<LaminaReel[]> {
-  const perfil = viewerId ? await perfilDeGosto(viewerId) : null;
-  const corpus = await corpusDoCatalogo();
+  const [perfil, corpus, tendencia] = await Promise.all([
+    viewerId ? perfilDeGosto(viewerId) : null,
+    corpusDoCatalogo(),
+    tendenciaDoCatalogo(),
+  ]);
 
   const fora = new Set(excluirNovelas);
   // O que já foi engajado não volta como descoberta: aquilo já é série, e
@@ -563,10 +570,12 @@ export async function ganchosDeDescoberta({
       episodes: { some: {} },
     },
     orderBy: [{ isFeatured: "desc" }, { viewCount: "desc" }, { releasedAt: "desc" }],
-    // A pontuação acontece em memória, então é preciso um conjunto bem maior
-    // que a fila para o perfil ter de onde escolher. Sem folga, ordenar o que
-    // o banco já ordenou por popularidade só devolveria popularidade.
-    take: Math.max(60, quantidade * 8),
+    // Sem `take`: a pontuação acontece em memória, então o perfil precisa do
+    // catálogo inteiro para escolher. Qualquer corte seria pelos mais vistos
+    // de sempre, e esconderia justamente o que está em alta agora e ainda não
+    // acumulou visualização. Medido: ler o catálogo todo custa o mesmo que
+    // ler 64 (a ida ao banco domina). Se o catálogo chegar a milhares, o
+    // caminho é pré-filtrar pelo que a tendência e o perfil já apontam.
     select: {
       ...NOVELA_SELECT,
       isFeatured: true,
@@ -582,9 +591,12 @@ export async function ganchosDeDescoberta({
     novela,
     pontuacao: perfil
       ? pontuar(novela.id, perfil, corpus, {
-          popularidade: novela.viewCount,
+          popularidade: valorDaTendencia(tendencia, novela.id),
         })
-      : { valor: Math.log1p(novela.viewCount), motivo: "popular" as const },
+      : {
+          valor: valorDaTendencia(tendencia, novela.id),
+          motivo: "popular" as const,
+        },
   }));
 
   const ordenadas = escolherComExploracao({

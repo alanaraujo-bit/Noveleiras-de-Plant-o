@@ -214,7 +214,12 @@ describe("lerBiblioteca", () => {
         source: "tiktok",
         description: "Adeline luta para pagar as contas da mãe.",
         poster: "poster.jpg",
-        themes: [{ key: "tag_Contractlovers", value: "Contract Lovers" }],
+        themes: [
+          { key: "tag_Contractlovers", value: "Contract Lovers", group: 1022 },
+          // Manifesto antigo, sem `group`: o leitor entrega grupo vazio em vez
+          // de adivinhar, e quem classifica decide o que fazer com isso.
+          { key: "tag_Marriedlife", value: "Married Life" },
+        ],
         episodes: {
           1: {
             file: "A Cura Mortal - E01.mp4",
@@ -234,7 +239,8 @@ describe("lerBiblioteca", () => {
     expect(novela.sinopse).toBe("Adeline luta para pagar as contas da mãe.");
     expect(novela.fonte).toBe("tiktok");
     expect(novela.temas).toEqual([
-      { chave: "tag_Contractlovers", valor: "Contract Lovers" },
+      { chave: "tag_Contractlovers", valor: "Contract Lovers", grupo: "1022" },
+      { chave: "tag_Marriedlife", valor: "Married Life", grupo: "" },
     ]);
     // A chave é relativa à raiz — a mesma linguagem dos vídeos.
     expect(novela.capaChave).toBe("A Cura Mortal/poster.jpg");

@@ -14,6 +14,7 @@ import {
 } from "@/lib/access/entitlements";
 import type { Viewer } from "@/lib/auth/session";
 import { normalizeText } from "@/lib/text";
+import { tendenciaDoCatalogo } from "@/lib/repositories/tendencia";
 import type { AccessTier, NovelaStatus, Prisma } from "@prisma/client";
 
 /**
@@ -199,7 +200,15 @@ export type GenreSummary = {
   name: string;
   tagline: string;
   accent: string;
-  artUrl: string;
+  /**
+   * Arte do gênero.
+   *
+   * Apontava para `/api/arte/genero/<slug>`, endereço que nunca existiu — a
+   * rota de arte só desenha capa, hero e cena. Nenhuma tela chegou a usar,
+   * então em vez de desenhar arte que ninguém pediu o campo diz a verdade:
+   * não há arte de gênero. A cor (`accent`) é o que identifica cada um.
+   */
+  artUrl: null;
   novelaCount: number;
 };
 
@@ -309,7 +318,7 @@ export async function listGenres(): Promise<GenreSummary[]> {
     name: row.name,
     tagline: row.tagline,
     accent: row.accent,
-    artUrl: `/api/arte/genero/${row.slug}`,
+    artUrl: null,
     novelaCount: row._count.novelas,
   }));
 }
@@ -374,7 +383,7 @@ export async function listGenresWithHighlights(): Promise<GenreWithHighlights[]>
       name: row.name,
       tagline: row.tagline,
       accent: row.accent,
-      artUrl: `/api/arte/genero/${row.slug}`,
+      artUrl: null,
       novelaCount: linked.length ? row._count.novelas : inferred.length,
       highlights: references.slice(0, 3).map((novela) => ({
         id: novela.id,
@@ -388,7 +397,10 @@ export async function listGenresWithHighlights(): Promise<GenreWithHighlights[]>
 // ------------------------------------------------------------------ vitrine
 
 export type NovelaVitrine = NovelaCard & {
-  viewCount: number;
+  /** Pontuação de "em alta" (`lib/repositories/tendencia`). */
+  tendencia: number;
+  /** Teve tempo assistido de verdade nos últimos dias. */
+  assistidaAgora: boolean;
   releasedAt: string;
   /** Slugs dos temas: vínculo editorial quando existe, senão lido da sinopse. */
   temas: string[];
@@ -418,31 +430,46 @@ export async function getVitrine(): Promise<{
   novelas: NovelaVitrine[];
   temas: TemaVitrine[];
 }> {
-  const [rows, genres] = await Promise.all([
+  const [rows, genres, tendencia] = await Promise.all([
     db.novela.findMany({
       where: { ...PUBLISHED, episodes: { some: {} } },
-      orderBy: [{ viewCount: "desc" }, { rating: "desc" }, { releasedAt: "desc" }],
-      select: { ...CARD_SELECT, viewCount: true },
+      select: CARD_SELECT,
     }),
     db.genre.findMany({
       orderBy: { sort: "asc" },
       select: { slug: true, name: true, tagline: true, accent: true },
     }),
+    tendenciaDoCatalogo(),
   ]);
 
-  const novelas = rows.map((row) => {
-    const vinculados = row.genres.map((link) => link.genre.slug);
-    return {
-      ...toCard(row),
-      viewCount: row.viewCount,
-      releasedAt: row.releasedAt.toISOString(),
-      temas: vinculados.length
-        ? vinculados
-        : genres
-            .map((genre) => genre.slug)
-            .filter((slug) => belongsToGenre(row, slug)),
-    };
-  });
+  // A ordem editorial dos gêneros decide qual deles representa a novela no
+  // cartão. O banco devolve os vínculos sem ordem nenhuma, e uma obra de
+  // vampiro apresentada como "Inimigos para Amantes" só porque aquele vínculo
+  // veio primeiro descreve a história pior do que não descrever.
+  const ordemDoGenero = new Map(genres.map((genre, i) => [genre.slug, i]));
+  const porOrdemEditorial = (a: string, b: string) =>
+    (ordemDoGenero.get(a) ?? 99) - (ordemDoGenero.get(b) ?? 99);
+
+  // A ordem base da vitrine é "em alta": o que está sendo assistido agora,
+  // não o que acumulou mais visualizações desde sempre.
+  const novelas = rows
+    .map((row) => {
+      const vinculados = row.genres.map((link) => link.genre.slug);
+      const emAlta = tendencia.get(row.id);
+      return {
+        ...toCard(row),
+        tendencia: emAlta?.valor ?? 0,
+        assistidaAgora: emAlta?.assistidaAgora ?? false,
+        releasedAt: row.releasedAt.toISOString(),
+        temas: (vinculados.length
+          ? vinculados
+          : genres
+              .map((genre) => genre.slug)
+              .filter((slug) => belongsToGenre(row, slug))
+        ).sort(porOrdemEditorial),
+      };
+    })
+    .sort((a, b) => b.tendencia - a.tendencia);
 
   const temas = genres
     .map((genre) => ({

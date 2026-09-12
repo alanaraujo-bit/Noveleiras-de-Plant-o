@@ -5,6 +5,11 @@ const nextConfig: NextConfig = {
   // interface tem ações. Atrapalha a inspeção visual em tela de celular.
   devIndicators: false,
 
+  // Acompanhar o dev pelo celular na mesma rede: sem isto o Next bloqueia os
+  // recursos de desenvolvimento (recarga ao vivo) vindos de outro aparelho.
+  // Só vale em `next dev`; produção ignora.
+  allowedDevOrigins: ["192.168.*.*"],
+
   poweredByHeader: false,
 
   // Catálogo e Busca viraram uma tela só. Os endereços antigos continuam

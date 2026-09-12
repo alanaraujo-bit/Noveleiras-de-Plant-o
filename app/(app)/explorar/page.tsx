@@ -85,7 +85,7 @@ function paraItem(novela: NovelaVitrine): ItemVitrine {
     posterUrl: novela.posterUrl,
     episodeCount: novela.episodeCount,
     openAccess: novela.openAccess,
-    viewCount: novela.viewCount,
+    assistidaAgora: novela.assistidaAgora,
     releasedAt: novela.releasedAt,
     temas: novela.temas,
   };
@@ -108,7 +108,7 @@ async function ordemParaVoce(
     .filter((n) => !perfil.engajadas.has(n.id) && !perfil.recusadas.has(n.id))
     .map((n) => ({
       id: n.id,
-      pontuacao: pontuar(n.id, perfil, corpus, { popularidade: n.viewCount }),
+      pontuacao: pontuar(n.id, perfil, corpus, { popularidade: n.tendencia }),
     }))
     .filter((n) => n.pontuacao.motivo === "gosto")
     .sort((a, b) => b.pontuacao.valor - a.pontuacao.valor)

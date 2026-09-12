@@ -31,6 +31,8 @@ import {
   slugificar,
   textoDeBusca,
 } from "../lib/media/biblioteca.ts";
+import { classificarTemas, paraElenco } from "../lib/media/temas.ts";
+import { garantirGeneros, vincularGeneros } from "../lib/media/generos.ts";
 import { isGeneratedArt } from "../lib/media/resolver.ts";
 import { sondar } from "../lib/media/inventario.ts";
 
@@ -72,8 +74,15 @@ async function main() {
     return;
   }
 
+  // Os gêneros existem antes da primeira novela: ligar uma obra a um gênero
+  // que ainda não foi criado é o erro que este passo evita.
+  const generoPorSlug = APLICAR
+    ? await garantirGeneros(db)
+    : new Map<string, string>();
+
   let totalEpisodios = 0;
   let totalBytes = 0;
+  let totalGeneros = 0;
   let novasNovelas = 0;
   let novosEpisodios = 0;
   let atualizados = 0;
@@ -89,6 +98,7 @@ async function main() {
         heroKey: true,
         synopsis: true,
         tags: true,
+        cast: true,
       },
     });
 
@@ -121,7 +131,12 @@ async function main() {
     // A sinopse vem do manifesto quando o baixador a trouxe. Nada é gerado:
     // sem manifesto ela continua vazia, e o painel mostra o que falta.
     const sinopse = novela.sinopse ?? "";
-    const tags = novela.temas.map((tema) => tema.valor);
+
+    // Os temas crus da origem viram vocabulário do catálogo aqui: elenco,
+    // tags de enredo, gêneros, país e classificação indicativa. A decisão de
+    // o que é o quê mora em `lib/media/temas`, com teste.
+    const classificacao = classificarTemas(novela.temas);
+    const tags = classificacao.tags;
     const dadosDaNovela = {
       title: novela.titulo,
       // Vazia de propósito: a origem não tem chamada curta, e inventá-la
@@ -136,11 +151,24 @@ async function main() {
       posterKey: novela.capaChave ?? `gen:capa/${slug}`,
       heroKey: novela.capaChave ?? `gen:hero/${slug}`,
       accent: corDoTitulo(novela.titulo),
+      // Elenco e país saem dos temas da origem. Vazios quando ela não diz —
+      // continuam sendo campos que alguém preenche no painel.
+      cast: paraElenco(classificacao.elenco),
+      ...(classificacao.pais ? { country: classificacao.pais } : {}),
+      ...(classificacao.classificacao
+        ? { ageRating: classificacao.classificacao }
+        : {}),
       // Só entra quando o arquivo foi provado no disco. `null` é a resposta
       // honesta para novela sem trailer, e é o que some com a ação na página.
       trailerKey: novela.trailerChave,
       tags,
-      searchText: textoDeBusca(novela.titulo, sinopse, tags.join(" ")),
+      // O elenco entra na busca: quem lembra do rosto costuma lembrar do nome.
+      searchText: textoDeBusca(
+        novela.titulo,
+        sinopse,
+        tags.join(" "),
+        classificacao.elenco.join(" "),
+      ),
       editorialNote: novela.origem
         ? `Importada da pasta "${novela.pasta}" (origem ${novela.origem}).`
         : `Importada da pasta "${novela.pasta}".`,
@@ -150,6 +178,7 @@ async function main() {
     // Numa reimportação, arte gerada dá lugar à real — isso é ganho, não
     // sobrescrita. Já o que uma pessoa escolheu ou escreveu fica de pé: capa
     // trocada à mão e sinopse redigida no painel não são tocadas.
+    const elencoGravado = Array.isArray(existente?.cast) ? existente.cast : [];
     const capaEhGerada = !existente || isGeneratedArt(existente.posterKey);
     const heroEhGerado = !existente || isGeneratedArt(existente.heroKey);
     const sinopseVazia = !existente?.synopsis?.trim();
@@ -166,7 +195,17 @@ async function main() {
           novela.titulo,
           sinopseVazia ? sinopse : (existente?.synopsis ?? ""),
           (existente?.tags.length ? existente.tags : tags).join(" "),
+          classificacao.elenco.join(" "),
         ),
+        // Elenco vazio é lacuna, não escolha: preencher não sobrescreve
+        // trabalho de ninguém. Onde já existe elenco, ele fica.
+        ...(classificacao.elenco.length && !elencoGravado.length
+          ? { cast: paraElenco(classificacao.elenco) }
+          : {}),
+        ...(classificacao.pais ? { country: classificacao.pais } : {}),
+        ...(classificacao.classificacao
+          ? { ageRating: classificacao.classificacao }
+          : {}),
         ...(novela.capaChave && capaEhGerada
           ? { posterKey: novela.capaChave }
           : {}),
@@ -181,6 +220,15 @@ async function main() {
       },
       select: { id: true },
     });
+
+    // ---- os gêneros ----------------------------------------------------
+    const ligados = await vincularGeneros(
+      db,
+      gravada.id,
+      classificacao.generos,
+      generoPorSlug,
+    );
+    if (ligados > 0) totalGeneros += ligados;
 
     // ---- a temporada ---------------------------------------------------
     // A biblioteca é plana, então existe uma temporada só. Ela é criada
@@ -266,6 +314,7 @@ async function main() {
   console.log(
     `  ${novasNovelas} novela(s) nova(s) · ${novosEpisodios} episódio(s) novo(s) · ${atualizados} atualizado(s)`,
   );
+  console.log(`  ${totalGeneros} vínculo(s) de gênero gravado(s)`);
   console.log(
     "\n  Catálogo gravado. Falta o vídeo chegar ao espectador:" +
       "\n    1. npm run midia:inventariar -- --raiz=\"" + RAIZ + "\" --aplicar" +

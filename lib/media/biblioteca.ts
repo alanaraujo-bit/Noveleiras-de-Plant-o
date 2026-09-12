@@ -67,7 +67,19 @@ export type AvisoDeLeitura = (
 ) => void;
 
 /** Um tema declarado pela origem. Cru, em inglês, como veio. */
-export type TemaDaOrigem = { chave: string; valor: string };
+/**
+ * Um tema como o manifesto entrega.
+ *
+ * Mora aqui, e não em `lib/media/temas`, porque este arquivo viaja dentro do
+ * agente de bandeja e não pode importar nada: o empacotador confere isso, e
+ * foi assim que uma versão antiga já foi parar no instalador.
+ */
+export type TemaDaOrigem = {
+  chave: string;
+  valor: string;
+  /** Grupo da origem. Vazio nos manifestos antigos, de antes do campo. */
+  grupo: string;
+};
 
 export type NovelaNoDisco = {
   titulo: string;
@@ -95,10 +107,11 @@ export type NovelaNoDisco = {
    */
   trailerChave: string | null;
   /**
-   * Temas da origem, sem tradução.
+   * Temas da origem, crus, com o grupo que os classifica.
    *
-   * Viram gênero por decisão de quem edita, no painel — nunca sozinhos: o
-   * vocabulário da plataforma é em inglês e não é o do produto.
+   * A tradução para o vocabulário do catálogo — elenco, tags, gênero, país —
+   * é decisão editorial e mora em `lib/media/temas`, não aqui: este arquivo só
+   * lê o disco.
    */
   temas: TemaDaOrigem[];
   /** "tiktok", "reelshort"… `null` quando o manifesto não diz. */
@@ -198,7 +211,12 @@ type Manifesto = {
    */
   trailer?: string;
   totalDurationSec?: number;
-  themes?: { key?: string; value?: string }[];
+  /**
+   * Temas crus da origem. `group` classifica o tema no vocabulário do
+   * ReelShort — elenco, enredo, país, classificação — e é o que
+   * `lib/media/temas` traduz para o vocabulário do catálogo.
+   */
+  themes?: { key?: string; value?: string; group?: string | number }[];
   episodes?: Record<
     string,
     {
@@ -425,6 +443,9 @@ export async function lerBiblioteca(
         .map((tema) => ({
           chave: tema?.key?.trim() ?? "",
           valor: tema?.value?.trim() ?? "",
+          // O grupo é o que separa elenco de enredo. Manifesto antigo não tem,
+          // e `lib/media/temas` trata a ausência como "não sei o que é isto".
+          grupo: tema?.group != null ? String(tema.group).trim() : "",
         }))
         .filter((tema) => tema.valor !== ""),
       fonte: manifesto?.source?.trim() || null,

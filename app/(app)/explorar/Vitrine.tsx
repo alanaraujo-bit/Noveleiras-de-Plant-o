@@ -73,7 +73,8 @@ export type ItemVitrine = {
   posterUrl: string;
   episodeCount: number;
   openAccess: boolean;
-  viewCount: number;
+  /** Teve tempo assistido de verdade nos últimos dias. */
+  assistidaAgora: boolean;
   releasedAt: string;
   temas: string[];
 };
@@ -226,19 +227,18 @@ export function Vitrine({
   );
 
   /**
-   * O tema que vai na legenda é o mais raro da novela, não o primeiro: quase
-   * tudo cai em "Romance Proibido", e uma legenda que repete em todo cartão
-   * não ajuda ninguém a escolher.
+   * O tema da legenda é o principal da novela — os temas já chegam na ordem
+   * editorial, do que mais define a história para o que menos define. Dentro
+   * de um filtro, o segundo tema diz mais que repetir o filtro em todo cartão.
    */
   const temaQueDistingue = useCallback(
     (novela: ItemVitrine, filtroAtual: string) => {
-      let escolhido: TemaVitrine | null = null;
       for (const slug of novela.temas) {
+        if (slug === filtroAtual) continue;
         const tema = temaPorSlug.get(slug);
-        if (!tema || slug === filtroAtual) continue;
-        if (!escolhido || tema.total < escolhido.total) escolhido = tema;
+        if (tema) return tema.name;
       }
-      return escolhido?.name ?? null;
+      return null;
     },
     [temaPorSlug],
   );
@@ -377,6 +377,17 @@ export function Vitrine({
   );
 
   const visiveis = lista.slice(0, limite);
+
+  // O ranking numera só o trecho contínuo do topo que está sendo assistido
+  // agora. Numerar por posição e pular quem não tem tempo recente produzia
+  // "1, 2, … 7, 10" — um top 10 com buracos parece defeito, não critério.
+  const tamanhoDoRanking =
+    filtro === "alta"
+      ? (() => {
+          const primeiraFora = lista.findIndex((n) => !n.assistidaAgora);
+          return Math.min(10, primeiraFora < 0 ? lista.length : primeiraFora);
+        })()
+      : 0;
   const posicaoAssinatura =
     assinatura && lista.length > 10 ? Math.min(8, visiveis.length) : -1;
 
@@ -586,12 +597,10 @@ export function Vitrine({
                       </ItemGrade>,
                     );
                   }
-                  // Só ganha número quem foi visto de fato: em empate no zero,
-                  // "3º lugar" seria uma afirmação que o dado não sustenta.
-                  const posicao =
-                    filtro === "alta" && indice < 10 && novela.viewCount > 0
-                      ? indice + 1
-                      : null;
+                  // Só ganha número quem está sendo assistido de fato agora:
+                  // sem tempo assistido recente, "3º lugar" seria uma
+                  // afirmação que o dado não sustenta.
+                  const posicao = indice < tamanhoDoRanking ? indice + 1 : null;
                   itens.push(
                     <ItemGrade key={novela.id} indice={indice}>
                       <CartaoVitrine

@@ -7,13 +7,6 @@
  * seed — nenhum componente muda.
  */
 
-export type SeedGenre = {
-  slug: string;
-  name: string;
-  tagline: string;
-  accent: string;
-};
-
 export type SeedEpisode = {
   title: string;
   synopsis: string;
@@ -50,56 +43,15 @@ export type SeedNovela = {
   seasons: SeedSeason[];
 };
 
-export const GENRES: SeedGenre[] = [
-  {
-    slug: "romance-proibido",
-    name: "Romance Proibido",
-    tagline: "O que não devia acontecer — e acontece",
-    accent: "#E03A69",
-  },
-  {
-    slug: "vinganca",
-    name: "Vingança",
-    tagline: "Elas voltaram. E lembram de tudo",
-    accent: "#A01F45",
-  },
-  {
-    slug: "heranca-e-poder",
-    name: "Herança & Poder",
-    tagline: "Sobrenome pesa mais que sentimento",
-    accent: "#D9A355",
-  },
-  {
-    slug: "segredos-de-familia",
-    name: "Segredos de Família",
-    tagline: "Todo álbum tem uma foto arrancada",
-    accent: "#8E6BC4",
-  },
-  {
-    slug: "comedia-romantica",
-    name: "Comédia Romântica",
-    tagline: "Para rir de vergonha alheia com carinho",
-    accent: "#F2648C",
-  },
-  {
-    slug: "suspense-passional",
-    name: "Suspense Passional",
-    tagline: "Amar aqui é assumir risco",
-    accent: "#4F7CC4",
-  },
-  {
-    slug: "segundo-amor",
-    name: "Segundo Amor",
-    tagline: "Recomeçar depois dos quarenta",
-    accent: "#5FC79B",
-  },
-  {
-    slug: "reencontro",
-    name: "Reencontro",
-    tagline: "Dez anos depois, no mesmo elevador",
-    accent: "#E9BD78",
-  },
-];
+/**
+ * Os gêneros são os mesmos do catálogo importado.
+ *
+ * A lista mora em `lib/media/temas` porque é lá que ela é decidida, a partir
+ * dos temas que a origem manda. Duplicá-la aqui faria o catálogo de
+ * demonstração e a biblioteca real divergirem no dia em que um gênero
+ * mudasse de nome.
+ */
+export { GENEROS as GENRES } from "../lib/media/temas.ts";
 
 export const NOVELAS: SeedNovela[] = [
   {

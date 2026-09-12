@@ -3,81 +3,61 @@ import "server-only";
 import { cache } from "react";
 
 import { db } from "@/lib/db";
+import { Prisma } from "@prisma/client";
 import { normalizeText } from "@/lib/text";
+import {
+  montarPerfil,
+  type Corpus,
+  type PerfilDeGosto,
+  type TipoDeEvento,
+} from "@/lib/recomendacao/sinais";
+
+export {
+  FORCA_MINIMA,
+  pontuar,
+  type Corpus,
+  type PerfilDeGosto,
+  type Pontuacao,
+} from "@/lib/recomendacao/sinais";
 
 /**
- * Perfil de gosto.
+ * Perfil de gosto — a parte que lê o banco.
  *
- * O que a pessoa gosta é **derivado do que ela fez**, nunca do que ela disse.
- * Terminar um episódio, curtir, comentar, enviar e favoritar são fatos
- * datados; passar o dedo em dois segundos também é. O perfil é a soma desses
- * fatos com peso e prazo de validade — e nada mais.
+ * O que cada fato vale mora em `lib/recomendacao/sinais`, que é puro e
+ * testado. Aqui só se decide **quais** fatos ler e como trazê-los baratos.
  *
  * ## Por que o espaço de features é o texto, e não o gênero
  *
  * Recomendar exige generalizar de uma obra para outra: se gostou desta, quais
- * se parecem com ela? O caminho natural seria o gênero. Ele não existe no
- * dado: as 141 novelas do catálogo estão com `NovelaGenre` vazio e `tags`
- * vazio. Um recomendador por gênero classificaria tudo com afinidade zero e
- * devolveria a ordem de popularidade com outro nome.
+ * se parecem com ela? O caminho natural seria o gênero. Ele ainda não existe no
+ * dado: as novelas importadas chegam com `NovelaGenre` e `tags` vazios, porque
+ * a origem (ReelShort) não publica temas. Um recomendador só por gênero
+ * classificaria tudo com afinidade zero e devolveria popularidade com outro
+ * nome.
  *
- * O que existe é `searchText` — título e sinopse normalizados, preenchidos
- * para as 141. Então a semelhança sai dos termos da sinopse, ponderados por
- * raridade (IDF): "vinganca" e "alcateia" dizem algo sobre a obra; "que" e
- * "ela" não dizem nada.
+ * O que existe é `searchText` — título e sinopse normalizados. Então a
+ * semelhança sai dos termos da sinopse, ponderados por raridade (IDF):
+ * "vinganca" e "alcateia" dizem algo sobre a obra; "que" e "ela" não dizem
+ * nada.
  *
  * O gênero continua somando quando existir. No dia em que a ingestão passar a
- * classificar o catálogo, este arquivo aproveita sem mudar de forma — é por
- * isso que os dois sinais são computados lado a lado em vez de um substituir
- * o outro.
+ * classificar o catálogo, este arquivo aproveita sem mudar de forma.
  *
  * ## O que este arquivo deliberadamente não faz
  *
  * Não há filtragem colaborativa ("quem viu isto também viu aquilo"). Ela
- * precisa de muitos espectadores para sair do ruído, e a base tem quatro
+ * precisa de muitos espectadores para sair do ruído, e a base tem poucas
  * contas. Prometer isso agora seria inventar sinal.
  */
-
-// ---------------------------------------------------------------- pesos
-//
-// A escala é grosseira de propósito: a diferença entre "assistiu até o fim" e
-// "passou o dedo" precisa ser óbvia, e afinar decimais sem base de usuários
-// para medir seria fingir precisão.
-
-const PESO = {
-  /** Assistiu até o fim. O sinal mais forte que existe sem pedir nada. */
-  concluiu: 5,
-  /** Passou de 40% do episódio: ficou de verdade, mesmo sem terminar. */
-  assistiuBastante: 2.5,
-  favoritou: 6,
-  curtiu: 4,
-  comentou: 5,
-  enviou: 5,
-  /** Ficou numa lâmina além do limiar de permanência. */
-  permaneceu: 1,
-  /** Abriu a ficha da novela: interesse declarado por um toque. */
-  abriu: 0.5,
-  /**
-   * Descartou a lâmina antes do limiar. Negativo, e mais fraco em módulo que
-   * os positivos: um descarte pode ser "não agora", enquanto terminar um
-   * episódio nunca é acidente.
-   */
-  descartou: -2,
-} as const;
-
-/** Metade do peso a cada duas semanas. Gosto muda; o log não deve fingir que não. */
-const MEIA_VIDA_DIAS = 14;
 
 /** Termos por novela que entram no perfil. Além disso vira ruído de sinopse. */
 const TERMOS_POR_NOVELA = 12;
 
-/** Descartes rápidos a partir dos quais a obra é considerada recusada. */
-const DESCARTES_PARA_RECUSAR = 2;
-
-function decaimento(quando: Date, agora: number): number {
-  const dias = (agora - quando.getTime()) / 86_400_000;
-  return Math.pow(0.5, Math.max(0, dias) / MEIA_VIDA_DIAS);
-}
+/**
+ * Janela de leitura. Com meia-vida de 14 dias, o que passa de 90 vale menos de
+ * 1% — ler além disso seria carregar linhas que não mudam nada.
+ */
+const JANELA_DIAS = 90;
 
 // ----------------------------------------------------------- vocabulário
 
@@ -109,21 +89,12 @@ function termosDe(texto: string): string[] {
     .filter((t) => t.length >= 4 && !VAZIAS.has(t));
 }
 
-export type Corpus = {
-  /** Termos de cada novela, já reduzidos aos mais discriminativos. */
-  porNovela: Map<string, string[]>;
-  /** Raridade de cada termo: quanto mais raro, mais ele diz. */
-  idf: Map<string, number>;
-  /** Gêneros de cada novela. Vazio enquanto o catálogo não for classificado. */
-  generos: Map<string, string[]>;
-};
-
 /**
  * Vocabulário do catálogo, memoizado por requisição.
  *
- * Uma consulta que lê 141 sinopses é barata; repeti-la para cada lâmina de uma
- * fila não seria. `cache` do React resolve isso no escopo certo — a mesma
- * fronteira que `getViewer` já usa.
+ * Uma consulta que lê as sinopses do catálogo é barata; repeti-la para cada
+ * lâmina de uma fila não seria. `cache` do React resolve isso no escopo certo —
+ * a mesma fronteira que `getViewer` já usa.
  *
  * Se o catálogo crescer uma ordem de grandeza, o caminho é materializar o IDF
  * numa tabela e reler daqui; nenhuma outra parte deste arquivo muda.
@@ -204,21 +175,13 @@ export const corpusDoCatalogo = cache(async (): Promise<Corpus> => {
 
 // -------------------------------------------------------------- perfil
 
-export type PerfilDeGosto = {
-  /** Peso por termo, já decaído no tempo e ponderado por raridade. */
-  termos: Map<string, number>;
-  /** Peso por gênero. Fica vazio enquanto o catálogo não tiver classificação. */
-  generos: Map<string, number>;
-  /** Novelas com algum engajamento — não repetem como descoberta. */
-  engajadas: Set<string>;
-  /** Novelas descartadas rápido mais de uma vez: a pessoa já disse não. */
-  recusadas: Set<string>;
-  /** Soma dos pesos positivos. Abaixo de um mínimo, o perfil não decide nada. */
-  forca: number;
-};
-
-/** Sinal cru: uma novela, um peso e a data em que aconteceu. */
-type Sinal = { novelaId: string; peso: number; quando: Date };
+const EVENTOS_DO_PERFIL: TipoDeEvento[] = [
+  "REEL_SLIDE_VIEW",
+  "REEL_SLIDE_SKIP",
+  "EPISODE_COMMENT",
+  "EPISODE_SHARE",
+  "NOVELA_VIEW",
+];
 
 /**
  * Monta o perfil a partir do log e do progresso.
@@ -231,207 +194,85 @@ type Sinal = { novelaId: string; peso: number; quando: Date };
 export const perfilDeGosto = cache(
   async (userId: string): Promise<PerfilDeGosto> => {
     const agora = Date.now();
-    // Uma janela de 90 dias com meia-vida de 14 já deixa o mais antigo valendo
-    // menos de 1% — ler além disso seria carregar linhas que não mudam nada.
-    const desde = new Date(agora - 90 * 86_400_000);
+    const desde = new Date(agora - JANELA_DIAS * 86_400_000);
 
-    const [progresso, favoritos, curtidas, eventos] = await Promise.all([
-      db.watchProgress.findMany({
-        where: { userId, updatedAt: { gte: desde } },
-        select: {
-          novelaId: true,
-          percent: true,
-          completed: true,
-          updatedAt: true,
-        },
-      }),
-      db.favorite.findMany({
-        where: { userId, createdAt: { gte: desde } },
-        select: { novelaId: true, createdAt: true },
-      }),
-      db.episodeLike.findMany({
-        where: { userId, createdAt: { gte: desde } },
-        select: { createdAt: true, episode: { select: { novelaId: true } } },
-      }),
-      db.event.findMany({
-        where: {
-          userId,
-          createdAt: { gte: desde },
-          novelaId: { not: null },
-          type: {
-            in: [
-              "REEL_SLIDE_VIEW",
-              "REEL_SLIDE_SKIP",
-              "EPISODE_COMMENT",
-              "EPISODE_SHARE",
-              "NOVELA_VIEW",
-            ],
+    const [progresso, favoritos, curtidas, eventos, tempo, corpus] =
+      await Promise.all([
+        db.watchProgress.findMany({
+          where: { userId, updatedAt: { gte: desde } },
+          select: {
+            novelaId: true,
+            percent: true,
+            completed: true,
+            updatedAt: true,
           },
-        },
-        select: { type: true, novelaId: true, createdAt: true },
-      }),
-    ]);
+        }),
+        db.favorite.findMany({
+          where: { userId, createdAt: { gte: desde } },
+          select: { novelaId: true, createdAt: true },
+        }),
+        db.episodeLike.findMany({
+          where: { userId, createdAt: { gte: desde } },
+          select: { createdAt: true, episode: { select: { novelaId: true } } },
+        }),
+        db.event.findMany({
+          where: {
+            userId,
+            createdAt: { gte: desde },
+            novelaId: { not: null },
+            type: { in: EVENTOS_DO_PERFIL },
+          },
+          select: { type: true, novelaId: true, createdAt: true, valueMs: true },
+        }),
+        // Tempo assistido: um evento a cada dez segundos de reprodução. Somado
+        // por hora no banco — são milhares de linhas por pessoa ativa, e o
+        // perfil só precisa saber quanto foi assistido e mais ou menos quando.
+        db.$queryRaw<{ novelaId: string; hora: Date; ms: number }[]>(Prisma.sql`
+          SELECT
+            e."novelaId"                         AS "novelaId",
+            date_trunc('hour', e."createdAt")    AS "hora",
+            sum(e."valueMs")::float8             AS "ms"
+          FROM "Event" e
+          WHERE e."userId" = ${userId}
+            AND e."createdAt" >= ${desde}
+            AND e."type"::text = 'PLAY_PROGRESS'
+            AND e."novelaId" IS NOT NULL
+            AND e."valueMs" > 0
+          GROUP BY e."novelaId", date_trunc('hour', e."createdAt")
+        `),
+        corpusDoCatalogo(),
+      ]);
 
-    const sinais: Sinal[] = [];
-    const descartes = new Map<string, number>();
-
-    for (const linha of progresso) {
-      const peso = linha.completed
-        ? PESO.concluiu
-        : linha.percent >= 40
-          ? PESO.assistiuBastante
-          : 0;
-      if (peso > 0) {
-        sinais.push({
-          novelaId: linha.novelaId,
-          peso,
-          quando: linha.updatedAt,
-        });
-      }
-    }
-
-    for (const f of favoritos) {
-      sinais.push({
-        novelaId: f.novelaId,
-        peso: PESO.favoritou,
-        quando: f.createdAt,
-      });
-    }
-
-    for (const c of curtidas) {
-      sinais.push({
-        novelaId: c.episode.novelaId,
-        peso: PESO.curtiu,
-        quando: c.createdAt,
-      });
-    }
-
-    for (const e of eventos) {
-      if (!e.novelaId) continue;
-      const peso =
-        e.type === "REEL_SLIDE_VIEW"
-          ? PESO.permaneceu
-          : e.type === "REEL_SLIDE_SKIP"
-            ? PESO.descartou
-            : e.type === "EPISODE_COMMENT"
-              ? PESO.comentou
-              : e.type === "EPISODE_SHARE"
-                ? PESO.enviou
-                : PESO.abriu;
-
-      if (e.type === "REEL_SLIDE_SKIP") {
-        descartes.set(e.novelaId, (descartes.get(e.novelaId) ?? 0) + 1);
-      }
-      sinais.push({ novelaId: e.novelaId, peso, quando: e.createdAt });
-    }
-
-    // Peso final por novela, com o tempo já descontado.
-    const porNovela = new Map<string, number>();
-    for (const s of sinais) {
-      const valor = s.peso * decaimento(s.quando, agora);
-      porNovela.set(s.novelaId, (porNovela.get(s.novelaId) ?? 0) + valor);
-    }
-
-    const corpus = await corpusDoCatalogo();
-    const termos = new Map<string, number>();
-    const generos = new Map<string, number>();
-    const engajadas = new Set<string>();
-    let forca = 0;
-
-    for (const [novelaId, peso] of porNovela) {
-      if (peso > 0) engajadas.add(novelaId);
-      // Peso negativo não empurra termos para baixo.
-      //
-      // Um descarte diz "esta obra, não" — e é assim que ele é usado, na lista
-      // de recusadas. Deixá-lo subtrair termos faria uma passada de dedo numa
-      // novela de vingança derrubar *todas* as de vingança, inclusive as que a
-      // pessoa terminou. O sinal negativo é sobre a obra, não sobre o gosto.
-      if (peso <= 0) continue;
-
-      forca += peso;
-
-      for (const termo of corpus.porNovela.get(novelaId) ?? []) {
-        const raridade = corpus.idf.get(termo) ?? 0;
-        termos.set(termo, (termos.get(termo) ?? 0) + peso * raridade);
-      }
-      for (const generoId of corpus.generos.get(novelaId) ?? []) {
-        generos.set(generoId, (generos.get(generoId) ?? 0) + peso);
-      }
-    }
-
-    const recusadas = new Set(
-      [...descartes.entries()]
-        .filter(([novelaId, n]) => {
-          // Descartar uma obra que já foi assistida não é rejeição: é ter
-          // passado por um episódio já visto.
-          if (n < DESCARTES_PARA_RECUSAR) return false;
-          return (porNovela.get(novelaId) ?? 0) <= 0;
-        })
-        .map(([novelaId]) => novelaId),
+    return montarPerfil(
+      {
+        progresso: progresso.map((p) => ({
+          novelaId: p.novelaId,
+          percent: p.percent,
+          completed: p.completed,
+          quando: p.updatedAt,
+        })),
+        favoritos: favoritos.map((f) => ({ novelaId: f.novelaId, quando: f.createdAt })),
+        curtidas: curtidas.map((c) => ({
+          novelaId: c.episode.novelaId,
+          quando: c.createdAt,
+        })),
+        eventos: eventos.flatMap((e) =>
+          e.novelaId
+            ? [
+                {
+                  tipo: e.type as TipoDeEvento,
+                  novelaId: e.novelaId,
+                  quando: e.createdAt,
+                  valorMs: e.valueMs,
+                },
+              ]
+            : [],
+        ),
+        // O banco devolve a hora como timestamp sem fuso, já em UTC.
+        tempo: tempo.map((t) => ({ novelaId: t.novelaId, quando: t.hora, ms: t.ms })),
+      },
+      corpus,
+      agora,
     );
-
-    return { termos, generos, engajadas, recusadas, forca };
   },
 );
-
-// ------------------------------------------------------------ pontuação
-
-/**
- * Força mínima para o perfil mandar na ordem.
- *
- * Abaixo disso a pessoa é nova demais — dois toques não são um gosto, e tratar
- * como se fossem prenderia alguém num canto do catálogo por causa de um
- * acidente. Até chegar lá, quem ordena é a preferência declarada no onboarding
- * e a popularidade.
- */
-export const FORCA_MINIMA = 8;
-
-export type Pontuacao = {
-  valor: number;
-  /** Por que esta obra subiu. Alimenta o painel e a depuração, nunca a tela. */
-  motivo: "gosto" | "popular";
-};
-
-/**
- * Pontua uma novela contra o perfil.
- *
- * A soma dos termos é dividida pela raiz do número de termos, e não pelo
- * número: sem alguma normalização, sinopses longas ganham sempre; com a
- * divisão inteira, obras específicas demais somem. A raiz é o meio-termo
- * conhecido desse problema.
- */
-export function pontuar(
-  novelaId: string,
-  perfil: PerfilDeGosto,
-  corpus: Corpus,
-  contexto: { popularidade: number },
-): Pontuacao {
-  const termos = corpus.porNovela.get(novelaId) ?? [];
-  let soma = 0;
-  for (const termo of termos) {
-    soma += perfil.termos.get(termo) ?? 0;
-  }
-  const afinidadeDeTexto =
-    termos.length > 0 ? soma / Math.sqrt(termos.length) : 0;
-
-  const generosDaNovela = corpus.generos.get(novelaId) ?? [];
-  let afinidadeDeGenero = 0;
-  for (const generoId of generosDaNovela) {
-    afinidadeDeGenero += perfil.generos.get(generoId) ?? 0;
-  }
-
-  // A popularidade entra comprimida por logaritmo e com peso pequeno: ela é o
-  // desempate entre obras que o perfil não distingue, não o critério.
-  const prior = Math.log1p(Math.max(0, contexto.popularidade)) * 0.35;
-
-  const valor =
-    afinidadeDeTexto + afinidadeDeGenero * 1.5 + prior;
-
-  return {
-    valor,
-    motivo:
-      afinidadeDeTexto + afinidadeDeGenero > prior
-        ? "gosto"
-        : "popular",
-  };
-}

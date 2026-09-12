@@ -13,6 +13,6 @@ Direção escolhida: "Vitrine com filtros" — uma grade única de duas colunas 
 
 Momento memorável: trocar de filtro e ver a grade se rearranjar — capas que ficam deslizam (layout spring), as que saem desfocam, as novas sobem em cascata; a pílula ativa desliza entre os filtros.
 
-Restrições de dado: gêneros/tags estão vazios no banco; temas vêm da inferência por texto (`belongsToGenre`) e só aparecem com ≥8 obras. "Para você" só aparece quando o perfil de gosto passa de FORCA_MINIMA. Selo "Novo" foi removido da vitrine (todo o catálogo tem menos de 21 dias). Sem eyebrows nesta superfície.
+Restrições de dado: os gêneros vêm dos temas da origem (`lib/media/temas`), 14 no total, e só entram no filtro com ≥8 obras; as poucas novelas sem tema caem na leitura por texto (`belongsToGenre`). A legenda do cartão mostra o gênero mais específico da obra — a ordem de `GENEROS` é o que decide isso. "Em alta" é tendência dos últimos dias (`lib/repositories/tendencia`), e só quem tem tempo assistido recente ganha número de ranking. "Para você" só aparece quando o perfil de gosto passa de FORCA_MINIMA. Selo "Novo" foi removido da vitrine (todo o catálogo tem menos de 21 dias). Sem eyebrows nesta superfície.
 
-Em aberto: arte de gênero (`/api/arte/genero/*` responde 404); página dedicada por tema; o selo "Novo" em outras telas continua ruidoso.
+Em aberto: página dedicada por tema; 23 pastas da biblioteca ainda fora do catálogo; o selo "Novo" em outras telas continua ruidoso.

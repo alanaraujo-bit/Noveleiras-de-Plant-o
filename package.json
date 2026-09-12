@@ -31,6 +31,7 @@
     "agente:transcode": "node --env-file=.env.agente scripts/agente-transcode.mjs",
     "painel:provar-infra": "node --env-file=.env scripts/provar-infra.mjs",
     "biblioteca:importar": "node --env-file=.env scripts/importar-biblioteca.ts",
+    "catalogo:classificar": "node --env-file=.env scripts/classificar-catalogo.ts",
     "servidor:midia": "node scripts/servir-midia.mjs",
     "agente:biblioteca": "node --env-file=.env.agente scripts/agente-biblioteca.mjs",
     "painel:provar-biblioteca": "node --env-file=.env scripts/provar-biblioteca.mjs",
