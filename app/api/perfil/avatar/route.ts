@@ -110,7 +110,7 @@ export async function POST(request: Request) {
     }
   }
 
-  revalidatePath("/inicio");
+  revalidatePath("/explorar");
   revalidatePath("/perfil");
   revalidatePath("/perfil/preferencias");
 
@@ -140,7 +140,7 @@ export async function DELETE(request: Request) {
     }
   }
 
-  revalidatePath("/inicio");
+  revalidatePath("/explorar");
   revalidatePath("/perfil");
   revalidatePath("/perfil/preferencias");
 

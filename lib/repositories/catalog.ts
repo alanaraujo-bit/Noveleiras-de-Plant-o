@@ -385,6 +385,77 @@ export async function listGenresWithHighlights(): Promise<GenreWithHighlights[]>
   });
 }
 
+// ------------------------------------------------------------------ vitrine
+
+export type NovelaVitrine = NovelaCard & {
+  viewCount: number;
+  releasedAt: string;
+  /** Slugs dos temas: vínculo editorial quando existe, senão lido da sinopse. */
+  temas: string[];
+};
+
+export type TemaVitrine = {
+  slug: string;
+  name: string;
+  tagline: string;
+  accent: string;
+  total: number;
+};
+
+/** Tema com menos obras que isto vira um filtro que decepciona: fica de fora. */
+const MINIMO_POR_TEMA = 8;
+
+/**
+ * Catálogo inteiro para a vitrine do Explorar.
+ *
+ * Vai tudo de uma vez — são algumas centenas de linhas enxutas — porque o
+ * filtro acontece no aparelho: trocar de "Em alta" para "Vingança" precisa
+ * ser instantâneo e animado, não uma ida ao servidor a cada toque.
+ *
+ * Obras sem episódio ficam de fora: na vitrine, toda capa tem que abrir algo.
+ */
+export async function getVitrine(): Promise<{
+  novelas: NovelaVitrine[];
+  temas: TemaVitrine[];
+}> {
+  const [rows, genres] = await Promise.all([
+    db.novela.findMany({
+      where: { ...PUBLISHED, episodes: { some: {} } },
+      orderBy: [{ viewCount: "desc" }, { rating: "desc" }, { releasedAt: "desc" }],
+      select: { ...CARD_SELECT, viewCount: true },
+    }),
+    db.genre.findMany({
+      orderBy: { sort: "asc" },
+      select: { slug: true, name: true, tagline: true, accent: true },
+    }),
+  ]);
+
+  const novelas = rows.map((row) => {
+    const vinculados = row.genres.map((link) => link.genre.slug);
+    return {
+      ...toCard(row),
+      viewCount: row.viewCount,
+      releasedAt: row.releasedAt.toISOString(),
+      temas: vinculados.length
+        ? vinculados
+        : genres
+            .map((genre) => genre.slug)
+            .filter((slug) => belongsToGenre(row, slug)),
+    };
+  });
+
+  const temas = genres
+    .map((genre) => ({
+      ...genre,
+      total: novelas.filter((novela) => novela.temas.includes(genre.slug))
+        .length,
+    }))
+    .filter((tema) => tema.total >= MINIMO_POR_TEMA)
+    .sort((a, b) => b.total - a.total);
+
+  return { novelas, temas };
+}
+
 export async function getGenreWithNovelas(slug: string) {
   const genre = await db.genre.findUnique({ where: { slug } });
   if (!genre) return null;

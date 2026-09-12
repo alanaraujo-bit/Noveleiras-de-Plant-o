@@ -43,7 +43,7 @@ export default function ErroDoPlantao({
           Tentar de novo
         </button>
         <Link
-          href="/inicio"
+          href="/explorar"
           className="tap flex h-13 items-center justify-center rounded-2xl border border-white/12 bg-white/6 text-[0.9375rem] font-semibold text-cream-200"
         >
           Ir para o catálogo

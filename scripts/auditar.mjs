@@ -18,8 +18,7 @@ const arg = (nome, padrao) => {
 const BASE = arg("base", "http://localhost:3100");
 const ROTAS = [
   "/plantao",
-  "/inicio",
-  "/buscar",
+  "/explorar",
   "/generos",
   "/feed",
   "/minha-lista",

@@ -74,7 +74,7 @@ async function ListaVazia() {
         titulo="Sua lista ainda está vazia"
         descricao="Toque no coração em qualquer novela para guardá-la aqui e não perder o fio da história."
         acao={
-          <BotaoLink href="/inicio" variante="secundario" tamanho="medio">
+          <BotaoLink href="/explorar" variante="secundario" tamanho="medio">
             Ver o catálogo
           </BotaoLink>
         }

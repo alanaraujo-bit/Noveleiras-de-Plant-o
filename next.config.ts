@@ -7,6 +7,16 @@ const nextConfig: NextConfig = {
 
   poweredByHeader: false,
 
+  // Catálogo e Busca viraram uma tela só. Os endereços antigos continuam
+  // valendo — atalhos instalados, links compartilhados e o histórico do
+  // navegador — e caem no Explorar; quem vinha da busca chega com o campo aberto.
+  async redirects() {
+    return [
+      { source: "/inicio", destination: "/explorar", permanent: false },
+      { source: "/buscar", destination: "/explorar?buscar=1", permanent: false },
+    ];
+  },
+
   async headers() {
     return [
       {

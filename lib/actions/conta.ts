@@ -176,7 +176,7 @@ export async function concluirOnboarding() {
     payload: {},
   });
 
-  revalidatePath("/inicio");
+  revalidatePath("/explorar");
   redirect(ROTA_INICIAL);
 }
 

@@ -116,7 +116,7 @@ function CatalogoVazio() {
         Assim que o catálogo receber o primeiro episódio, ele abre aqui tocando.
       </p>
       <Link
-        href="/inicio"
+        href="/explorar"
         className="tap mt-7 inline-flex h-13 items-center justify-center rounded-2xl bg-cream-50 px-7 text-[0.9375rem] font-bold text-ink-950"
       >
         Ver o catálogo

@@ -6,8 +6,8 @@ import { motion } from "motion/react";
 
 import { avisarAbaReativada } from "@/lib/shell/aba-reativada";
 import {
-  IconeBusca,
   IconeCatalogo,
+  IconeCoracao,
   IconePerfil,
   IconePlantao,
 } from "@/components/ui/icones";
@@ -22,6 +22,10 @@ import {
  * A aba de Comunidade saiu junto com o feed público. A conversa não acabou —
  * ela mudou de lugar: agora acontece dentro do episódio, onde o assunto está.
  *
+ * Catálogo e Buscar eram duas abas para a mesma pergunta — "o que eu assisto
+ * agora?". Viraram o Explorar, com a busca no topo, e a vaga ficou para a
+ * Minha lista: o que a pessoa guardou merece estar a um toque.
+ *
  * Sobre o reel a barra fica sem fundo: uma faixa opaca cortando o rodapé de um
  * vídeo em tela cheia devolve a moldura de site que o reel existe para tirar.
  *
@@ -32,8 +36,8 @@ import {
 
 const ABAS = [
   { href: "/plantao", rotulo: "Plantão", Icone: IconePlantao },
-  { href: "/inicio", rotulo: "Catálogo", Icone: IconeCatalogo },
-  { href: "/buscar", rotulo: "Buscar", Icone: IconeBusca },
+  { href: "/explorar", rotulo: "Explorar", Icone: IconeCatalogo },
+  { href: "/minha-lista", rotulo: "Minha lista", Icone: IconeCoracao },
   { href: "/perfil", rotulo: "Perfil", Icone: IconePerfil },
 ] as const;
 

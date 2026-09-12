@@ -4,7 +4,7 @@
   "description": "Novelas verticais brasileiras em episódios curtos: romance, vingança, herança e comunidade.",
   "lang": "pt-BR",
   "dir": "ltr",
-  "start_url": "/inicio",
+  "start_url": "/plantao",
   "scope": "/",
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
@@ -19,8 +19,8 @@
     { "src": "/icones/icone-mascara-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ],
   "shortcuts": [
-    { "name": "Continuar assistindo", "url": "/inicio", "description": "Retomar de onde você parou" },
-    { "name": "Buscar", "url": "/buscar", "description": "Procurar uma novela" },
+    { "name": "Plantão", "url": "/plantao", "description": "Assistir de onde você parou" },
+    { "name": "Buscar", "url": "/explorar?buscar=1", "description": "Procurar uma novela" },
     { "name": "Minha lista", "url": "/minha-lista", "description": "Suas novelas guardadas" }
   ]
 }

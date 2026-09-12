@@ -67,7 +67,7 @@ export default async function HistoricoPage() {
           titulo="Seu histórico começa no primeiro episódio"
           descricao="Assim que você assistir alguma coisa, ela aparece aqui com a marca de onde parou."
           acao={
-            <BotaoLink href="/inicio" variante="secundario">
+            <BotaoLink href="/explorar" variante="secundario">
               Escolher uma novela
             </BotaoLink>
           }
