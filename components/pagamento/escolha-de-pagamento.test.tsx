@@ -13,8 +13,10 @@ import { describe, expect, it, vi } from "vitest";
 import { ComoPrefereModo } from "./ComoPrefereModo";
 import { FaixaDeRenovacao } from "./FaixaDeRenovacao";
 
+// Içado: os testes precisam ver para onde a tela mandou a pessoa.
+const navegacao = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+  useRouter: () => navegacao,
 }));
 vi.mock("@/components/sistema/ToastProvider", () => ({
   useToast: () => ({ show: vi.fn() }),
@@ -40,10 +42,10 @@ describe("como você prefere pagar", () => {
     render(<ComoPrefereModo {...base} />);
 
     expect(screen.getByText("Como você prefere pagar?")).toBeInTheDocument();
-    expect(screen.getByText("Cartão")).toBeInTheDocument();
+    expect(screen.getByText("Cartão de crédito")).toBeInTheDocument();
     expect(screen.getByText("Pix")).toBeInTheDocument();
-    expect(screen.getByText("R$ 9,99 por mês")).toBeInTheDocument();
-    expect(screen.getByText("R$ 9,99")).toBeInTheDocument();
+    expect(screen.getByText("R$ 9,99/mês")).toBeInTheDocument();
+    expect(screen.getByText("R$ 9,99 por 1 mês")).toBeInTheDocument();
   });
 
   it("diz de cada lado só o que muda: o mês seguinte", () => {
@@ -53,7 +55,7 @@ describe("como você prefere pagar", () => {
       screen.getByText("Renova automaticamente todos os meses."),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("Você ganha 1 mês e renova quando quiser."),
+      screen.getByText("Você renova quando quiser."),
     ).toBeInTheDocument();
   });
 
@@ -140,5 +142,84 @@ describe("aviso de renovação", () => {
       metodo: "PIX",
     });
     vi.unstubAllGlobals();
+  });
+});
+
+describe("aviso de renovação: o que o botão faz em cada momento", () => {
+  const base = { titulo: "t", detalhe: "d", acao: "Renovar com Pix" };
+
+  it("em dia, na tela de assinatura, é só o botão — sem repetir o que já está escrito", () => {
+    render(
+      <FaixaDeRenovacao
+        titulo="Ativo até 11 de outubro"
+        detalhe="Você renova quando quiser."
+        acao="Renovar com Pix"
+        momento="em-dia"
+        mostrarEmDia
+        apenasAcao
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Renovar com Pix" })).toBeInTheDocument();
+    expect(screen.queryByText("Ativo até 11 de outubro")).toBeNull();
+    expect(screen.queryByText("Você renova quando quiser.")).toBeNull();
+  });
+
+  it("quem já terminou volta à escolha de pagamento, sem cobrança criada", () => {
+    // Ela pode preferir o cartão desta vez. Abrir um Pix sem perguntar
+    // decidiria por ela.
+    navegacao.push.mockClear();
+    const fetchFalso = vi.fn();
+    vi.stubGlobal("fetch", fetchFalso);
+
+    render(
+      <FaixaDeRenovacao {...base} momento="encerrado" acao="Voltar ao Plantão" />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Voltar ao Plantão" }));
+
+    expect(fetchFalso).not.toHaveBeenCalled();
+    expect(navegacao.push).toHaveBeenCalledWith("/planos");
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("tela de planos", () => {
+  const planos = [
+    { code: "MONTHLY" as const, nome: "Plantão Mensal", descricao: "", precoCents: 999, intervalo: "MONTH" as const, beneficios: [], cor: "#e03a69" },
+    { code: "ANNUAL" as const, nome: "Plantão Anual", descricao: "", precoCents: 9990, intervalo: "YEAR" as const, beneficios: [], cor: "#d9a355" },
+  ];
+  const semPlano = { premium: false, plano: "FREE", planoNome: "Plantão Gratuito", renovaEm: null, cancelado: false, manual: false };
+
+  it("o mensal promete o próximo passo e pergunta antes de cobrar", async () => {
+    const { Planos } = await import("./Planos");
+    const fetchFalso = vi.fn();
+    vi.stubGlobal("fetch", fetchFalso);
+
+    render(
+      <Planos planos={planos} atual={semPlano} gratuitos={5} economiaCents={1998} mensalEquivalenteCents={833} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Escolher forma de pagamento" }));
+
+    // Nenhuma cobrança nasce no toque: primeiro, a pergunta.
+    expect(fetchFalso).not.toHaveBeenCalled();
+    expect(screen.getByText("Como você prefere pagar?")).toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
+
+  it("quem já paga por Pix lê até quando vale, não uma renovação que não vai acontecer", async () => {
+    const { Planos } = await import("./Planos");
+    render(
+      <Planos
+        planos={planos}
+        atual={{ ...semPlano, premium: true, plano: "MONTHLY", planoNome: "Plantão Mensal", renovaEm: "2026-10-11T15:00:00Z", manual: true }}
+        gratuitos={5}
+        economiaCents={1998}
+        mensalEquivalenteCents={833}
+      />,
+    );
+
+    expect(screen.getByText(/Vale até/)).toBeInTheDocument();
+    expect(screen.queryByText(/Renova em/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Renovar o mensal" })).toBeInTheDocument();
   });
 });

@@ -37,8 +37,8 @@ const OPCOES: Array<{
 }> = [
   {
     modo: "CARD",
-    titulo: "Cartão",
-    promessa: (preco) => `${preco} por mês`,
+    titulo: "Cartão de crédito",
+    promessa: (preco) => `${preco}/mês`,
     detalhe: "Renova automaticamente todos os meses.",
     cor: "#e03a69",
     Icone: IconeCartao,
@@ -46,8 +46,8 @@ const OPCOES: Array<{
   {
     modo: "PIX",
     titulo: "Pix",
-    promessa: (preco) => preco,
-    detalhe: "Você ganha 1 mês e renova quando quiser.",
+    promessa: (preco) => `${preco} por 1 mês`,
+    detalhe: "Você renova quando quiser.",
     cor: "#d9a355",
     Icone: IconePix,
   },
@@ -101,19 +101,21 @@ export function ComoPrefereModo({
                   <opcao.Icone />
                 </span>
 
+                {/* Nome, preço e a única frase que diferencia — nesta ordem.
+                    O preço em linha própria porque é o que o olho procura
+                    primeiro, e ele é o mesmo dos dois lados: a decisão não é
+                    sobre quanto custa. */}
                 <span className="min-w-0 flex-1">
-                  <span className="flex items-baseline gap-2">
-                    <span className="text-[1.0625rem] font-semibold text-cream-50">
-                      {opcao.titulo}
-                    </span>
-                    <span
-                      className="text-[0.9375rem] font-bold"
-                      style={{ color: opcao.cor }}
-                    >
-                      {opcao.promessa(preco)}
-                    </span>
+                  <span className="block text-[1.0625rem] font-semibold leading-tight text-cream-50">
+                    {opcao.titulo}
                   </span>
-                  <span className="mt-0.5 block text-[0.8125rem] leading-snug text-cream-400">
+                  <span
+                    className="mt-0.5 block text-[0.9375rem] font-bold"
+                    style={{ color: opcao.cor }}
+                  >
+                    {opcao.promessa(preco)}
+                  </span>
+                  <span className="mt-1 block text-[0.8125rem] leading-snug text-cream-400">
                     {estaAbrindo ? "Preparando…" : opcao.detalhe}
                   </span>
                 </span>

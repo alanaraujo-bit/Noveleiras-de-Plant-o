@@ -135,7 +135,12 @@ describe("aviso de renovação", () => {
     const aviso = avisoDeRenovacao(vence, ate, dia(2026, 10, 6));
 
     expect(aviso.momento).toBe("vencendo");
-    expect(mensagemDeRenovacao(aviso).titulo).toContain("11 de outubro");
+    const mensagem = mensagemDeRenovacao(aviso);
+    // Dias no título, porque "vence em 5 dias" se entende sem fazer conta; a
+    // data completa fica no detalhe, para quem quiser marcar.
+    expect(mensagem.titulo).toBe("Seu Plantão vence em 5 dias");
+    expect(mensagem.detalhe).toContain("11 de outubro");
+    expect(mensagem.acao).toBe("Renovar agora");
   });
 
   it("fala em amanhã na véspera", () => {

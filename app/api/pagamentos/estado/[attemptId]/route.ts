@@ -130,15 +130,31 @@ export async function GET(
   // quer ler depois de pagar, e ela precisa vir do servidor: o cliente não tem
   // como saber onde o ciclo terminou — quem renovou antes do vencimento ganhou
   // dias encadeados, quem pagou na carência não ganhou nenhum.
-  const liberadoAte =
-    status === "APPROVED" && tentativa.kind === "SUBSCRIPTION"
-      ? (
-          await db.subscription.findUnique({
-            where: { userId: viewer.id },
-            select: { currentPeriodEnd: true },
-          })
-        )?.currentPeriodEnd ?? null
-      : null;
+  const aprovadaDeAssinatura =
+    status === "APPROVED" && tentativa.kind === "SUBSCRIPTION";
+
+  const [assinaturaAtual, cobrancaDoCiclo] = aprovadaDeAssinatura
+    ? await Promise.all([
+        db.subscription.findUnique({
+          where: { userId: viewer.id },
+          select: { currentPeriodEnd: true },
+        }),
+        // Qual mês esta cobrança pagou. É o que separa "Pagamento aprovado" de
+        // "Renovação concluída" — e o cliente não tem como saber, porque uma
+        // renovação antecipada é indistinguível de uma estreia do lado dele.
+        db.payment.findFirst({
+          where: {
+            attemptId: tentativa.id,
+            cycleIndex: { not: null },
+            status: "APPROVED",
+          },
+          orderBy: { cycleIndex: "desc" },
+          select: { cycleIndex: true },
+        }),
+      ])
+    : [null, null];
+
+  const liberadoAte = assinaturaAtual?.currentPeriodEnd ?? null;
 
   return NextResponse.json(
     {
@@ -157,6 +173,7 @@ export async function GET(
       pixQrCodeBase64: tentativa.pixQrCodeBase64,
       expiraEm: tentativa.expiresAt?.toISOString() ?? null,
       liberadoAte: liberadoAte?.toISOString() ?? null,
+      ciclo: cobrancaDoCiclo?.cycleIndex ?? null,
       mensagem: tentativa.failureMessage,
       motivoCru: tentativa.rawStatus,
     },

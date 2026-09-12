@@ -92,15 +92,28 @@ export default async function PagamentoPage({
   // qualquer estado final. Sem buscar a data aqui, essa pessoa leria a frase
   // genérica em vez de "liberado até 11 de outubro", que é a única coisa que
   // ela abriu o aplicativo para saber.
-  const liberadoAte =
-    tentativa.status === "APPROVED" && tentativa.kind === "SUBSCRIPTION"
-      ? (
-          await db.subscription.findUnique({
-            where: { userId: viewer.id },
-            select: { currentPeriodEnd: true },
-          })
-        )?.currentPeriodEnd ?? null
-      : null;
+  const aprovadaDeAssinatura =
+    tentativa.status === "APPROVED" && tentativa.kind === "SUBSCRIPTION";
+
+  const [assinaturaAtual, cobrancaDoCiclo] = aprovadaDeAssinatura
+    ? await Promise.all([
+        db.subscription.findUnique({
+          where: { userId: viewer.id },
+          select: { currentPeriodEnd: true },
+        }),
+        db.payment.findFirst({
+          where: {
+            attemptId: tentativa.id,
+            cycleIndex: { not: null },
+            status: "APPROVED",
+          },
+          orderBy: { cycleIndex: "desc" },
+          select: { cycleIndex: true },
+        }),
+      ])
+    : [null, null];
+
+  const liberadoAte = assinaturaAtual?.currentPeriodEnd ?? null;
 
   const novela = tentativa.novelaId
     ? await db.novela.findUnique({
@@ -137,6 +150,7 @@ export default async function PagamentoPage({
         pixQrCodeBase64: tentativa.pixQrCodeBase64,
         expiraEm: tentativa.expiresAt?.toISOString() ?? null,
         liberadoAte: liberadoAte?.toISOString() ?? null,
+        ciclo: cobrancaDoCiclo?.cycleIndex ?? null,
         mensagem: tentativa.failureMessage,
         motivoCru: tentativa.rawStatus,
       }}

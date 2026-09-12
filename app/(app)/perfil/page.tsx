@@ -35,7 +35,15 @@ export default async function PerfilPage() {
   // Quem renova à mão é lembrado aqui, e só aqui dentro do perfil: a Home é
   // para assistir. O aviso some sozinho quando não há nada a fazer.
   const renovacao = situacaoDaRenovacao(assinatura);
-  const mensagem = renovacao.aviso ? mensagemDeRenovacao(renovacao.aviso) : null;
+  // "Seu Plantão terminou" é um aviso, não um estado permanente do perfil.
+  // Passado um mês, lembrar toda vez que ela abre o perfil vira insistência —
+  // a tela de assinatura continua contando a história para quem for ver.
+  const avisoVigente =
+    renovacao.aviso &&
+    !(renovacao.aviso.momento === "encerrado" && renovacao.aviso.diasParaVencer < -30)
+      ? renovacao.aviso
+      : null;
+  const mensagem = avisoVigente ? mensagemDeRenovacao(avisoVigente) : null;
 
   const atalhos = [
     {
@@ -89,11 +97,11 @@ export default async function PerfilPage() {
         </div>
       </header>
 
-      {mensagem && renovacao.aviso ? (
+      {mensagem && avisoVigente ? (
         <div className="px-5 pb-5">
           <FaixaDeRenovacao
             compacta
-            momento={renovacao.aviso.momento}
+            momento={avisoVigente.momento}
             titulo={mensagem.titulo}
             detalhe={mensagem.detalhe}
             acao={mensagem.acao}

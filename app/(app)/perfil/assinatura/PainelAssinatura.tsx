@@ -111,6 +111,12 @@ export function PainelAssinatura({
   const [cancelando, setCancelando] = useState(false);
   const [confirmando, setConfirmando] = useState(false);
 
+  // Pix que venceu e passou da carência: o plano no banco já voltou a FREE,
+  // mas para ela o que aconteceu tem nome — "seu Plantão terminou" — e o
+  // cartão da tela precisa dizer isso em vez de fingir que nunca houve plano.
+  const encerrado = manual && aviso?.momento === "encerrado";
+  const emDia = manual && (!aviso || aviso.momento === "em-dia");
+
   async function cancelar() {
     // Dois cliques rápidos viravam duas chamadas ao Mercado Pago — foi
     // observado em produção, com dois `x-request-id` distintos a 32 segundos
@@ -164,9 +170,30 @@ export function PainelAssinatura({
         }}
       >
         <p className="eyebrow">{premium ? "Seu plano" : "Plano atual"}</p>
-        <h2 className="mt-0.5 text-[1.375rem] leading-tight">{planoNome}</h2>
+        {/* Quem assinava por Pix continua vendo o nome do plano que teve, e
+            não "Gratuito": o contexto é o que dá sentido à faixa logo abaixo. */}
+        <h2 className="mt-0.5 text-[1.375rem] leading-tight">
+          {manual ? "Plantão Mensal" : planoNome}
+        </h2>
 
-        {premium && renovaEm ? (
+        {/* Terminado, a faixa abaixo já diz tudo: acabou, e o que continua
+            dela. Repetir aqui seria a mesma frase duas vezes. */}
+        {encerrado ? null : manual && renovaEm ? (
+          // Renovação à mão cabe em três linhas curtas, e não na grade de duas
+          // colunas do cartão: aqui não há "próximo vencimento" — há uma data
+          // até quando vale e a certeza de que nada será cobrado sozinho.
+          <div className="mt-2.5">
+            <p className="text-[0.9375rem] font-semibold text-cream-50">
+              Ativo até {formatDate(renovaEm)}
+            </p>
+            <p className="mt-1 text-[0.8125rem] text-cream-400">
+              Renovação: Pix
+            </p>
+            <p className="mt-0.5 text-[0.75rem] text-cream-600">
+              Você renova quando quiser.
+            </p>
+          </div>
+        ) : premium && renovaEm ? (
           // Duas linhas rotuladas, e não um parágrafo: "como renova" e "até
           // quando" são as duas perguntas que trazem alguém a esta tela, e ler
           // um texto corrido para achá-las é trabalho desnecessário.
@@ -221,7 +248,10 @@ export function PainelAssinatura({
             <FaixaDeRenovacao
               compacta
               mostrarEmDia
-              momento={aviso?.momento ?? "vencendo"}
+              // Em dia, as linhas acima já disseram "Ativo até" e "Você renova
+              // quando quiser": sobra só o botão.
+              apenasAcao={emDia}
+              momento={aviso?.momento ?? "em-dia"}
               titulo={aviso?.titulo ?? "Renove quando quiser"}
               detalhe={
                 aviso?.detalhe ??

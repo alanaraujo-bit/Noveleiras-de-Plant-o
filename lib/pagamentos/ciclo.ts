@@ -164,14 +164,15 @@ export function mensagemDeRenovacao(aviso: AvisoDeRenovacao): {
     case "encerrado":
       return {
         titulo: "Seu Plantão terminou",
-        detalhe:
-          "As novelas que você comprou continuam suas. Para voltar ao catálogo inteiro, é só renovar.",
-        acao: "Renovar com Pix",
+        // As novelas compradas avulso continuam dela, e dizer isso aqui evita
+        // o susto de achar que perdeu tudo.
+        detalhe: "As novelas que você comprou continuam suas.",
+        acao: "Voltar ao Plantão",
       };
     case "carencia":
       return {
         titulo: "Seu Plantão venceu",
-        detalhe: `Você ainda pode renovar até ${dataPorExtenso(aviso.renovarAte)} sem perder o acesso.`,
+        detalhe: `Renove até ${dataPorExtenso(aviso.renovarAte)} para continuar assistindo sem interrupção.`,
         acao: "Renovar com Pix",
       };
     case "ultimo-dia":
@@ -184,16 +185,19 @@ export function mensagemDeRenovacao(aviso: AvisoDeRenovacao): {
         acao: "Renovar agora",
       };
     case "vencendo":
+      // Dias, e não data, porque "vence em 5 dias" se entende sem fazer conta
+      // — "vence em 11 de outubro" exige saber que dia é hoje. A data completa
+      // fica no detalhe, para quem quiser marcar.
       return {
-        titulo: `Seu Plantão vence em ${dataPorExtenso(aviso.vence)}`,
-        detalhe: `Faltam ${aviso.diasParaVencer} dias. Dá para renovar quando quiser — o tempo que sobrar não se perde.`,
+        titulo: `Seu Plantão vence em ${aviso.diasParaVencer} dias`,
+        detalhe: `Vale até ${dataPorExtenso(aviso.vence)}. O tempo que ainda falta não se perde ao renovar.`,
         acao: "Renovar agora",
       };
     default:
       return {
-        titulo: `Seu Plantão vale até ${dataPorExtenso(aviso.vence)}`,
-        detalhe: "Está tudo certo por aqui.",
-        acao: "Renovar agora",
+        titulo: `Ativo até ${dataPorExtenso(aviso.vence)}`,
+        detalhe: "Você renova quando quiser.",
+        acao: "Renovar com Pix",
       };
   }
 }

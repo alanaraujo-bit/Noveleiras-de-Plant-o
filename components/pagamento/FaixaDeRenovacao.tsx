@@ -35,6 +35,7 @@ export function FaixaDeRenovacao({
   acao,
   compacta = false,
   mostrarEmDia = false,
+  apenasAcao = false,
 }: {
   momento: Momento;
   titulo: string;
@@ -50,6 +51,15 @@ export function FaixaDeRenovacao({
    * da visita. Em qualquer outro lugar, aviso sem urgência é ruído.
    */
   mostrarEmDia?: boolean;
+  /**
+   * Só o botão, sem título nem texto.
+   *
+   * Para quando o contexto em volta já disse tudo — a tela de assinatura, com
+   * o plano em dia, já mostra "Ativo até" e "Você renova quando quiser".
+   * Repetir as mesmas frases numa caixa logo abaixo é informação por
+   * informação.
+   */
+  apenasAcao?: boolean;
 }) {
   const router = useRouter();
   const { show } = useToast();
@@ -65,6 +75,18 @@ export function FaixaDeRenovacao({
 
   async function renovar() {
     if (abrindo) return;
+
+    // Quem já terminou volta pela escolha, não direto ao Pix. Ela pode muito
+    // bem preferir o cartão desta vez, e criar uma cobrança sem perguntar
+    // decide por ela — que é justamente o que a etapa de escolha existe para
+    // não fazer. Dentro da carência é diferente: o plano dela **é** Pix, e o
+    // botão diz "Renovar com Pix".
+    if (momento === "encerrado") {
+      track("PAYWALL_CTA", { payload: { origem: "aviso-renovacao", momento } });
+      router.push("/planos");
+      return;
+    }
+
     setAbrindo(true);
     track("PAYWALL_CTA", { payload: { origem: "aviso-renovacao", momento } });
 
@@ -91,6 +113,20 @@ export function FaixaDeRenovacao({
       show("Sem conexão com o servidor.", "ruim");
       setAbrindo(false);
     }
+  }
+
+  if (apenasAcao) {
+    return (
+      <Botao
+        largura="cheia"
+        tamanho="grande"
+        variante="principal"
+        disabled={abrindo}
+        onClick={renovar}
+      >
+        {abrindo ? "Preparando o Pix…" : acao}
+      </Botao>
+    );
   }
 
   return (

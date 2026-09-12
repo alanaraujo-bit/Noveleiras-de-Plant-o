@@ -27,6 +27,25 @@ export type SituacaoDaRenovacao = {
   aviso: AvisoDeRenovacao | null;
 };
 
+/**
+ * A expiração devolve o plano para FREE, e é assim que tem de ser — quem não
+ * pagou não é assinante. Mas `billingMode` **sobrevive** ao corte, e é ele que
+ * distingue "nunca assinou" de "assinava por Pix e deixou vencer".
+ *
+ * A diferença não é técnica, é de tom: para a primeira, a tela convida a
+ * conhecer o plano; para a segunda, ela reconhece o que aconteceu e diz o que
+ * continua sendo dela.
+ */
+function terminouRenovandoAMao(
+  assinatura: Pick<Subscription, "status" | "billingMode" | "currentPeriodEnd">,
+): boolean {
+  return (
+    assinatura.status === "EXPIRED" &&
+    assinatura.billingMode === "MANUAL_RENEW" &&
+    assinatura.currentPeriodEnd !== null
+  );
+}
+
 const PLANOS_PAGOS = new Set(["MONTHLY", "ANNUAL", "PREMIUM", "VIP"]);
 
 export function situacaoDaRenovacao(
@@ -50,7 +69,25 @@ export function situacaoDaRenovacao(
     aviso: null,
   };
 
-  if (!assinatura || !PLANOS_PAGOS.has(assinatura.plan)) return vazio;
+  if (!assinatura) return vazio;
+
+  // Plano já encerrado, mas era Pix: o aviso continua valendo, agora com o tom
+  // de quem terminou — e o acesso não volta sozinho.
+  if (terminouRenovandoAMao(assinatura)) {
+    const vence = assinatura.currentPeriodEnd!;
+    const renovarAte =
+      assinatura.graceUntil ?? fimDaCarencia(vence, CARENCIA_MANUAL_MS);
+    return {
+      temPlano: false,
+      manual: true,
+      vence,
+      renovarAte,
+      cancelada: false,
+      aviso: avisoDeRenovacao(vence, renovarAte, agora),
+    };
+  }
+
+  if (!PLANOS_PAGOS.has(assinatura.plan)) return vazio;
 
   const manual = assinatura.billingMode === "MANUAL_RENEW";
   const vence = assinatura.currentPeriodEnd;

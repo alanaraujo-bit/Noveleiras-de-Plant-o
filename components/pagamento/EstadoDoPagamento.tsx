@@ -49,6 +49,11 @@ type Cobranca = {
    * não tem como saber em qual dos dois casos está.
    */
   liberadoAte?: string | null;
+  /**
+   * Qual mês esta cobrança pagou. 1 é a primeira assinatura; 2 ou mais é
+   * renovação, e a tela fala diferente nos dois casos.
+   */
+  ciclo?: number | null;
   mensagem: string | null;
   /**
    * Como o provedor descreveu o estado, cru.
@@ -99,6 +104,7 @@ export function EstadoDoPagamento({
   const [cobranca, setCobranca] = useState<Cobranca>(inicial);
   const [copiado, setCopiado] = useState(false);
   const [gerando, setGerando] = useState(false);
+  const [mostrarQr, setMostrarQr] = useState(false);
   const tentativas = useRef(0);
   const avisado = useRef(false);
 
@@ -107,6 +113,12 @@ export function EstadoDoPagamento({
   // compra avulsa o caminho volta pela página da novela.
   const mensalPorPix =
     cobranca.tipo === "SUBSCRIPTION" && cobranca.renovacao === "MANUAL_RENEW";
+
+  // Segundo mês ou além. O número do ciclo vem do servidor porque só ele sabe:
+  // o cliente não tem como distinguir uma primeira assinatura de uma renovação
+  // antecipada que encadeou dias.
+  const renovacaoConcluida =
+    cobranca.tipo === "SUBSCRIPTION" && (cobranca.ciclo ?? 1) > 1;
 
   async function gerarNovoPix() {
     if (gerando) return;
@@ -208,19 +220,30 @@ export function EstadoDoPagamento({
           <IconeCheck tamanho={30} />
         </motion.div>
 
-        <h1 className="mt-5 text-[1.5rem] leading-tight">Pagamento aprovado</h1>
-        <p className="mt-2 text-[0.875rem] text-cream-400">
+        {/* Renovação e primeira assinatura merecem frases diferentes: quem
+            renovou antes do vencimento precisa ver que **ganhou** tempo, não
+            que recomeçou. O "agora" e a data nova fazem esse trabalho. */}
+        <h1 className="mt-5 text-[1.5rem] leading-tight">
+          {renovacaoConcluida ? "Renovação concluída" : "Pagamento aprovado"}
+        </h1>
+        <p className="mt-2 text-[0.875rem] leading-snug text-cream-400">
           {cobranca.tipo === "PURCHASE"
             ? `${nomeDoItem} é sua para sempre. Todos os episódios liberados, inclusive os que entrarem depois.`
             : cobranca.liberadoAte
               ? // A data é a informação, não um detalhe: é ela que responde
                 // "e agora, quanto tempo eu tenho?" antes de a pessoa
                 // precisar perguntar.
-                `Seu Plantão está liberado até ${porExtenso(cobranca.liberadoAte)}. O catálogo inteiro é seu.`
+                renovacaoConcluida
+                ? `Seu Plantão agora está liberado até ${porExtenso(cobranca.liberadoAte)}.`
+                : `Seu Plantão está liberado até ${porExtenso(cobranca.liberadoAte)}.`
               : `${nomeDoItem} ativo. O catálogo inteiro está liberado.`}
         </p>
 
-        {mensalPorPix ? (
+        {renovacaoConcluida ? (
+          <p className="mt-2 text-[0.75rem] leading-relaxed text-cream-600">
+            Os dias que ainda faltavam entraram no novo mês — nada se perdeu.
+          </p>
+        ) : mensalPorPix ? (
           <p className="mt-2 text-[0.75rem] leading-relaxed text-cream-600">
             Nada será cobrado de novo sozinho. Perto do vencimento a gente
             avisa, e renovar é um toque.
@@ -228,7 +251,7 @@ export function EstadoDoPagamento({
         ) : null}
 
         <BotaoLink href={destino} tamanho="grande" largura="cheia" className="mt-7">
-          Continuar assistindo
+          Começar a assistir
         </BotaoLink>
       </Moldura>
     );
@@ -287,7 +310,7 @@ export function EstadoDoPagamento({
           </div>
           <h1 className="mt-5 text-[1.5rem] leading-tight">Esse Pix expirou</h1>
           <p className="mt-2 text-[0.875rem] text-cream-400">
-            Nada foi cobrado. É só gerar outro — leva um instante.
+            Gere um novo código para continuar. Nada foi cobrado.
           </p>
           <Botao
             tamanho="grande"
@@ -345,7 +368,155 @@ export function EstadoDoPagamento({
     );
   }
 
-  // Pendente.
+  // ------------------------------------------------------- Pix pendente
+  //
+  // A tela mais importante desta fase, e a ordem dos elementos é o desenho:
+  //
+  // 1. **Copiar é a ação principal.** No celular — que é onde o produto vive —
+  //    ninguém escaneia com a câmera o QR que está na própria tela. Deixar o
+  //    QR grande no topo era mandar a pessoa resolver um problema que ela não
+  //    tem como resolver naquele aparelho.
+  // 2. **Os três passos**, curtos, porque "Copia e Cola" não é óbvio para
+  //    quem não usa Pix toda semana.
+  // 3. **A confirmação é automática, e isso é dito.** Sem essa frase, o botão
+  //    de conferir parece obrigatório — e quem fecha o aplicativo acha que
+  //    perdeu o pagamento.
+  // 4. **O QR continua ali**, recolhido no celular (serve para pagar em outro
+  //    aparelho) e aberto no desktop, onde é o caminho natural.
+  if (cobranca.pixQrCode) {
+    return (
+      <Moldura larga>
+        <p className="eyebrow">{nomeDoItem}</p>
+        <h1 className="mt-0.5 text-[1.5rem] leading-tight">Pix gerado</h1>
+        <p className="mt-3 text-[2rem] font-bold leading-none tracking-tight text-cream-50">
+          {reais(cobranca.valorCents)}
+        </p>
+        <p className="mt-2.5 text-[0.875rem] leading-snug text-cream-400">
+          Assim que você pagar, seu Plantão será liberado automaticamente.
+        </p>
+
+        {/* Ação principal. */}
+        <Botao
+          largura="cheia"
+          tamanho="grande"
+          variante={copiado ? "secundario" : "principal"}
+          className="mt-6"
+          onClick={copiarPix}
+        >
+          {copiado ? "Código Pix copiado ✓" : "Copiar código Pix"}
+        </Botao>
+
+        {/* `aria-live`: quem usa leitor de tela precisa ouvir que copiou, e
+            o texto muda no mesmo lugar em vez de abrir um aviso por cima. */}
+        <p
+          aria-live="polite"
+          className="mt-2 min-h-[1.25rem] text-[0.8125rem] font-medium text-jade-400"
+        >
+          {copiado ? "Agora é só colar no app do seu banco." : ""}
+        </p>
+
+        <ol className="mt-3 w-full space-y-1.5 text-left">
+          {[
+            "Abra o app do seu banco",
+            "Escolha Pix › Copia e Cola",
+            "Cole o código e confirme",
+          ].map((passo, indice) => (
+            <li
+              key={passo}
+              className="flex items-center gap-2.5 text-[0.8125rem] text-cream-300"
+            >
+              <span className="grid size-5 shrink-0 place-items-center rounded-full bg-white/8 text-[0.6875rem] font-semibold text-cream-400">
+                {indice + 1}
+              </span>
+              {passo}
+            </li>
+          ))}
+        </ol>
+
+        {/* Estado do pagamento, dito sem alarme. */}
+        <div className="mt-5 flex w-full items-start gap-2.5 rounded-2xl border border-white/8 bg-white/[0.02] p-3.5 text-left">
+          <motion.span
+            aria-hidden
+            animate={{ opacity: [0.3, 1, 0.3] }}
+            transition={{ duration: 1.8, repeat: Infinity, ease: "easeInOut" }}
+            className="mt-1.5 block size-2 shrink-0 rounded-full bg-jade-400"
+          />
+          <span>
+            <span className="block text-[0.8125rem] font-semibold text-cream-100">
+              Aguardando pagamento
+            </span>
+            <span className="mt-0.5 block text-[0.75rem] leading-snug text-cream-500">
+              A confirmação é automática. Você pode fechar o aplicativo — o
+              acesso é liberado do mesmo jeito.
+            </span>
+          </span>
+        </div>
+
+        {/* QR: escondido no celular até ser pedido, aberto no desktop. Sem
+            detectar largura em JavaScript — o servidor não sabe o tamanho da
+            tela, e adivinhar daria uma pintura errada no primeiro quadro. */}
+        {cobranca.pixQrCodeBase64 ? (
+          <>
+            <button
+              type="button"
+              aria-expanded={mostrarQr}
+              onClick={() => setMostrarQr((v) => !v)}
+              className="tap mt-4 text-[0.8125rem] text-cream-400 underline underline-offset-4 md:hidden"
+            >
+              {mostrarQr ? "Esconder QR Code" : "Pagar em outro aparelho"}
+            </button>
+
+            <div
+              className={`${mostrarQr ? "block" : "hidden"} w-full md:block`}
+            >
+              <div className="mx-auto mt-4 w-fit rounded-3xl bg-white p-3">
+                {/* `img` cru, e não `next/image`: é um data URI que já está na
+                    memória. Passá-lo pelo otimizador seria trabalho para não
+                    mudar um pixel. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={`data:image/png;base64,${cobranca.pixQrCodeBase64}`}
+                  alt="QR Code para pagar com Pix"
+                  width={200}
+                  height={200}
+                  className="block size-[200px]"
+                />
+              </div>
+              <p className="mt-2 text-[0.75rem] text-cream-600">
+                Aponte a câmera de outro aparelho para este código.
+              </p>
+            </div>
+          </>
+        ) : null}
+
+        <details className="mt-4 w-full text-left">
+          <summary className="tap cursor-pointer list-none text-center text-[0.75rem] text-cream-600 underline underline-offset-4">
+            Ver o código escrito
+          </summary>
+          <p className="mt-2 break-all rounded-xl border border-white/10 bg-black/25 p-3 font-mono text-[0.6875rem] leading-relaxed text-cream-400">
+            {cobranca.pixQrCode}
+          </p>
+        </details>
+
+        {cobranca.expiraEm ? (
+          <p className="mt-4 text-[0.75rem] text-cream-600">
+            Este código vale até {horaCurta(cobranca.expiraEm)}.
+          </p>
+        ) : null}
+
+        {/* Reserva, e parece uma: a confirmação já acontece sozinha. */}
+        <button
+          type="button"
+          onClick={() => void consultar()}
+          className="tap mt-4 text-[0.75rem] text-cream-600 underline underline-offset-4"
+        >
+          Já paguei — conferir agora
+        </button>
+      </Moldura>
+    );
+  }
+
+  // Pendente sem Pix: cartão, ou cobrança em análise.
   return (
     <Moldura>
       <motion.div
@@ -356,70 +527,18 @@ export function EstadoDoPagamento({
         ◷
       </motion.div>
 
-      <h1 className="mt-5 text-[1.5rem] leading-tight">
-        {cobranca.pixQrCode ? "Esperando o Pix" : "Confirmando o pagamento"}
-      </h1>
+      <h1 className="mt-5 text-[1.5rem] leading-tight">Aguardando pagamento</h1>
       <p className="mt-2 text-[0.875rem] text-cream-400">
-        {cobranca.pixQrCode
-          ? `Pague ${reais(cobranca.valorCents)} no aplicativo do seu banco. Esta tela vira sozinha quando o pagamento cair.`
-          : "Assim que o provedor confirmar, o acesso é liberado automaticamente. Pode deixar esta tela aberta."}
+        A confirmação é automática: assim que o pagamento cair, o acesso é
+        liberado. Você pode fechar o aplicativo.
       </p>
-
-      {cobranca.pixQrCode ? (
-        <div className="mt-6 w-full">
-          {/* O QR primeiro: quem paga em outro aparelho aponta a câmera e
-              pronto. Quem paga no mesmo celular usa o botão de copiar logo
-              abaixo — os dois caminhos à vista, nenhum escondido numa aba. */}
-          {cobranca.pixQrCodeBase64 ? (
-            <div className="mx-auto w-fit rounded-3xl bg-white p-3">
-              {/* `img` cru, e não `next/image`: é um data URI que já está na
-                  memória. Passá-lo pelo otimizador seria trabalho para não
-                  mudar um pixel. */}
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={`data:image/png;base64,${cobranca.pixQrCodeBase64}`}
-                alt="QR Code para pagar com Pix"
-                width={188}
-                height={188}
-                className="block size-[188px]"
-              />
-            </div>
-          ) : null}
-
-          <Botao
-            largura="cheia"
-            tamanho="grande"
-            variante={copiado ? "secundario" : "principal"}
-            className="mt-4"
-            onClick={copiarPix}
-          >
-            {copiado ? "Código copiado ✓" : "Copiar código Pix"}
-          </Botao>
-
-          <details className="mt-3 text-left">
-            <summary className="tap cursor-pointer list-none text-center text-[0.75rem] text-cream-600 underline underline-offset-4">
-              Ver o código
-            </summary>
-            <p className="mt-2 break-all rounded-xl border border-white/10 bg-black/25 p-3 font-mono text-[0.6875rem] leading-relaxed text-cream-400">
-              {cobranca.pixQrCode}
-            </p>
-          </details>
-
-          {cobranca.expiraEm ? (
-            <p className="mt-3 text-center text-[0.75rem] text-cream-600">
-              Esse código vale até {horaCurta(cobranca.expiraEm)}. Depois disso
-              é só gerar outro.
-            </p>
-          ) : null}
-        </div>
-      ) : null}
 
       {cobranca.checkoutUrl ? (
         <BotaoLink
           href={cobranca.checkoutUrl}
           tamanho="grande"
           largura="cheia"
-          className="mt-4"
+          className="mt-6"
         >
           Abrir o pagamento
         </BotaoLink>
@@ -428,21 +547,32 @@ export function EstadoDoPagamento({
       <button
         type="button"
         onClick={() => void consultar()}
-        className="tap mt-5 text-[0.8125rem] text-rose-300 underline underline-offset-4"
+        className="tap mt-5 text-[0.75rem] text-cream-600 underline underline-offset-4"
       >
-        Já paguei, conferir agora
+        Já paguei — conferir agora
       </button>
     </Moldura>
   );
 }
 
-function Moldura({ children }: { children: React.ReactNode }) {
+function Moldura({
+  children,
+  larga = false,
+}: {
+  children: React.ReactNode;
+  /** A tela do Pix respira mais no desktop, onde o QR ganha protagonismo. */
+  larga?: boolean;
+}) {
   return (
     <div
-      className="flex min-h-dvh flex-col items-center justify-center px-6 text-center"
+      className="flex min-h-dvh flex-col items-center justify-center px-6 py-10 text-center"
       style={{ paddingTop: "var(--safe-t)", paddingBottom: "var(--safe-b)" }}
     >
-      <div className="w-full max-w-sm flex flex-col items-center">{children}</div>
+      <div
+        className={`flex w-full flex-col items-center ${larga ? "max-w-sm md:max-w-md" : "max-w-sm"}`}
+      >
+        {children}
+      </div>
     </div>
   );
 }

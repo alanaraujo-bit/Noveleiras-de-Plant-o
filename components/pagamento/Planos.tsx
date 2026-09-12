@@ -229,7 +229,12 @@ export function Planos({
                     ? "Renovar o mensal"
                     : atual.premium
                       ? `Trocar para o ${anual ? "anual" : "mensal"}`
-                      : `Assinar ${anual ? "anual" : "mensal"}`}
+                      : anual
+                        ? "Assinar anual"
+                        : // O mensal não assina no toque: ele abre a escolha de
+                          // como pagar. O rótulo promete o passo seguinte em vez
+                          // de sugerir que a cobrança já vai nascer.
+                          "Escolher forma de pagamento"}
               </Botao>
             </motion.li>
           );
