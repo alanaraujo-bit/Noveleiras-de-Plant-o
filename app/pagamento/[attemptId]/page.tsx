@@ -4,9 +4,30 @@ import { EstadoDoPagamento } from "@/components/pagamento/EstadoDoPagamento";
 import { getViewer } from "@/lib/auth/session";
 import { db } from "@/lib/db";
 import { planoPorCodigo } from "@/lib/pagamentos/planos";
+import { reconciliarPagamento } from "@/lib/pagamentos/servico";
 
 export const metadata = { title: "Pagamento" };
 export const dynamic = "force-dynamic";
+
+/** Um lugar só: a tentativa é relida depois da reconciliação. */
+const SELECAO = {
+  id: true,
+  userId: true,
+  status: true,
+  kind: true,
+  plan: true,
+  billingMode: true,
+  amountCents: true,
+  method: true,
+  checkoutUrl: true,
+  pixQrCode: true,
+  pixQrCodeBase64: true,
+  expiresAt: true,
+  failureMessage: true,
+  rawStatus: true,
+  externalId: true,
+  novelaId: true,
+} as const;
 
 /**
  * Acompanhamento de uma cobrança.
@@ -29,28 +50,57 @@ export default async function PagamentoPage({
   const { attemptId } = await params;
   const { destino } = await searchParams;
 
-  const tentativa = await db.paymentAttempt.findUnique({
+  let tentativa = await db.paymentAttempt.findUnique({
     where: { id: attemptId },
-    select: {
-      id: true,
-      userId: true,
-      status: true,
-      kind: true,
-      plan: true,
-      billingMode: true,
-      amountCents: true,
-      method: true,
-      checkoutUrl: true,
-      pixQrCode: true,
-      pixQrCodeBase64: true,
-      expiresAt: true,
-      failureMessage: true,
-      rawStatus: true,
-      novelaId: true,
-    },
+    select: SELECAO,
   });
 
   if (!tentativa || tentativa.userId !== viewer.id) notFound();
+
+  // Cobrança Pix sem desfecho: reconsulta antes de pintar qualquer coisa.
+  //
+  // O caso que obriga isto é o Pix pago na virada do prazo: a nossa linha já
+  // está EXPIRED e a aprovação existe do lado deles. Sem a releitura, quem
+  // acabou de pagar abre o aplicativo e lê "esse Pix expirou", com um botão
+  // oferecendo gerar outro — ou seja, pagar duas vezes. A varredura do cron
+  // conserta, mas só de madrugada, e é agora que ela está olhando.
+  //
+  // A tela do cliente não resolve isto sozinha: ela para de consultar em
+  // qualquer estado final, e quem fechou o aplicativo volta por uma pintura
+  // nova, não por um `setTimeout`.
+  if (
+    tentativa.kind === "SUBSCRIPTION" &&
+    tentativa.billingMode === "MANUAL_RENEW" &&
+    tentativa.externalId &&
+    ["CREATED", "PENDING", "EXPIRED"].includes(tentativa.status)
+  ) {
+    try {
+      await reconciliarPagamento(tentativa.externalId);
+      tentativa = (await db.paymentAttempt.findUnique({
+        where: { id: attemptId },
+        select: SELECAO,
+      }))!;
+    } catch (erro) {
+      // Provedor fora do ar não pode derrubar a tela: o webhook ainda chega,
+      // a consulta periódica da tela tenta de novo e o cron fecha a conta.
+      console.error("[pagamento] reconciliação falhou", erro);
+    }
+  }
+
+  // Quando a cobrança já está aprovada na primeira pintura — quem volta depois
+  // de pagar —, a tela não consulta mais nada: ela para de perguntar em
+  // qualquer estado final. Sem buscar a data aqui, essa pessoa leria a frase
+  // genérica em vez de "liberado até 11 de outubro", que é a única coisa que
+  // ela abriu o aplicativo para saber.
+  const liberadoAte =
+    tentativa.status === "APPROVED" && tentativa.kind === "SUBSCRIPTION"
+      ? (
+          await db.subscription.findUnique({
+            where: { userId: viewer.id },
+            select: { currentPeriodEnd: true },
+          })
+        )?.currentPeriodEnd ?? null
+      : null;
 
   const novela = tentativa.novelaId
     ? await db.novela.findUnique({
@@ -86,9 +136,7 @@ export default async function PagamentoPage({
         pixQrCode: tentativa.pixQrCode,
         pixQrCodeBase64: tentativa.pixQrCodeBase64,
         expiraEm: tentativa.expiresAt?.toISOString() ?? null,
-        // Na primeira pintura ainda não há nada aprovado a anunciar; a tela
-        // consulta o servidor e recebe a data junto com a aprovação.
-        liberadoAte: null,
+        liberadoAte: liberadoAte?.toISOString() ?? null,
         mensagem: tentativa.failureMessage,
         motivoCru: tentativa.rawStatus,
       }}

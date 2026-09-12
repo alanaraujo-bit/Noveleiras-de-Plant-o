@@ -38,6 +38,8 @@ export type EstadoAtual = {
   planoNome: string;
   renovaEm: string | null;
   cancelado: boolean;
+  /** Renova à mão: nada será cobrado sozinho quando a data chegar. */
+  manual: boolean;
 };
 
 function reais(cents: number): string {
@@ -130,11 +132,15 @@ export function Planos({
             {atual.planoNome} ativo
           </p>
           <p className="mt-1 text-[0.8125rem] text-cream-400">
+            {/* "Renova em" seria promessa falsa para quem paga por Pix:
+                ninguém vai cobrar nada quando a data chegar. */}
             {atual.cancelado
               ? `Cancelado. Você assiste até ${formatarData(atual.renovaEm)}.`
-              : atual.renovaEm
-                ? `Renova em ${formatarData(atual.renovaEm)}.`
-                : "Catálogo inteiro liberado."}
+              : !atual.renovaEm
+                ? "Catálogo inteiro liberado."
+                : atual.manual
+                  ? `Vale até ${formatarData(atual.renovaEm)}.`
+                  : `Renova em ${formatarData(atual.renovaEm)}.`}
           </p>
         </div>
       ) : null}
@@ -216,9 +222,14 @@ export function Planos({
               >
                 {processando === plano.code
                   ? "Abrindo pagamento…"
-                  : atual.premium
-                    ? `Trocar para o ${anual ? "anual" : "mensal"}`
-                    : `Assinar ${anual ? "anual" : "mensal"}`}
+                  : // Quem já está no mensal por Pix não "troca" de plano ao
+                    // tocar no mensal: renova o que já tem, e o mês novo entra
+                    // no fim do atual.
+                    atual.premium && atual.manual && !anual
+                    ? "Renovar o mensal"
+                    : atual.premium
+                      ? `Trocar para o ${anual ? "anual" : "mensal"}`
+                      : `Assinar ${anual ? "anual" : "mensal"}`}
               </Botao>
             </motion.li>
           );

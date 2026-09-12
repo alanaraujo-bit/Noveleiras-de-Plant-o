@@ -40,7 +40,7 @@ export default async function PlanosPage({
   // divergindo da tela de assinatura, que lê a coluna certa.
   const assinatura = await db.subscription.findUnique({
     where: { userId: viewer.id },
-    select: { cancelAtPeriodEnd: true },
+    select: { cancelAtPeriodEnd: true, billingMode: true },
   });
 
   const planos: PlanoNaTela[] = PLANOS_VENDAVEIS.map((p) => ({
@@ -84,6 +84,7 @@ export default async function PlanosPage({
           planoNome: planLabel(viewer.entitlement.plan),
           renovaEm: viewer.entitlement.currentPeriodEnd?.toISOString() ?? null,
           cancelado: assinatura?.cancelAtPeriodEnd ?? false,
+          manual: assinatura?.billingMode === "MANUAL_RENEW",
         }}
       />
     </div>

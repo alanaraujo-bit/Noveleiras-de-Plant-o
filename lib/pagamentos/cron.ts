@@ -35,7 +35,7 @@ export function cronAutorizado(requisicao: Request): boolean {
 
 export type ResultadoDoCron = {
   reconciliacao: ResumoDaReconciliacao | "desligada";
-  pix: ResumoDoPix | "desligada";
+  pix: ResumoDoPix;
   vencimentosManuais: number;
   assinaturas: number;
   direitos: number;
@@ -66,9 +66,14 @@ export async function executarCronDeAssinaturas(opcoes: {
   // O mesmo passo, para quem renova à mão. Vem junto do primeiro e pelo mesmo
   // motivo: a assinatura por Pix não tem preapproval e ficaria fora da
   // varredura acima — e é justamente ela que depende de um webhook chegar.
-  const pix = reconciliacaoLigada()
-    ? await reconciliarPixPendentes()
-    : "desligada";
+  //
+  // **Fora de `ASSINATURAS_RECONCILIAR` de propósito.** Aquela variável existe
+  // para conter o custo de reconsultar todas as assinaturas de cartão, que têm
+  // o provedor cobrando sozinho de qualquer jeito. Aqui é diferente: sem esta
+  // passagem, um webhook perdido significa dinheiro recebido e acesso não
+  // concedido, sem nada no sistema que conserte. E é barata — só cobranças
+  // sem desfecho dos últimos dois dias, quase sempre nenhuma.
+  const pix = await reconciliarPixPendentes();
 
   // 2.5. Quem venceu entra em carência **registrada**. Não corta nada: o
   // acesso já está garantido até `graceUntil`, e este passo só grava o fato
@@ -78,7 +83,10 @@ export async function executarCronDeAssinaturas(opcoes: {
   // 3. Só então expirar. Assinatura cuja reconciliação falhou nesta execução
   // fica de fora dela: sem saber o que o provedor diz, cortar pode ser cortar
   // um pagante. A próxima execução decide.
-  const ignorar = reconciliacao === "desligada" ? [] : reconciliacao.falhasIds;
+  const ignorar = [
+    ...(reconciliacao === "desligada" ? [] : reconciliacao.falhasIds),
+    ...pix.falhasIds,
+  ];
 
   // Primeiro as assinaturas, que revogam os direitos ligados a elas; depois a
   // varredura solta, que pega direitos órfãos de compra ou concessão manual.

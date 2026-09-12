@@ -2101,6 +2101,14 @@ export type ResumoDoPix = {
   ciclosNovos: number;
   encerradas: number;
   falhas: number;
+  /**
+   * Assinaturas cuja cobrança não pôde ser lida nesta execução.
+   *
+   * A expiração as pula, pelo mesmo motivo que já pula as falhas do cartão:
+   * sem saber o que o provedor diz, cortar pode ser cortar quem acabou de
+   * pagar. A próxima execução decide.
+   */
+  falhasIds: string[];
 };
 
 /**
@@ -2126,6 +2134,7 @@ export async function reconciliarPixPendentes(
     ciclosNovos: 0,
     encerradas: 0,
     falhas: 0,
+    falhasIds: [],
   };
 
   let cursor: string | undefined;
@@ -2160,6 +2169,14 @@ export async function reconciliarPixPendentes(
         }
       } catch (erro) {
         resumo.falhas += 1;
+        // Tira esta pessoa da expiração desta noite: pode ser justamente a que
+        // pagou, e o provedor é que não respondeu.
+        const dela = await db.subscription.findUnique({
+          where: { userId: t.userId },
+          select: { id: true },
+        });
+        if (dela) resumo.falhasIds.push(dela.id);
+
         await log.error({
           channel: "PAYMENTS",
           message: "Reconciliação de cobrança Pix falhou",
