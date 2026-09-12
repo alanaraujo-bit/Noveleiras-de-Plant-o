@@ -1,8 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { AnimatePresence, motion } from "motion/react";
+import {
+  AnimatePresence,
+  animate,
+  motion,
+  useMotionValue,
+  useReducedMotion,
+  type Transition,
+} from "motion/react";
 
 import { Comentarios } from "@/components/reel/Comentarios";
 import { ConviteConta, PEDIR_CONTA } from "@/components/reel/ConviteConta";
@@ -18,7 +25,9 @@ import {
   registrarDescarte,
   registrarPermanencia,
 } from "@/lib/actions/reel";
+import { layoutDaConversa } from "@/lib/player/enquadramento";
 import { pontoDeExtensao } from "@/lib/player/estado-reel";
+import { medirTopoSeguro, useViewportVisual } from "@/lib/player/teclado";
 import { ouvirAbaReativada } from "@/lib/shell/aba-reativada";
 import type { LaminaReel } from "@/lib/repositories/reel";
 
@@ -51,6 +60,22 @@ const LIMIAR_PERMANENCIA_MS = 1800;
 /** Distância do fim da fila em que a próxima página é pedida. */
 const FOLGA_PARA_CARREGAR = 4;
 
+/**
+ * O movimento da conversa: vídeo e painel juntos.
+ *
+ * Mola criticamente amortecida — acelera e desacelera como coisa física, sem
+ * quicar. Mola, e não curva de tempo fixo, porque a conversa também abre e
+ * fecha pelo dedo: quando o arrasto solta no meio, a mola herda a velocidade do
+ * gesto e termina o movimento sem tranco.
+ */
+const MOLA_DA_CONVERSA: Transition = {
+  type: "spring",
+  stiffness: 320,
+  damping: 36,
+  mass: 1,
+  restDelta: 0.0005,
+};
+
 type Folha =
   | { tipo: "comentarios"; laminaId: string }
   | { tipo: "enviar"; laminaId: string }
@@ -80,12 +105,23 @@ export function Reel({
   const trilhoRef = useRef<HTMLDivElement>(null);
   const laminasRef = useRef(laminas);
   laminasRef.current = laminas;
+  const ativoRef = useRef(ativo);
+  ativoRef.current = ativo;
+  const folhaRef = useRef(folha);
+  folhaRef.current = folha;
 
   // ------------------------------------------------------ altura travada
-  const [altura, setAltura] = useState<number | null>(null);
+  const [tela, setTela] = useState<{ largura: number; altura: number } | null>(
+    null,
+  );
+  const altura = tela?.altura ?? null;
+  const [topoSeguro, setTopoSeguro] = useState(0);
 
   useEffect(() => {
-    const medir = () => setAltura(window.innerHeight);
+    const medir = () => {
+      setTela({ largura: window.innerWidth, altura: window.innerHeight });
+      setTopoSeguro(medirTopoSeguro());
+    };
     medir();
 
     // Só a largura conta como "mudou de verdade". Uma variação de altura
@@ -368,17 +404,159 @@ export function Reel({
     [],
   );
 
+  // ------------------------------------------------------------ conversa
+  //
+  // Abrir a conversa não é abrir uma tela: é a cena abrir espaço. Um único
+  // valor — `abertura`, de 0 a 1 — move o painel e reenquadra o vídeo ao mesmo
+  // tempo, e é lido direto pelo motion, sem render do React a cada quadro.
+  const abertura = useMotionValue(0);
+  const reduzidoPeloSistema = useReducedMotion();
+  const [reduzidoPeloApp, setReduzidoPeloApp] = useState(false);
+  useEffect(() => {
+    setReduzidoPeloApp(
+      document.documentElement.dataset.movimento === "reduzido",
+    );
+  }, []);
+  const reduzido = Boolean(reduzidoPeloSistema) || reduzidoPeloApp;
+  const transicao: Transition = useMemo(
+    () => (reduzido ? { duration: 0 } : MOLA_DA_CONVERSA),
+    [reduzido],
+  );
+
+  const conversaAberta = folha?.tipo === "comentarios";
+  const viewport = useViewportVisual(conversaAberta);
+
+  // A barra de abas sai de cena com a conversa aberta, pelo mesmo sinal no
+  // elemento raiz que a imersão já usa. Sem isso, no desktop, ela ficaria por
+  // cima da parte de baixo do vídeo reenquadrado.
+  useEffect(() => {
+    if (!conversaAberta) return;
+    const raiz = document.documentElement;
+    raiz.dataset.conversa = "1";
+    return () => {
+      delete raiz.dataset.conversa;
+    };
+  }, [conversaAberta]);
+
+  const layout = useMemo(
+    () =>
+      conversaAberta && tela
+        ? layoutDaConversa({
+            largura: tela.largura,
+            altura: tela.altura,
+            teclado: viewport.teclado,
+            topo: topoSeguro + viewport.deslocamentoTopo,
+          })
+        : null,
+    [conversaAberta, tela, topoSeguro, viewport.deslocamentoTopo, viewport.teclado],
+  );
+
+  /**
+   * Cada abertura e cada fechamento ganha um número. Fechar e reabrir no meio
+   * da animação é comum — dedo rápido, arrependimento —, e o fim de um
+   * fechamento antigo não pode desmontar uma conversa que acabou de reabrir.
+   */
+  const geracaoRef = useRef(0);
+  const focoAnteriorRef = useRef<HTMLElement | null>(null);
+  /** Há texto no campo: a conversa não pode sumir debaixo do que ela escreve. */
+  const rascunhoRef = useRef(false);
+  /** O episódio acabou enquanto ela escrevia; o avanço espera o texto. */
+  const avancoPendenteRef = useRef(false);
+
+  const abrirComentarios = useCallback(
+    (laminaId: string) => {
+      geracaoRef.current += 1;
+      if (!folhaRef.current) {
+        focoAnteriorRef.current = document.activeElement as HTMLElement | null;
+      }
+      setFolha({ tipo: "comentarios", laminaId });
+      void animate(abertura, 1, transicao);
+    },
+    [abertura, transicao],
+  );
+
   // ------------------------------------------------------ fim do episódio
   //
   // Terminar um episódio desliza para o próximo sozinho. É a diferença entre
   // uma fila e uma sequência de vídeos avulsos — e é também o que mantém a
   // narrativa andando sem exigir um gesto a cada capítulo.
-  const avancar = useCallback(() => {
+
+  /**
+   * Salta para a lâmina vizinha, sem rolagem animada.
+   *
+   * Com a conversa aberta o vídeo ocupa só o alto da tela, e uma rolagem
+   * animada de uma lâmina inteira faria a faixa vazia entre duas cenas
+   * atravessar a área do vídeo. O salto troca a cena como um corte de novela:
+   * o próximo episódio já nasce enquadrado acima da conversa.
+   */
+  const irPara = useCallback((sentido: 1 | -1) => {
     const trilho = trilhoRef.current;
     if (!trilho) return;
-    const proximo = trilho.children[ativo + 1] as HTMLElement | undefined;
+    const alvo = trilho.children[ativoRef.current + sentido] as
+      | HTMLElement
+      | undefined;
+    if (!alvo) return;
+    trilho.scrollTo({ top: alvo.offsetTop, behavior: "instant" });
+  }, []);
+
+  const avancar = useCallback(() => {
+    if (folhaRef.current?.tipo === "comentarios") {
+      // Ela está escrevendo sobre este episódio. Trocar agora faria o texto
+      // ir parar na conversa do próximo; o avanço espera.
+      if (rascunhoRef.current) {
+        avancoPendenteRef.current = true;
+        return;
+      }
+      irPara(1);
+      return;
+    }
+    const trilho = trilhoRef.current;
+    if (!trilho) return;
+    const proximo = trilho.children[ativoRef.current + 1] as HTMLElement | undefined;
     proximo?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [ativo]);
+  }, [irPara]);
+
+  const fecharComentarios = useCallback(() => {
+    geracaoRef.current += 1;
+    const geracao = geracaoRef.current;
+    void animate(abertura, 0, transicao).then(() => {
+      if (geracaoRef.current !== geracao) return;
+      setFolha((f) => (f?.tipo === "comentarios" ? null : f));
+      // O foco volta para quem abriu — o botão de comentários —, e não para o
+      // topo do documento. Sem isso, quem navega por teclado recomeçaria a
+      // tela inteira a cada conversa fechada.
+      focoAnteriorRef.current?.focus?.({ preventScroll: true });
+      focoAnteriorRef.current = null;
+      rascunhoRef.current = false;
+      if (avancoPendenteRef.current) {
+        avancoPendenteRef.current = false;
+        avancar();
+      }
+    });
+  }, [abertura, avancar, transicao]);
+
+  const aoRascunho = useCallback(
+    (temTexto: boolean) => {
+      rascunhoRef.current = temTexto;
+      if (!temTexto && avancoPendenteRef.current) {
+        avancoPendenteRef.current = false;
+        avancar();
+      }
+    },
+    [avancar],
+  );
+
+  // A conversa acompanha o episódio em cena. Trocar de episódio com ela aberta
+  // — arrasto sobre o vídeo, ou o fim do episódio — mantém o painel de pé e
+  // traz a conversa do episódio novo, em vez de fechar e obrigar a reabrir.
+  useEffect(() => {
+    if (!idEmCena) return;
+    setFolha((f) =>
+      f?.tipo === "comentarios" && f.laminaId !== idEmCena
+        ? { tipo: "comentarios", laminaId: idEmCena }
+        : f,
+    );
+  }, [idEmCena]);
 
   // ------------------------------------------------ tocar na aba de novo
   //
@@ -465,6 +643,11 @@ export function Reel({
           {
             "--reel-h": altura ? `${altura}px` : "100dvh",
             height: altura ? `${altura}px` : "100dvh",
+            // Com a conversa aberta o trilho não rola. É a garantia de que
+            // nenhum gesto na conversa — rolar a lista até o fim, arrastar o
+            // painel — possa virar troca de episódio. A troca continua possível,
+            // mas só por um arrasto explícito sobre o vídeo.
+            ...(conversaAberta ? { overflowY: "hidden" } : {}),
           } as React.CSSProperties
         }
       >
@@ -480,8 +663,9 @@ export function Reel({
               ativa={indice === ativo && !conviteAberto}
               visitante={!temConta}
               aoPedirConta={() => window.dispatchEvent(new CustomEvent(PEDIR_CONTA, { detail: "limite" }))}
-              // O cromo some enquanto o painel está de pé: a faixa de vídeo que
-              // sobra é estreita, e a coluna de ações competiria com ela.
+              // O cromo some enquanto o painel está de pé: com a conversa
+              // aberta a cena é o vídeo reenquadrado, e a coluna de ações
+              // competiria com ele.
               recuada={folha !== null}
               // A janela de montagem: o anterior continua montado para que
               // voltar um passo não recomece o vídeo do zero.
@@ -494,12 +678,19 @@ export function Reel({
               aoAlternarSom={() => setSomLigado((v) => !v)}
               aoTerminar={avancar}
               aoCurtir={() => curtir(lamina.episodio.id)}
-              aoAbrirComentarios={() =>
-                setFolha({ tipo: "comentarios", laminaId: lamina.episodio.id })
-              }
+              aoAbrirComentarios={() => abrirComentarios(lamina.episodio.id)}
               aoEnviar={() =>
                 setFolha({ tipo: "enviar", laminaId: lamina.episodio.id })
               }
+              abertura={abertura}
+              tela={tela}
+              // Só a janela de montagem recebe a geometria: a lâmina em cena e
+              // as vizinhas, para que o arrasto troque de episódio com a
+              // próxima já enquadrada. As demais não têm vídeo, e reenquadrá-
+              // las seria trabalho no quadro mais sensível da abertura.
+              conversa={Math.abs(indice - ativo) <= 1 ? layout : null}
+              aoDeslizar={conversaAberta && indice === ativo ? irPara : undefined}
+              reduzido={reduzido}
             />
         ))}
       </div>
@@ -543,26 +734,23 @@ export function Reel({
         {recarregando ? "Atualizando o plantão" : ""}
       </span>
 
-      {/* Um `AnimatePresence` por elemento que entra e sai.
-
-          Agrupar os dois num só daria a ele dois filhos, e o segundo entraria
-          sem chave — o que, na conta interna do motion, é a chave vazia. Dois
-          filhos com a mesma chave vazia é uma lista ambígua para o React, que
-          então pode duplicar ou omitir qualquer um deles. */}
-      <AnimatePresence>
-        {laminaDaFolha && folha?.tipo === "comentarios" ? (
-          <Comentarios
-            key={laminaDaFolha.episodio.id}
-            lamina={laminaDaFolha}
-            alturaTela={altura}
-            viewer={viewer}
-            aoFechar={() => setFolha(null)}
-            aoMudarTotal={(total) =>
-              ajustarContagem(laminaDaFolha.episodio.id, "comentarios", total)
-            }
-          />
-        ) : null}
-      </AnimatePresence>
+      {/* A conversa não entra num `AnimatePresence` nem ganha `key` por
+          episódio: a vida dela é conduzida por `abertura`, e trocar de
+          episódio com ela aberta atualiza o conteúdo sem desmontar o painel. */}
+      {conversaAberta && laminaDaFolha && layout ? (
+        <Comentarios
+          lamina={laminaDaFolha}
+          abertura={abertura}
+          layout={layout}
+          transicao={transicao}
+          viewer={viewer}
+          aoFechar={fecharComentarios}
+          aoRascunho={aoRascunho}
+          aoMudarTotal={(episodioId, total) =>
+            ajustarContagem(episodioId, "comentarios", total)
+          }
+        />
+      ) : null}
 
       {laminaDaFolha && folha?.tipo === "enviar" ? (
         <FolhaEnviar

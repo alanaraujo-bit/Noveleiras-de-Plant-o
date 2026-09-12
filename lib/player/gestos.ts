@@ -33,6 +33,11 @@ const TOLERANCIA_DE_MOVIMENTO_PX = 12;
 export const SALTO_SEG = 5;
 /** Velocidade da pressão longa. */
 const VELOCIDADE_TURBO = 2;
+/**
+ * Distância vertical que um arrasto precisa percorrer para valer como troca de
+ * episódio. Só é lida quando `aoDeslizar` existe — com a conversa aberta.
+ */
+const LIMIAR_DESLIZE_PX = 64;
 /** Tempo que o aviso de salto acumulado permanece somando. */
 const JANELA_DE_ACUMULO_MS = 750;
 
@@ -58,6 +63,7 @@ export function useGestosDoReel({
   aoAlternarPlay,
   aoCurtir,
   aoSaltar,
+  aoDeslizar,
 }: {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   duracaoPadraoSec: number;
@@ -67,6 +73,15 @@ export function useGestosDoReel({
   aoCurtir: () => void;
   /** Chamado a cada salto efetivado, para telemetria. */
   aoSaltar?: (segundos: number) => void;
+  /**
+   * Arrasto vertical explícito: 1 para o próximo episódio, −1 para o anterior.
+   *
+   * Só existe com a conversa aberta. Nesse estado o trilho está travado — é o
+   * que impede a rolagem da lista de virar troca de episódio — e a troca passa
+   * a ser um gesto reconhecido aqui, sobre o vídeo, e nunca sobre a conversa.
+   * Sem este callback nada muda: o trilho continua rolando sozinho.
+   */
+  aoDeslizar?: (sentido: 1 | -1) => void;
 }) {
   const [turbo, setTurbo] = useState(false);
   const [aviso, setAviso] = useState<AvisoDeSalto | null>(null);
@@ -254,8 +269,20 @@ export function useGestosDoReel({
         desligarTurbo();
         return;
       }
-      // Nem um deslize que por acaso terminou aqui dentro.
-      if (moveuRef.current) return;
+      // Nem um deslize que por acaso terminou aqui dentro — a não ser que o
+      // deslize seja justamente o gesto pedido: com a conversa aberta, arrastar
+      // o vídeo na vertical troca de episódio. Predominantemente vertical e
+      // longo o bastante, para que um toque trêmulo não pule a história.
+      if (moveuRef.current) {
+        if (aoDeslizar) {
+          const dx = evento.clientX - inicioRef.current.x;
+          const dy = evento.clientY - inicioRef.current.y;
+          if (Math.abs(dy) >= LIMIAR_DESLIZE_PX && Math.abs(dy) > Math.abs(dx) * 1.4) {
+            aoDeslizar(dy < 0 ? 1 : -1);
+          }
+        }
+        return;
+      }
 
       const agora = Date.now();
       const zona = inicioRef.current.zona;
@@ -282,7 +309,7 @@ export function useGestosDoReel({
         aoAlternarPlay();
       }, TOQUE_DUPLO_MS);
     },
-    [aoAlternarPlay, aoCurtir, desligarTurbo, saltar],
+    [aoAlternarPlay, aoCurtir, aoDeslizar, desligarTurbo, saltar],
   );
 
   const aoCancelar = useCallback(

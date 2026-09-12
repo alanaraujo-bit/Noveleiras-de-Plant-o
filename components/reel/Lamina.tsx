@@ -1,8 +1,21 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion } from "motion/react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+import {
+  AnimatePresence,
+  animate,
+  motion,
+  useMotionValue,
+  useTransform,
+  type MotionValue,
+} from "motion/react";
 
 import { AcoesLaterais } from "@/components/reel/AcoesLaterais";
 import { BarraDeProgresso } from "@/components/reel/BarraDeProgresso";
@@ -14,6 +27,11 @@ import {
   IconeSeta,
   IconeVolume,
 } from "@/components/ui/icones";
+import {
+  caixaDoVideo,
+  enquadramento,
+  type LayoutDaConversa,
+} from "@/lib/player/enquadramento";
 import { useGestosDoReel } from "@/lib/player/gestos";
 import { foiBloqueioDeAutoplay } from "@/lib/player/estado-reel";
 import {
@@ -47,6 +65,9 @@ import { lerProgressoVisitante } from "@/lib/player/visitante";
  */
 const ESPERA_PARA_IMERGIR_MS = 4500;
 
+/** Mesma mola do painel: vídeo e conversa se reajustam no mesmo ritmo. */
+const MOLA_DE_REAJUSTE = { type: "spring", stiffness: 320, damping: 36 } as const;
+
 type Props = {
   visitante?: boolean;
   aoPedirConta?: () => void;
@@ -70,6 +91,22 @@ type Props = {
   aoCurtir: () => void;
   aoAbrirComentarios: () => void;
   aoEnviar: () => void;
+  /**
+   * Quanto a conversa está aberta, de 0 a 1.
+   *
+   * Um valor só, compartilhado pelo painel e por todas as lâminas montadas, e
+   * lido direto pelo motion — sem passar pelo React a cada quadro. É isso que
+   * põe vídeo e painel no mesmo movimento, inclusive enquanto o dedo arrasta.
+   */
+  abertura: MotionValue<number>;
+  /** Tamanho da tela travada pelo reel. Nulo antes da primeira medida. */
+  tela: { largura: number; altura: number } | null;
+  /** Geometria da conversa aberta; nula com ela fechada. */
+  conversa: LayoutDaConversa | null;
+  /** Arrasto vertical sobre o vídeo, só com a conversa aberta. */
+  aoDeslizar?: (sentido: 1 | -1) => void;
+  /** Movimento reduzido, do sistema ou das preferências do app. */
+  reduzido: boolean;
 };
 
 export function Lamina({
@@ -90,6 +127,11 @@ export function Lamina({
   aoCurtir,
   aoAbrirComentarios,
   aoEnviar,
+  abertura,
+  tela,
+  conversa,
+  aoDeslizar,
+  reduzido,
 }: Props) {
   const { track } = useTelemetry();
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -107,6 +149,13 @@ export function Lamina({
   const [arrastandoBarra, setArrastandoBarra] = useState(false);
   const [sinopseAberta, setSinopseAberta] = useState(false);
   const [estouroDeCoracao, setEstouroDeCoracao] = useState(0);
+  /**
+   * Largura ÷ altura do conteúdo, lida dos metadados.
+   *
+   * Nula até eles chegarem — e, enquanto nula, tudo se comporta exatamente
+   * como antes: caixa do tamanho da tela, `object-fit: cover`.
+   */
+  const [proporcao, setProporcao] = useState<number | null>(null);
 
   // ------------------------------------------------------------ imersão
   //
@@ -305,10 +354,87 @@ export function Lamina({
     }
   }, [fonte, tentarTocar]);
 
+  // ------------------------------------------------ palco com a conversa
+  //
+  // O vídeo abre espaço para a conversa em vez de ser coberto por ela: encolhe
+  // e sobe para a área livre, inteiro. O movimento é só `transform` num palco
+  // em volta do `<video>` — o elemento de vídeo nunca muda, então nada
+  // recarrega, nada volta ao começo e nada perde o que já estava baixado.
+  //
+  // O alvo (onde o palco termina com a conversa aberta) vive em valores de
+  // movimento próprios, e a posição de cada quadro é alvo × abertura. Assim,
+  // quando o teclado sobe e o alvo muda, o vídeo desliza até o novo lugar em
+  // vez de pular — e o painel arrastado com o dedo arrasta o vídeo junto.
+  const escalaAlvo = useMotionValue(1);
+  const xAlvo = useMotionValue(0);
+  const yAlvo = useMotionValue(0);
+  const escala = useTransform(
+    [abertura, escalaAlvo],
+    ([a, e]: number[]) => 1 + (e - 1) * a,
+  );
+  const x = useTransform([abertura, xAlvo], ([a, v]: number[]) => v * a);
+  const y = useTransform([abertura, yAlvo], ([a, v]: number[]) => v * a);
+
+  // `useLayoutEffect`: o alvo precisa estar certo antes do primeiro quadro da
+  // abertura. Com um efeito comum, o navegador poderia pintar um quadro com o
+  // alvo antigo, e a animação começaria indo para o lugar errado.
+  useLayoutEffect(() => {
+    // Fechada, o alvo fica onde estava: é dele que a animação de volta parte.
+    if (!conversa || !tela) return;
+    const alvo = enquadramento(conversa, proporcao);
+    // Animar o alvo só vale para a lâmina à vista — é o que faz o vídeo
+    // deslizar quando o teclado sobe. As vizinhas estão fora da tela e
+    // recebem o alvo de uma vez: quando entrarem em cena, já estão prontas.
+    const deUmaVez = reduzido || abertura.get() < 0.001 || !ativa;
+    const pares: Array<[MotionValue<number>, number]> = [
+      [escalaAlvo, alvo.escala],
+      [xAlvo, alvo.x],
+      [yAlvo, alvo.y],
+    ];
+    for (const [valor, destino] of pares) {
+      if (deUmaVez) valor.set(destino);
+      else animate(valor, destino, MOLA_DE_REAJUSTE);
+    }
+  }, [abertura, ativa, conversa, escalaAlvo, proporcao, reduzido, tela, xAlvo, yAlvo]);
+
+  /**
+   * A caixa do vídeo no tamanho de "cobrir" a tela, na proporção do conteúdo.
+   *
+   * Em tela cheia é o mesmo recorte do `object-fit: cover`. Reduzida, mostra o
+   * quadro inteiro — o rosto na borda e a legenda embaixo continuam lá.
+   */
+  const caixa =
+    tela && proporcao ? caixaDoVideo(tela.largura, tela.altura, proporcao) : null;
+
   // ------------------------------------------------------- render
 
   const bloqueada = lamina.bloqueio !== null;
   const podeMostrarVideo = montada && fonte !== null && !falhou;
+
+  // Proporção do conteúdo, lida de forma que não dependa de um evento só.
+  //
+  // O HTML do servidor já traz o `src`, então o navegador costuma carregar os
+  // metadados **antes** de o React hidratar a lâmina — e o `onLoadedMetadata`
+  // nunca vê o evento. Foi visto no navegador de verdade: o vídeo reduzido
+  // saía com a proporção da tela, recortado, em vez do quadro inteiro. Aqui a
+  // leitura acontece na montagem e em `resize`, o evento que o vídeo dispara
+  // quando descobre (ou muda) as próprias dimensões.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const ler = () => {
+      if (video.videoWidth > 0 && video.videoHeight > 0) {
+        setProporcao(video.videoWidth / video.videoHeight);
+      }
+    };
+    ler();
+    video.addEventListener("resize", ler);
+    video.addEventListener("loadedmetadata", ler);
+    return () => {
+      video.removeEventListener("resize", ler);
+      video.removeEventListener("loadedmetadata", ler);
+    };
+  }, [fonte?.url, podeMostrarVideo]);
 
 
   // O relógio da imersão só corre quando há o que assistir: lâmina em cena,
@@ -396,6 +522,7 @@ export function Lamina({
         payload: { segundos, origem: "reel" },
       });
     },
+    aoDeslizar,
   });
 
   return (
@@ -405,78 +532,197 @@ export function Lamina({
       style={{ height: "var(--reel-h)" }}
       aria-label={`${lamina.novela.titulo}, episódio ${lamina.episodio.numero}`}
     >
-      {/* Cartaz: fica sempre atrás do vídeo. É o que a pessoa vê no instante
-          entre o swipe e o primeiro quadro, e é o que sobra quando a lâmina
-          está bloqueada ou o arquivo falhou. */}
-      <img
-        src={lamina.episodio.capaUrl}
-        alt=""
-        draggable={false}
-        className={`absolute inset-0 size-full object-cover ${
-          bloqueada ? "scale-105 blur-2xl brightness-[0.45]" : ""
-        }`}
-      />
+      {/* Atmosfera com a conversa aberta.
 
-      {podeMostrarVideo ? (
-        <video
-          ref={videoRef}
-          key={fonte.url}
-          src={fonte.url}
-          poster={lamina.episodio.capaUrl}
-          playsInline
-          loop={false}
-          muted={!somLigado}
-          // A lâmina em cena carrega de verdade; as vizinhas só buscam
-          // metadados, para o swipe começar sem espera. Em economia de dados
-          // nem isso: quem pediu para economizar não quer três vídeos na fila.
-          preload={ativa ? "auto" : economiaDeDados ? "none" : "metadata"}
-          className="absolute inset-0 size-full object-cover"
-          onLoadedMetadata={() => {
-            // Um elemento de vídeo remontado por troca de fonte reinicia em 1x,
-            // mas um que só recarregou os metadados mantém o `playbackRate`
-            // anterior. Sem esta linha, uma renovação de URL assinada no meio
-            // de uma pressão longa deixaria o episódio em 2x sem selo e sem
-            // dedo na tela — e nada devolveria a velocidade.
-            const video = videoRef.current;
-            if (video && !turbo && video.playbackRate !== 1) {
-              video.playbackRate = 1;
-            }
-            posicionar();
-          }}
-          onTimeUpdate={() => {
-            aoAtualizarTempo();
-            const video = videoRef.current;
-            if (!video) return;
-            if (Number.isFinite(video.duration) && video.duration > 0) {
-              setDuracaoSec(video.duration);
-            }
-            setPosicaoSec(video.currentTime);
-          }}
-          onPlaying={() => {
-            setTocando(true);
-            marcarInicioDeContagem();
-            manterTelaAcordada();
-          }}
-          onPause={() => {
-            setTocando(false);
-            pararContagem();
-            liberarTelaAcordada();
-            enviar();
-          }}
-          onEnded={() => {
-            setTocando(false);
-            liberarTelaAcordada();
-            enviar({ completo: true });
-            aoTerminar();
-          }}
-          onError={() => {
-            // Quase sempre é só a assinatura vencida — o arquivo está lá.
-            // Desistir antes de tentar renovar transformaria uma URL velha
-            // numa lâmina permanentemente quebrada.
-            trocarFonte();
-          }}
+          O vídeo reduzido deixa margem dos lados, e preto chapado ali faz a
+          cena parecer uma janela encolhida. A capa desfocada e escura dá à
+          margem a cor da própria novela — e fica atrás de tudo, nunca por
+          cima do conteúdo. Só existe com a conversa aberta, e só a opacidade
+          anima: o desfoque é calculado uma vez, não a cada quadro.
+
+          E só nas lâminas montadas. Uma imagem desfocada de tela inteira por
+          lâmina da fila custava o primeiro quadro da abertura — medido: um
+          engasgo de 210ms com a CPU a um quarto, antes de o painel sequer
+          começar a subir. */}
+      {conversa && montada ? (
+        <motion.img
+          src={lamina.episodio.capaUrl}
+          alt=""
+          aria-hidden
+          draggable={false}
+          className="pointer-events-none absolute inset-0 size-full scale-125 object-cover blur-2xl brightness-[0.38] saturate-150"
+          style={{ opacity: abertura, willChange: "opacity" }}
         />
       ) : null}
+
+      {/* Palco: tudo o que pertence à cena — cartaz, vídeo e os sinais do
+          toque — se move junto. `transform-origin` no topo ao centro, que é o
+          ponto a partir do qual o enquadramento é calculado. */}
+      <motion.div
+        className="absolute inset-0"
+        style={{
+          scale: escala,
+          x,
+          y,
+          transformOrigin: "50% 0%",
+          // Camada própria só onde há vídeo para mover. Promover o palco de
+          // cada lâmina da fila gastaria memória de GPU com o que não se vê.
+          willChange: conversa && montada ? "transform" : undefined,
+        }}
+      >
+        {/* Cartaz: fica sempre atrás do vídeo. É o que a pessoa vê no instante
+            entre o swipe e o primeiro quadro, e é o que sobra quando a lâmina
+            está bloqueada ou o arquivo falhou. */}
+        <img
+          src={lamina.episodio.capaUrl}
+          alt=""
+          draggable={false}
+          className={`absolute inset-0 size-full object-cover ${
+            bloqueada ? "scale-105 blur-2xl brightness-[0.45]" : ""
+          }`}
+        />
+
+        {podeMostrarVideo ? (
+          <video
+            ref={videoRef}
+            key={fonte.url}
+            src={fonte.url}
+            poster={lamina.episodio.capaUrl}
+            playsInline
+            loop={false}
+            muted={!somLigado}
+            // A lâmina em cena carrega de verdade; as vizinhas só buscam
+            // metadados, para o swipe começar sem espera. Em economia de dados
+            // nem isso: quem pediu para economizar não quer três vídeos na fila.
+            preload={ativa ? "auto" : economiaDeDados ? "none" : "metadata"}
+            // `max-w-none`: a folha base limita vídeo a 100% da largura, e a
+            // caixa de "cobrir" é, de propósito, mais larga que a tela.
+            className={
+              caixa
+                ? "absolute max-w-none object-cover"
+                : "absolute inset-0 size-full object-cover"
+            }
+            style={
+              caixa
+                ? {
+                    width: caixa.largura,
+                    height: caixa.altura,
+                    left: caixa.esquerda,
+                    top: caixa.topo,
+                  }
+                : undefined
+            }
+            onLoadedMetadata={() => {
+              // Um elemento de vídeo remontado por troca de fonte reinicia em 1x,
+              // mas um que só recarregou os metadados mantém o `playbackRate`
+              // anterior. Sem esta linha, uma renovação de URL assinada no meio
+              // de uma pressão longa deixaria o episódio em 2x sem selo e sem
+              // dedo na tela — e nada devolveria a velocidade.
+              const video = videoRef.current;
+              if (video && !turbo && video.playbackRate !== 1) {
+                video.playbackRate = 1;
+              }
+              if (video && video.videoWidth > 0 && video.videoHeight > 0) {
+                setProporcao(video.videoWidth / video.videoHeight);
+              }
+              posicionar();
+            }}
+            onTimeUpdate={() => {
+              aoAtualizarTempo();
+              const video = videoRef.current;
+              if (!video) return;
+              if (Number.isFinite(video.duration) && video.duration > 0) {
+                setDuracaoSec(video.duration);
+              }
+              setPosicaoSec(video.currentTime);
+            }}
+            onPlaying={() => {
+              setTocando(true);
+              marcarInicioDeContagem();
+              manterTelaAcordada();
+            }}
+            onPause={() => {
+              setTocando(false);
+              pararContagem();
+              liberarTelaAcordada();
+              enviar();
+            }}
+            onEnded={() => {
+              setTocando(false);
+              liberarTelaAcordada();
+              enviar({ completo: true });
+              aoTerminar();
+            }}
+            onError={() => {
+              // Quase sempre é só a assinatura vencida — o arquivo está lá.
+              // Desistir antes de tentar renovar transformaria uma URL velha
+              // numa lâmina permanentemente quebrada.
+              trocarFonte();
+            }}
+          />
+        ) : null}
+
+        {/* Aviso de salto. Nasce do lado tocado e soma toques seguidos: quatro
+            toques à direita mostram "20s", não quatro vezes "5s". Dentro do
+            palco, para aparecer sobre o vídeo onde quer que ele esteja. */}
+        <AnimatePresence>
+          {aviso ? (
+            <motion.div
+              key={aviso.chave}
+              initial={{ opacity: 0, scale: 0.86 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.94 }}
+              transition={{ duration: 0.16 }}
+              aria-hidden
+              className={`pointer-events-none absolute top-1/2 z-20 grid size-[5.5rem] -translate-y-1/2 place-items-center rounded-full bg-black/45 backdrop-blur-[2px] ${
+                aviso.lado === "tras" ? "left-[8%]" : "right-[8%]"
+              }`}
+            >
+              <span className="flex items-center gap-0.5 text-white">
+                <IconeSeta
+                  tamanho={15}
+                  className={aviso.lado === "tras" ? "rotate-180" : ""}
+                />
+                <IconeSeta
+                  tamanho={15}
+                  className={`-ml-2.5 ${aviso.lado === "tras" ? "rotate-180" : ""}`}
+                />
+              </span>
+              <span className="mt-0.5 text-[0.8125rem] font-bold tabular-nums text-white">
+                {aviso.segundos}s
+              </span>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
+
+        {/* Coração do toque duplo */}
+        {estouroDeCoracao > 0 ? (
+          <span
+            key={estouroDeCoracao}
+            aria-hidden
+            className="coracao-estouro pointer-events-none absolute left-1/2 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2 text-rose-500 drop-shadow-[0_4px_16px_rgba(0,0,0,0.5)]"
+          >
+            <IconeCoracaoCheio tamanho={104} />
+          </span>
+        ) : null}
+
+        {/* Pausa: um sinal discreto, não um painel de controle. */}
+        <AnimatePresence>
+          {ativa && !tocando && !bloqueada && !falhou && fonte ? (
+            <motion.span
+              key="pausa"
+              initial={{ opacity: 0, scale: 0.85 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 1.1 }}
+              transition={{ duration: 0.18 }}
+              aria-hidden
+              className="pointer-events-none absolute left-1/2 top-1/2 z-20 grid size-[4.5rem] -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/40 text-white/95 backdrop-blur-[2px]"
+            >
+              <IconePlay tamanho={30} className="ml-1" />
+            </motion.span>
+          ) : null}
+        </AnimatePresence>
+      </motion.div>
 
       {/* Camada de gesto. Fica sob os controles laterais e sob o texto, para
           que tocar num link não pause o vídeo por acidente.
@@ -485,6 +731,11 @@ export function Lamina({
           swipe entre lâminas morreria aqui — e retém o resto, que é o que
           impede o navegador de aplicar o próprio zoom de toque duplo por cima
           do nosso.
+
+          Com a conversa aberta o trilho está travado, e o arrasto vertical
+          deixa de ser do navegador: `touch-action: none` entrega o gesto
+          inteiro ao reconhecedor, que troca de episódio só num arrasto
+          explícito sobre o vídeo — nunca sobre a conversa.
 
           Não é `<button>`: um botão dispara clique ao soltar a barra de espaço
           e ao pressionar Enter, e a pressão longa do teclado repetiria o
@@ -502,41 +753,11 @@ export function Lamina({
             if (evento.repeat) return;
             alternarPlay();
           }}
-          className="absolute inset-0 z-10 cursor-default touch-pan-y select-none"
+          className={`absolute inset-0 z-10 cursor-default select-none ${
+            conversa ? "touch-none" : "touch-pan-y"
+          }`}
         />
       ) : null}
-
-      {/* Aviso de salto. Nasce do lado tocado e soma toques seguidos: quatro
-          toques à direita mostram "20s", não quatro vezes "5s". */}
-      <AnimatePresence>
-        {aviso ? (
-          <motion.div
-            key={aviso.chave}
-            initial={{ opacity: 0, scale: 0.86 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.94 }}
-            transition={{ duration: 0.16 }}
-            aria-hidden
-            className={`pointer-events-none absolute top-1/2 z-20 grid size-[5.5rem] -translate-y-1/2 place-items-center rounded-full bg-black/45 backdrop-blur-[2px] ${
-              aviso.lado === "tras" ? "left-[8%]" : "right-[8%]"
-            }`}
-          >
-            <span className="flex items-center gap-0.5 text-white">
-              <IconeSeta
-                tamanho={15}
-                className={aviso.lado === "tras" ? "rotate-180" : ""}
-              />
-              <IconeSeta
-                tamanho={15}
-                className={`-ml-2.5 ${aviso.lado === "tras" ? "rotate-180" : ""}`}
-              />
-            </span>
-            <span className="mt-0.5 text-[0.8125rem] font-bold tabular-nums text-white">
-              {aviso.segundos}s
-            </span>
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
 
       {/* Selo do 2x. Precisa existir: sem ele, quem encostou o dedo sem querer
           não entende por que a novela acelerou. */}
@@ -569,36 +790,12 @@ export function Lamina({
         {turbo ? "Velocidade dobrada" : ""}
       </span>
 
-      {/* Coração do toque duplo */}
-      {estouroDeCoracao > 0 ? (
-        <span
-          key={estouroDeCoracao}
-          aria-hidden
-          className="coracao-estouro pointer-events-none absolute left-1/2 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2 text-rose-500 drop-shadow-[0_4px_16px_rgba(0,0,0,0.5)]"
-        >
-          <IconeCoracaoCheio tamanho={104} />
-        </span>
-      ) : null}
-
-      {/* Pausa: um sinal discreto, não um painel de controle. */}
-      <AnimatePresence>
-        {ativa && !tocando && !bloqueada && !falhou && fonte ? (
-          <motion.span
-            key="pausa"
-            initial={{ opacity: 0, scale: 0.85 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 1.1 }}
-            transition={{ duration: 0.18 }}
-            aria-hidden
-            className="pointer-events-none absolute left-1/2 top-1/2 z-20 grid size-[4.5rem] -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/40 text-white/95 backdrop-blur-[2px]"
-          >
-            <IconePlay tamanho={30} className="ml-1" />
-          </motion.span>
-        ) : null}
-      </AnimatePresence>
-
       <div className="veu-superior pointer-events-none absolute inset-x-0 top-0 z-10 h-32" />
-      <div className="veu-inferior pointer-events-none absolute inset-x-0 bottom-0 z-10 h-64" />
+      <div
+        className={`veu-inferior pointer-events-none absolute inset-x-0 bottom-0 z-10 h-64 transition-opacity duration-300 ${
+          conversa ? "opacity-0" : "opacity-100"
+        }`}
+      />
 
       {/* Pílula de som: aparece só enquanto o áudio está desligado. */}
       <AnimatePresence>
@@ -693,16 +890,22 @@ export function Lamina({
           recuada || imersivo ? "opacity-0" : "opacity-100"
         }`}
       >
-        <AcoesLaterais
-          lamina={lamina}
-          aoCurtir={aoCurtir}
-          aoAbrirComentarios={aoAbrirComentarios}
-          aoEnviar={aoEnviar}
-        />
+        {/* Recuado, o cromo não recebe toque nenhum: invisível e tocável seria
+            uma armadilha sobre o vídeo reduzido. */}
+        <div className={recuada ? "invisible" : undefined}>
+          <AcoesLaterais
+            lamina={lamina}
+            aoCurtir={aoCurtir}
+            aoAbrirComentarios={aoAbrirComentarios}
+            aoEnviar={aoEnviar}
+          />
+        </div>
 
         {/* ---------------------------------------------------- identidade */}
         <div
-          className="pointer-events-auto absolute inset-x-0 bottom-0 px-4 pr-[4.75rem]"
+          className={`pointer-events-auto absolute inset-x-0 bottom-0 px-4 pr-[4.75rem] ${
+            recuada ? "invisible" : ""
+          }`}
           style={{
             paddingBottom: "calc(var(--tabbar-h) + var(--safe-b) + 0.875rem)",
           }}

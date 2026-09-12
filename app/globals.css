@@ -352,7 +352,11 @@ h4 {
    `visibility` junto da opacidade tira a barra da navegação por teclado e dos
    leitores de tela enquanto ela está invisível; sem isso o foco cairia num
    destino que ninguém consegue ver. */
-:root[data-imersivo="1"] nav[aria-label="Navegação principal"] {
+/* A conversa aberta usa o mesmo caminho. No celular o painel já cobre a
+   barra; no desktop, com o painel ao lado, ela ficaria flutuando sobre a
+   parte de baixo da cena — que é justamente onde mora a legenda. */
+:root[data-imersivo="1"] nav[aria-label="Navegação principal"],
+:root[data-conversa="1"] nav[aria-label="Navegação principal"] {
   opacity: 0;
   visibility: hidden;
   transition:

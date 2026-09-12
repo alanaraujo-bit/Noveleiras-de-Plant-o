@@ -331,3 +331,67 @@ describe("teclado", () => {
     expect(aoAlternarPlay).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("arrasto vertical com a conversa aberta", () => {
+  // Com a conversa aberta o trilho fica travado — é o que impede a rolagem da
+  // lista de trocar episódio. A troca passa a ser um gesto explícito sobre o
+  // vídeo, e ele precisa ser inequívoco: longo, vertical, nunca um toque.
+  function arrastar(
+    resultado: { current: ReturnType<typeof useGestosDoReel> },
+    de: { x: number; y: number },
+    ate: { x: number; y: number },
+  ) {
+    act(() => {
+      resultado.current.manipuladores.onPointerDown(ponteiro(de.x, de.y));
+      resultado.current.manipuladores.onPointerMove(ponteiro(ate.x, ate.y));
+      resultado.current.manipuladores.onPointerUp(ponteiro(ate.x, ate.y));
+    });
+    act(() => void vi.advanceTimersByTime(400));
+  }
+
+  test("arrastar para cima vai ao próximo episódio, sem pausar", () => {
+    const aoDeslizar = vi.fn();
+    const { result, aoAlternarPlay } = montar(videoFalso(), { aoDeslizar });
+
+    arrastar(result, { x: 200, y: 500 }, { x: 208, y: 380 });
+
+    expect(aoDeslizar).toHaveBeenCalledWith(1);
+    expect(aoAlternarPlay).not.toHaveBeenCalled();
+  });
+
+  test("arrastar para baixo volta ao anterior", () => {
+    const aoDeslizar = vi.fn();
+    const { result } = montar(videoFalso(), { aoDeslizar });
+
+    arrastar(result, { x: 200, y: 300 }, { x: 196, y: 420 });
+
+    expect(aoDeslizar).toHaveBeenCalledWith(-1);
+  });
+
+  test("um arrasto curto não troca de episódio", () => {
+    const aoDeslizar = vi.fn();
+    const { result } = montar(videoFalso(), { aoDeslizar });
+
+    arrastar(result, { x: 200, y: 500 }, { x: 200, y: 460 });
+
+    expect(aoDeslizar).not.toHaveBeenCalled();
+  });
+
+  test("um arrasto na diagonal, mais de lado que vertical, não troca", () => {
+    const aoDeslizar = vi.fn();
+    const { result } = montar(videoFalso(), { aoDeslizar });
+
+    arrastar(result, { x: 60, y: 500 }, { x: 180, y: 420 });
+
+    expect(aoDeslizar).not.toHaveBeenCalled();
+  });
+
+  test("sem conversa aberta, o gesto continua sendo do trilho", () => {
+    // Nenhum callback: arrastar é rolagem nativa, como sempre foi.
+    const { result, aoAlternarPlay } = montar(videoFalso());
+
+    arrastar(result, { x: 200, y: 500 }, { x: 200, y: 300 });
+
+    expect(aoAlternarPlay).not.toHaveBeenCalled();
+  });
+});
