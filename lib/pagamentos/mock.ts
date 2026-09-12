@@ -24,6 +24,7 @@ import {
   type ConsultaAssinatura,
   type ConsultaPagamento,
   type CriarAssinaturaEntrada,
+  type CriarCobrancaPixEntrada,
   type CriarCompraEntrada,
   type EstadoProvedor,
   type FaturaDeAssinatura,
@@ -95,6 +96,39 @@ export class ProvedorMock implements ProvedorDePagamento {
       pixQrCodeBase64: null,
       expiraEm: null,
       bruto: { mock: true, tipo: "preapproval", externalId, status },
+    };
+  }
+
+  /**
+   * Um ciclo mensal por Pix. Nasce como pagamento, não como preapproval —
+   * `assinatura: false` é o ponto: a reconciliação precisa achá-lo por
+   * `consultarPagamento`, como acha qualquer cobrança avulsa.
+   */
+  async criarAssinaturaPix(
+    entrada: CriarCobrancaPixEntrada,
+  ): Promise<RespostaCheckout> {
+    const externalId = `mock-pix-${randomUUID()}`;
+    const status = decidirPorEmail(entrada.usuario.email);
+
+    registros.set(externalId, {
+      externalId,
+      status,
+      valorCents: entrada.plano.precoCents,
+      referenciaExterna: entrada.referenciaExterna,
+      metodo: "pix",
+      aprovadoEm: status === "APPROVED" ? new Date() : null,
+      reembolsadoCents: 0,
+      assinatura: false,
+    });
+
+    return {
+      externalId,
+      status,
+      checkoutUrl: null,
+      pixQrCode: `00020126MOCK${externalId}5204000053039865802BR`,
+      pixQrCodeBase64: null,
+      expiraEm: new Date(Date.now() + entrada.expiraEmMinutos * 60_000),
+      bruto: { mock: true, tipo: "pix-mensal", externalId, status },
     };
   }
 

@@ -3,8 +3,11 @@ import { log } from "@/lib/painel/log";
 
 import {
   expirarAssinaturasVencidas,
+  marcarVencimentosManuais,
   reconciliarAssinaturasPeriodicamente,
+  reconciliarPixPendentes,
   type ResumoDaReconciliacao,
+  type ResumoDoPix,
 } from "./servico";
 
 /**
@@ -32,6 +35,8 @@ export function cronAutorizado(requisicao: Request): boolean {
 
 export type ResultadoDoCron = {
   reconciliacao: ResumoDaReconciliacao | "desligada";
+  pix: ResumoDoPix | "desligada";
+  vencimentosManuais: number;
   assinaturas: number;
   direitos: number;
 };
@@ -58,6 +63,18 @@ export async function executarCronDeAssinaturas(opcoes: {
     ? await reconciliarAssinaturasPeriodicamente({ completa: opcoes.completa })
     : "desligada";
 
+  // O mesmo passo, para quem renova à mão. Vem junto do primeiro e pelo mesmo
+  // motivo: a assinatura por Pix não tem preapproval e ficaria fora da
+  // varredura acima — e é justamente ela que depende de um webhook chegar.
+  const pix = reconciliacaoLigada()
+    ? await reconciliarPixPendentes()
+    : "desligada";
+
+  // 2.5. Quem venceu entra em carência **registrada**. Não corta nada: o
+  // acesso já está garantido até `graceUntil`, e este passo só grava o fato
+  // datado de que o ciclo acabou — a matéria-prima do aviso de renovação.
+  const vencimentosManuais = await marcarVencimentosManuais();
+
   // 3. Só então expirar. Assinatura cuja reconciliação falhou nesta execução
   // fica de fora dela: sem saber o que o provedor diz, cortar pode ser cortar
   // um pagante. A próxima execução decide.
@@ -68,13 +85,17 @@ export async function executarCronDeAssinaturas(opcoes: {
   const assinaturas = await expirarAssinaturasVencidas(new Date(), { ignorar });
   const direitos = await expirarDireitosVencidos();
 
-  if (assinaturas > 0 || direitos > 0) {
+  if (assinaturas > 0 || direitos > 0 || vencimentosManuais > 0) {
     await log.info({
       channel: "JOBS",
-      message: `Ciclos encerrados: ${assinaturas} assinatura(s), ${direitos} direito(s)`,
-      context: { assinaturas, direitos },
+      message:
+        `Ciclos encerrados: ${assinaturas} assinatura(s), ${direitos} direito(s)` +
+        (vencimentosManuais > 0
+          ? `, ${vencimentosManuais} em carência de renovação`
+          : ""),
+      context: { assinaturas, direitos, vencimentosManuais, pix },
     });
   }
 
-  return { reconciliacao, assinaturas, direitos };
+  return { reconciliacao, pix, vencimentosManuais, assinaturas, direitos };
 }

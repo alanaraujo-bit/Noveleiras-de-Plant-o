@@ -5,6 +5,8 @@ import { IconeVoltar } from "@/components/ui/icones";
 import { planLabel } from "@/lib/access/entitlements";
 import { getViewer } from "@/lib/auth/session";
 import { db } from "@/lib/db";
+import { mensagemDeRenovacao } from "@/lib/pagamentos/ciclo";
+import { situacaoDaRenovacao } from "@/lib/pagamentos/renovacao";
 import { historicoDoUsuario } from "@/lib/pagamentos/servico";
 import { PainelAssinatura } from "./PainelAssinatura";
 
@@ -21,6 +23,9 @@ export default async function AssinaturaPage() {
     historicoDoUsuario(viewer.id),
     db.subscription.findUnique({ where: { userId: viewer.id } }),
   ]);
+
+  const renovacao = situacaoDaRenovacao(assinatura);
+  const mensagem = renovacao.aviso ? mensagemDeRenovacao(renovacao.aviso) : null;
 
   return (
     <div>
@@ -48,6 +53,13 @@ export default async function AssinaturaPage() {
         renovaEm={viewer.entitlement.currentPeriodEnd?.toISOString() ?? null}
         canceladaNoFim={assinatura?.cancelAtPeriodEnd ?? false}
         status={viewer.entitlement.status}
+        manual={renovacao.manual}
+        renovarAte={renovacao.renovarAte?.toISOString() ?? null}
+        aviso={
+          renovacao.aviso && mensagem
+            ? { momento: renovacao.aviso.momento, ...mensagem }
+            : null
+        }
         compras={compras.map((c) => ({
           id: c.id,
           data: c.createdAt.toISOString(),
@@ -62,6 +74,10 @@ export default async function AssinaturaPage() {
           status: p.status,
           metodo: p.method,
           plano: p.plan,
+          // O extrato precisa separar "mensalidade do cartão" de "renovação
+          // por Pix": são a mesma quantia e significam coisas diferentes para
+          // quem confere a fatura.
+          renovacao: p.billingMode,
           reembolsadoCents: p.refundedCents,
         }))}
       />

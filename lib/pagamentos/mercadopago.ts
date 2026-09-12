@@ -19,6 +19,7 @@ import {
   type ConsultaAssinatura,
   type ConsultaPagamento,
   type CriarAssinaturaEntrada,
+  type CriarCobrancaPixEntrada,
   type CriarCompraEntrada,
   type EstadoProvedor,
   type FaturaDeAssinatura,
@@ -347,6 +348,29 @@ function reais(cents: number): number {
   return Number((cents / 100).toFixed(2));
 }
 
+/**
+ * ISO-8601 com deslocamento explícito, como o Mercado Pago exige em
+ * `date_of_expiration`.
+ *
+ * `toISOString()` termina em `Z`, e eles respondem 400 a isso. O deslocamento
+ * é o do servidor — em produção, UTC —, o que dá `-00:00` e é aceito.
+ */
+export function comFuso(data: Date): string {
+  const offsetMin = -data.getTimezoneOffset();
+  const sinal = offsetMin >= 0 ? "+" : "-";
+  const abs = Math.abs(offsetMin);
+  const doisDigitos = (n: number) => String(n).padStart(2, "0");
+  const local = new Date(data.getTime() + offsetMin * 60_000);
+
+  return (
+    `${local.getUTCFullYear()}-${doisDigitos(local.getUTCMonth() + 1)}-` +
+    `${doisDigitos(local.getUTCDate())}T${doisDigitos(local.getUTCHours())}:` +
+    `${doisDigitos(local.getUTCMinutes())}:${doisDigitos(local.getUTCSeconds())}.` +
+    `${String(local.getUTCMilliseconds()).padStart(3, "0")}` +
+    `${sinal}${doisDigitos(Math.floor(abs / 60))}:${doisDigitos(abs % 60)}`
+  );
+}
+
 export class MercadoPago implements ProvedorDePagamento {
   readonly nome = "mercadopago";
 
@@ -358,9 +382,10 @@ export class MercadoPago implements ProvedorDePagamento {
    * Assinatura recorrente (`preapproval`).
    *
    * O Mercado Pago cobra recorrência só no cartão; Pix não tem débito
-   * automático. Por isso a tela de planos oferece Pix apenas na compra
-   * avulsa — e aqui a tentativa de assinar por Pix é recusada em vez de
-   * criar algo que nunca renovaria.
+   * automático. Quem escolhe Pix no mensal não passa por aqui: vai para
+   * `criarAssinaturaPix`, que abre a cobrança de um ciclo só e deixa a
+   * renovação nas mãos da pessoa. A recusa abaixo continua valendo como
+   * guarda — chegar aqui com Pix seria criar um contrato que nunca cobraria.
    */
   async criarAssinatura(
     entrada: CriarAssinaturaEntrada,
@@ -413,6 +438,72 @@ export class MercadoPago implements ProvedorDePagamento {
       pixQrCode: null,
       pixQrCodeBase64: null,
       expiraEm: null,
+      pagadorSubstituido: pagador.substituido,
+      bruto: resposta,
+    };
+  }
+
+  /**
+   * Um mês do plano, pago por Pix.
+   *
+   * `/v1/payments` com `payment_method_id: "pix"` — o mesmo endpoint da compra
+   * avulsa, e de propósito: é uma cobrança simples, não um contrato. O que
+   * volta é um pagamento consultável em `/v1/payments/<id>`, então webhook,
+   * polling, retorno e cron reusam o caminho que já existe e já foi provado em
+   * produção.
+   *
+   * `date_of_expiration` é enviado explicitamente porque o padrão do Mercado
+   * Pago é de dias, e um QR que vale até depois de amanhã atrapalha: a pessoa
+   * volta ao aplicativo sem saber se ainda deve aquele Pix. Meia hora é o que
+   * cabe numa sessão.
+   */
+  async criarAssinaturaPix(
+    entrada: CriarCobrancaPixEntrada,
+  ): Promise<RespostaCheckout> {
+    const { notificationUrl } = lerCredenciais();
+    const pagador = await resolverPagador(entrada.usuario.email);
+    const expiraEm = new Date(
+      Date.now() + entrada.expiraEmMinutos * 60_000,
+    );
+
+    const resposta = await chamar<{
+      id: number;
+      status: string;
+      status_detail?: string;
+      date_of_expiration?: string;
+      point_of_interaction?: {
+        transaction_data?: { qr_code?: string; qr_code_base64?: string };
+      };
+    }>("/v1/payments", {
+      method: "POST",
+      idempotencyKey: entrada.idempotencyKey,
+      body: JSON.stringify({
+        transaction_amount: reais(entrada.plano.precoCents),
+        description: entrada.plano.nome,
+        payment_method_id: "pix",
+        external_reference: entrada.referenciaExterna,
+        // O provedor exige o formato com deslocamento; `toISOString` devolve
+        // `Z`, que ele recusa em `date_of_expiration`.
+        date_of_expiration: comFuso(expiraEm),
+        ...(notificationUrl ? { notification_url: notificationUrl } : {}),
+        payer: {
+          email: pagador.email,
+          first_name: entrada.usuario.nome,
+        },
+      }),
+    });
+
+    const dados = resposta.point_of_interaction?.transaction_data;
+
+    return {
+      externalId: resposta.id ? String(resposta.id) : null,
+      status: traduzirStatusPagamento(resposta.status ?? null),
+      checkoutUrl: null,
+      pixQrCode: dados?.qr_code ?? null,
+      pixQrCodeBase64: dados?.qr_code_base64 ?? null,
+      expiraEm: resposta.date_of_expiration
+        ? new Date(resposta.date_of_expiration)
+        : expiraEm,
       pagadorSubstituido: pagador.substituido,
       bruto: resposta,
     };

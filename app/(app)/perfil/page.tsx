@@ -8,6 +8,10 @@ import { sair } from "@/lib/actions/conta";
 import { Selo } from "@/components/ui/primitivos";
 import { BotaoInstalar } from "@/components/sistema/BotaoInstalar";
 import { EditorFotoCabecalho } from "@/components/perfil/EditorFotoCabecalho";
+import { FaixaDeRenovacao } from "@/components/pagamento/FaixaDeRenovacao";
+import { db } from "@/lib/db";
+import { mensagemDeRenovacao } from "@/lib/pagamentos/ciclo";
+import { situacaoDaRenovacao } from "@/lib/pagamentos/renovacao";
 import {
   IconeCoracao,
   IconeHistorico,
@@ -22,8 +26,16 @@ export default async function PerfilPage() {
   const viewer = await getViewer();
   if (!viewer) redirect("/entrar");
 
-  const stats = await getViewerStats(viewer.id);
+  const [stats, assinatura] = await Promise.all([
+    getViewerStats(viewer.id),
+    db.subscription.findUnique({ where: { userId: viewer.id } }),
+  ]);
   const { entitlement } = viewer;
+
+  // Quem renova à mão é lembrado aqui, e só aqui dentro do perfil: a Home é
+  // para assistir. O aviso some sozinho quando não há nada a fazer.
+  const renovacao = situacaoDaRenovacao(assinatura);
+  const mensagem = renovacao.aviso ? mensagemDeRenovacao(renovacao.aviso) : null;
 
   const atalhos = [
     {
@@ -65,7 +77,9 @@ export default async function PerfilPage() {
           </Selo>
           {entitlement.premium && entitlement.currentPeriodEnd ? (
             <span className="text-[0.75rem] text-cream-600">
-              renova em{" "}
+              {/* "renova em" seria promessa falsa para quem paga por Pix:
+                  ninguém vai cobrar nada sozinho. */}
+              {renovacao.manual ? "vale até " : "renova em "}
               {new Intl.DateTimeFormat("pt-BR", {
                 day: "2-digit",
                 month: "short",
@@ -74,6 +88,18 @@ export default async function PerfilPage() {
           ) : null}
         </div>
       </header>
+
+      {mensagem && renovacao.aviso ? (
+        <div className="px-5 pb-5">
+          <FaixaDeRenovacao
+            compacta
+            momento={renovacao.aviso.momento}
+            titulo={mensagem.titulo}
+            detalhe={mensagem.detalhe}
+            acao={mensagem.acao}
+          />
+        </div>
+      ) : null}
 
       {/* Resumo de consumo -------------------------------------------------- */}
       <section className="px-5">

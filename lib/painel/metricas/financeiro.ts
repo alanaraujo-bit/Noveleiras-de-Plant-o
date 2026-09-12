@@ -44,6 +44,28 @@ export type LinhaDePlano = {
   precoDeTabelaCents: number;
 };
 
+/**
+ * Cartão e Pix lado a lado.
+ *
+ * A mesma mensalidade de R$ 9,99 se comporta de duas maneiras diferentes, e
+ * misturá-las esconde a única pergunta que importa depois desta fase: **quem
+ * renova à mão volta?** Um assinante de cartão que some aparece como
+ * cancelamento; um de Pix simplesmente não paga, e sem esta separação isso
+ * seria invisível até o MRR cair.
+ *
+ * `qrSemPagamento` é o outro lado: QR gerado e nunca pago é a perda de funil
+ * específica deste fluxo — não existe equivalente no cartão.
+ */
+export type PorRenovacao = {
+  modo: "AUTO_RENEW" | "MANUAL_RENEW";
+  rotulo: string;
+  assinantes: number;
+  mrrCents: number;
+  /** Cobranças aprovadas no período, já sem demonstração. */
+  cobrancas: number;
+  receitaCents: number;
+};
+
 export type ResumoFinanceiro = {
   mrrCents: number;
   arrCents: number;
@@ -57,6 +79,9 @@ export type ResumoFinanceiro = {
   cancelamentoAgendado: number;
   novasNoPeriodo: Indicador;
   canceladasNoPeriodo: Indicador;
+  porRenovacao: PorRenovacao[];
+  /** Cobranças Pix abertas no período que nunca foram pagas. */
+  qrSemPagamento: number;
   /** Receita realizada — só de `Payment`, nunca inferida de assinatura. */
   receita: {
     aprovadaCents: number;
@@ -81,7 +106,12 @@ export async function resumoFinanceiro(
     await Promise.all([
       db.subscription.findMany({
         where: { plan: { not: "FREE" }, status: { in: [...STATUS_QUE_PAGA] } },
-        select: { plan: true, priceCents: true, status: true },
+        select: {
+          plan: true,
+          priceCents: true,
+          status: true,
+          billingMode: true,
+        },
       }),
       db.subscription.groupBy({
         by: ["status"],
@@ -152,6 +182,62 @@ export async function resumoFinanceiro(
     porPlano.set(assinatura.plan, linha);
   }
 
+  // Cartão e Pix separados: nos assinantes de hoje e no dinheiro do período.
+  // `billingMode` nulo é cobrança anterior a esta fase — toda recorrente, e
+  // por isso somada ao cartão, que é o que ela de fato era.
+  const [receitaPorModo, qrSemPagamento] = await Promise.all([
+    db.$queryRaw<{ modo: string | null; cobrancas: number; receita: number | null }[]>(
+      Prisma.sql`
+        SELECT
+          "billingMode"::text AS modo,
+          count(*)::int AS cobrancas,
+          coalesce(sum("amountCents"), 0)::float8 AS receita
+        FROM "Payment"
+        WHERE "createdAt" >= ${periodo.inicio} AND "createdAt" < ${periodo.fim}
+          AND "status"::text = 'APPROVED'
+          AND "kind"::text = 'SUBSCRIPTION'
+          AND NOT "isDemo"
+        GROUP BY 1
+      `,
+    ),
+    db.paymentAttempt.count({
+      where: {
+        kind: "SUBSCRIPTION",
+        billingMode: "MANUAL_RENEW",
+        status: { in: ["CREATED", "PENDING", "EXPIRED", "REJECTED"] },
+        createdAt: { gte: periodo.inicio, lt: periodo.fim },
+        isDemo: false,
+      },
+    }),
+  ]);
+
+  const somaDoModo = (modo: "AUTO_RENEW" | "MANUAL_RENEW") =>
+    receitaPorModo
+      .filter((l) => (l.modo ?? "AUTO_RENEW") === modo)
+      .reduce(
+        (acc, l) => ({
+          cobrancas: acc.cobrancas + Number(l.cobrancas),
+          receitaCents: acc.receitaCents + Number(l.receita ?? 0),
+        }),
+        { cobrancas: 0, receitaCents: 0 },
+      );
+
+  const porRenovacao: PorRenovacao[] = (
+    ["AUTO_RENEW", "MANUAL_RENEW"] as const
+  ).map((modo) => {
+    const daquele = assinaturas.filter((a) => a.billingMode === modo);
+    return {
+      modo,
+      rotulo: modo === "AUTO_RENEW" ? "Cartão" : "Pix",
+      assinantes: daquele.length,
+      mrrCents: daquele.reduce(
+        (soma, a) => soma + (a.priceCents ?? PLANOS[a.plan]?.precoCents ?? 0),
+        0,
+      ),
+      ...somaDoModo(modo),
+    };
+  });
+
   const bruto = pagamentos[0];
   const aprovadaCents = Number(bruto?.aprovada ?? 0);
   const reembolsadaCents = Number(bruto?.reembolsada ?? 0);
@@ -186,6 +272,8 @@ export async function resumoFinanceiro(
     }),
     novasNoPeriodo: indicador(novas.atual, novas.anterior),
     canceladasNoPeriodo: indicador(canceladas.atual, canceladas.anterior),
+    porRenovacao,
+    qrSemPagamento,
     receita: {
       aprovadaCents,
       reembolsadaCents,

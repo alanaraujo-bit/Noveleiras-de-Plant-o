@@ -15,6 +15,7 @@
 import { randomUUID } from "node:crypto";
 
 import type {
+  BillingMode,
   Prisma,
   PrismaClient,
   PurchaseStatus,
@@ -31,6 +32,7 @@ import { db } from "@/lib/db";
 import { log } from "@/lib/painel/log";
 
 import { podeUsarMock, provedorDePagamento } from "./index";
+import { CARENCIA_MANUAL_MS, fimDaCarencia, inicioDoCiclo } from "./ciclo";
 import {
   fimDoCiclo,
   planoPorCodigo,
@@ -58,7 +60,13 @@ export class ErroDeCobranca extends Error {
       | "ja-possui"
       | "sem-assinatura"
       | "metodo-invalido"
-      | "cancelamento-nao-confirmado",
+      | "cancelamento-nao-confirmado"
+      // Pediu Pix tendo cartão que já renova sozinho: pagar os dois é perder
+      // dinheiro, e é da pessoa que ele seria.
+      | "renovacao-automatica-ativa"
+      // Pediu cancelamento num plano que não renova sozinho: não há o que
+      // cancelar, e fingir que houve deixaria um `cancelAtPeriodEnd` mentindo.
+      | "renovacao-manual",
   ) {
     super(message);
     this.name = "ErroDeCobranca";
@@ -148,6 +156,163 @@ export async function iniciarAssinatura(entrada: {
       attemptId: tentativa.id,
       status: resposta.status,
       checkoutUrl: resposta.checkoutUrl,
+      pixQrCode: resposta.pixQrCode,
+      pixQrCodeBase64: resposta.pixQrCodeBase64,
+      expiraEm: resposta.expiraEm,
+    };
+  } catch (erro) {
+    await db.paymentAttempt.update({
+      where: { id: tentativa.id },
+      data: {
+        status: "ERROR",
+        failureMessage: erro instanceof Error ? erro.message : String(erro),
+      },
+    });
+    throw erro;
+  }
+}
+
+/**
+ * Quanto tempo um QR do Pix vale.
+ *
+ * Meia hora cabe numa sessão: dá tempo de abrir o aplicativo do banco, e não
+ * dá tempo de a pessoa esquecer que gerou. Um QR válido por dias é pior do que
+ * parece — ela volta ao aplicativo sem saber se ainda deve aquele Pix, e o
+ * risco de pagar dois vira real.
+ */
+export const VALIDADE_DO_PIX_MINUTOS = 30;
+
+/**
+ * Abre a cobrança Pix de um mês do plano mensal.
+ *
+ * Não cria contrato nenhum. Nasce um pagamento, ele concede um ciclo, e
+ * acabou — a próxima renovação é outra decisão da pessoa, outro Pix, outro
+ * ciclo. É o que `MANUAL_RENEW` quer dizer.
+ *
+ * Duas recusas antes de gastar uma chamada no provedor, e as duas são sobre
+ * dinheiro:
+ *
+ * 1. **Já existe um Pix vivo desta pessoa?** Devolve o mesmo, em vez de abrir
+ *    outro. Dois toques no botão não podem virar duas cobranças em aberto — a
+ *    compra avulsa já se protege assim, reaproveitando a `Purchase` pendente.
+ *
+ * 2. **O cartão já renova sozinho?** Então não há o que renovar à mão, e
+ *    deixar passar significaria a pessoa pagando o Pix enquanto o Mercado Pago
+ *    segue cobrando o cartão no fim do mês. Quem cancelou a renovação
+ *    automática, ou está vencido, passa — aí o Pix é exatamente o certo.
+ */
+export async function iniciarAssinaturaPix(entrada: {
+  userId: string;
+  plano: SubscriptionPlan;
+}): Promise<InicioDeCobranca> {
+  const plano = planoPorCodigo(entrada.plano);
+
+  // Só o mensal. O anual por Pix seria um ano de acesso concedido de uma vez,
+  // uma decisão comercial diferente que ninguém tomou — e recusar aqui é
+  // melhor que descobrir depois, com o dinheiro já recebido.
+  if (plano.code !== "MONTHLY" || !plano.ativo || plano.precoCents <= 0) {
+    throw new ErroDeCobranca(
+      "O Pix está disponível no plano mensal.",
+      "plano-invalido",
+    );
+  }
+
+  const [usuario, assinatura] = await Promise.all([
+    db.user.findUniqueOrThrow({
+      where: { id: entrada.userId },
+      select: { id: true, email: true, name: true },
+    }),
+    db.subscription.findUnique({ where: { userId: entrada.userId } }),
+  ]);
+
+  const cartaoRenovandoSozinho =
+    assinatura?.billingMode === "AUTO_RENEW" &&
+    assinatura.externalPreapprovalId !== null &&
+    !assinatura.cancelAtPeriodEnd &&
+    (assinatura.status === "ACTIVE" || assinatura.status === "TRIALING");
+
+  if (cartaoRenovandoSozinho) {
+    throw new ErroDeCobranca(
+      "Sua assinatura já é renovada sozinha no cartão. " +
+        "Se quiser passar a pagar por Pix, cancele a renovação automática primeiro.",
+      "renovacao-automatica-ativa",
+    );
+  }
+
+  const provedor = provedorDePagamento();
+  const mock = podeUsarMock();
+  const agora = new Date();
+
+  // Cobrança ainda viva desta pessoa: mesmo QR, mesma tentativa. `expiresAt`
+  // no futuro é a condição — uma tentativa pendente e vencida não serve de
+  // nada e precisa dar lugar a outra.
+  const viva = await db.paymentAttempt.findFirst({
+    where: {
+      userId: usuario.id,
+      kind: "SUBSCRIPTION",
+      billingMode: "MANUAL_RENEW",
+      status: { in: ["CREATED", "PENDING"] },
+      pixQrCode: { not: null },
+      expiresAt: { gt: agora },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  if (viva) {
+    return {
+      attemptId: viva.id,
+      status: "PENDING",
+      checkoutUrl: null,
+      pixQrCode: viva.pixQrCode,
+      pixQrCodeBase64: viva.pixQrCodeBase64,
+      expiraEm: viva.expiresAt,
+    };
+  }
+
+  const tentativa = await db.paymentAttempt.create({
+    data: {
+      userId: usuario.id,
+      kind: "SUBSCRIPTION",
+      status: "CREATED",
+      plan: plano.code,
+      billingMode: "MANUAL_RENEW",
+      amountCents: plano.precoCents,
+      currency: plano.moeda,
+      method: "pix",
+      provider: provedor.nome,
+      idempotencyKey: randomUUID(),
+      isDemo: mock,
+    },
+  });
+
+  try {
+    const resposta = await provedor.criarAssinaturaPix({
+      usuario: { id: usuario.id, email: usuario.email, nome: usuario.name },
+      plano,
+      referenciaExterna: tentativa.id,
+      idempotencyKey: tentativa.idempotencyKey,
+      expiraEmMinutos: VALIDADE_DO_PIX_MINUTOS,
+    });
+
+    await db.paymentAttempt.update({
+      where: { id: tentativa.id },
+      data: {
+        // Aqui `externalId` é o **pagamento**, e é essa diferença em relação
+        // ao cartão que faz a reconciliação achar o caminho certo depois.
+        externalId: resposta.externalId,
+        status: mapaTentativa(resposta.status),
+        rawStatus: resposta.status,
+        pixQrCode: resposta.pixQrCode,
+        pixQrCodeBase64: resposta.pixQrCodeBase64,
+        expiresAt: resposta.expiraEm,
+        isDemo: mock || resposta.pagadorSubstituido === true,
+      },
+    });
+
+    return {
+      attemptId: tentativa.id,
+      status: resposta.status,
+      checkoutUrl: null,
       pixQrCode: resposta.pixQrCode,
       pixQrCodeBase64: resposta.pixQrCodeBase64,
       expiraEm: resposta.expiraEm,
@@ -358,9 +523,25 @@ export async function reconciliarPagamento(
   // original é de assinatura. Aprovada ou recusada, quem decide é o livro de
   // ciclos — reembolso e chargeback seguem o caminho de devolução de sempre.
   const tentativa = await localizarTentativa(consulta, provedor.nome);
+
+  // Ciclo mensal pago à mão: a cobrança é este pagamento, não a fatura de um
+  // contrato. Mandá-lo para o caminho do preapproval consultaria
+  // `/preapproval/<id de pagamento>` e receberia 404 — a mesma classe de erro
+  // que uma vez fez compra paga não liberar nada.
+  if (
+    tentativa?.kind === "SUBSCRIPTION" &&
+    tentativa.billingMode === "MANUAL_RENEW" &&
+    consulta.status !== "REFUNDED" &&
+    consulta.status !== "CHARGEBACK"
+  ) {
+    return reconciliarCicloManual(tentativa, consulta, { origem: "pagamento" });
+  }
+
   const preapprovalId =
     consulta.preapprovalId ??
-    (tentativa?.kind === "SUBSCRIPTION" ? tentativa.externalId : null);
+    (tentativa?.kind === "SUBSCRIPTION" && tentativa.billingMode !== "MANUAL_RENEW"
+      ? tentativa.externalId
+      : null);
 
   if (
     preapprovalId &&
@@ -679,12 +860,69 @@ type Assinatura = Prisma.SubscriptionGetPayload<object>;
 type Papel = "novo" | "atual" | "antigo";
 
 type ContextoDeCiclo = {
-  preapprovalId: string;
+  /** Nulo na renovação manual: não existe contrato, só a cobrança avulsa. */
+  preapprovalId: string | null;
   tentativa: Tentativa;
   plano: DefinicaoDePlano;
   provedorNome: string;
   opcoes: OpcoesDeCiclo;
+  /**
+   * Quem renova. É o único eixo em que os dois fluxos divergem dentro de
+   * `concederCiclo`, e está aqui em vez de espalhado em `if (metodo === "pix")`
+   * — que é como as duas metades acabariam divergindo na próxima mudança.
+   */
+  billingMode: BillingMode;
 };
+
+/**
+ * Uma cobrança do provedor, na forma que o livro de ciclos entende.
+ *
+ * Existe para que **haja uma porta só** para conceder um ciclo. A cobrança de
+ * um preapproval chega como `FaturaDeAssinatura` e a do Pix como
+ * `ConsultaPagamento`; normalizar aqui é o que evita um segundo
+ * `concederCiclo` — e este arquivo já pagou o preço de ter três caminhos
+ * decidindo a mesma coisa, cada um esquecendo uma checagem diferente.
+ */
+type CobrancaDoProvedor = {
+  pagamentoId: string;
+  /** Fatura do preapproval. Nulo na cobrança manual: não há fatura. */
+  invoiceId: string | null;
+  valorCents: number;
+  moeda: string;
+  metodo: string | null;
+  cobradoEm: Date;
+  statusCru: string | null;
+  detalheCru: string | null;
+};
+
+function deFatura(fatura: FaturaDeAssinatura): CobrancaDoProvedor {
+  const pagamento = fatura.pagamento!;
+  return {
+    pagamentoId: pagamento.id,
+    invoiceId: fatura.id,
+    valorCents: fatura.valorCents,
+    moeda: fatura.moeda,
+    metodo: fatura.metodo,
+    cobradoEm: fatura.dataDebito ?? new Date(),
+    statusCru: pagamento.statusCru,
+    detalheCru: pagamento.detalheCru,
+  };
+}
+
+function deConsulta(consulta: ConsultaPagamento): CobrancaDoProvedor {
+  return {
+    pagamentoId: consulta.externalId,
+    invoiceId: null,
+    valorCents: consulta.valorCents,
+    moeda: consulta.moeda,
+    metodo: consulta.metodo,
+    // A data do provedor, não `new Date()`: é dela que sai o início do ciclo,
+    // e reconciliar dois dias depois não pode mudar até quando a pessoa pagou.
+    cobradoEm: consulta.aprovadoEm ?? new Date(),
+    statusCru: consulta.statusCru,
+    detalheCru: consulta.detalheCru,
+  };
+}
 
 class VinculoLegadoPendente extends Error {
   constructor() {
@@ -752,6 +990,7 @@ export async function reconciliarCicloDeAssinatura(
     plano: planoPorCodigo(tentativa.plan ?? "MONTHLY"),
     provedorNome: provedor.nome,
     opcoes,
+    billingMode: "AUTO_RENEW",
   };
 
   const pendente = {
@@ -794,9 +1033,13 @@ export async function reconciliarCicloDeAssinatura(
     for (const fatura of faturas) {
       const status = fatura.pagamento!.status;
       if (status === "APPROVED") {
-        if (await registrarCobrancaAprovada(ctx, fatura)) ciclosNovos += 1;
+        if (await registrarCobrancaAprovada(ctx, deFatura(fatura))) {
+          ciclosNovos += 1;
+        }
       } else if (status === "REJECTED" || status === "CANCELED") {
-        if (await registrarCobrancaRecusada(ctx, fatura)) recusasNovas += 1;
+        if (await registrarCobrancaRecusada(ctx, deFatura(fatura))) {
+          recusasNovas += 1;
+        }
       }
     }
   } catch (erro) {
@@ -964,6 +1207,83 @@ export async function reconciliarFatura(
 }
 
 /**
+ * A porta do ciclo mensal pago à mão.
+ *
+ * O paralelo exato de `reconciliarCicloDeAssinatura`, para o outro modo de
+ * renovação — e como lá, **tudo** passa por aqui: webhook, tela de espera,
+ * varredura e o retorno. Chamada duas vezes, converge; chamada em paralelo,
+ * a unicidade do `Payment` segura a segunda.
+ *
+ * A diferença de forma é que aqui não existe contrato a consultar. A cobrança
+ * é um pagamento avulso, e o que ela concede sai de `concederCiclo` — a mesma
+ * função que o cartão usa.
+ */
+export async function reconciliarCicloManual(
+  tentativa: Tentativa,
+  consulta: ConsultaPagamento,
+  opcoes: OpcoesDeCiclo,
+): Promise<ResultadoDeCiclo> {
+  const provedor = provedorDePagamento();
+  const ctx: ContextoDeCiclo = {
+    preapprovalId: null,
+    tentativa,
+    plano: planoPorCodigo(tentativa.plan ?? "MONTHLY"),
+    provedorNome: provedor.nome,
+    opcoes,
+    billingMode: "MANUAL_RENEW",
+  };
+
+  // A tentativa **é** a cobrança neste modo, então espelhar o estado do
+  // provedor nela é o certo — ao contrário do cartão, onde `externalId` guarda
+  // o contrato e sobrescrevê-lo com o id da cobrança do mês quebrava a
+  // reconsulta seguinte.
+  const tentativaMudou = await db.paymentAttempt.updateMany({
+    where: { id: tentativa.id, status: { in: ["CREATED", "PENDING"] } },
+    data: {
+      status: mapaTentativa(consulta.status),
+      rawStatus: consulta.statusCru,
+      method: consulta.metodo ?? tentativa.method,
+      failureCode: consulta.detalheCru,
+      ...(consulta.status === "REJECTED"
+        ? { failureMessage: mensagemDeRecusa(consulta.detalheCru) }
+        : {}),
+    },
+  });
+
+  const base = {
+    attemptId: tentativa.id,
+    status: consulta.status,
+    snapshot: consulta,
+    recusasNovas: 0,
+    cobrancasEncontradas: 1,
+    renovacaoPendente: false,
+  };
+
+  if (consulta.status === "APPROVED") {
+    const concedeu = await registrarCobrancaAprovada(ctx, deConsulta(consulta));
+    return {
+      ...base,
+      mudou: concedeu || tentativaMudou.count > 0,
+      motivo: concedeu ? "ciclo mensal concedido" : "cobrança já registrada",
+      ciclosNovos: concedeu ? 1 : 0,
+    };
+  }
+
+  // Recusado, cancelado ou expirado: nada foi cobrado e nenhum acesso muda.
+  // A tentativa fecha, e a tela oferece gerar outro Pix — a anterior fica no
+  // histórico, que é como se descobre depois quantos QR nunca foram pagos.
+  return {
+    ...base,
+    mudou: tentativaMudou.count > 0,
+    motivo:
+      consulta.status === "PENDING"
+        ? "aguardando o pagamento"
+        : `cobrança encerrada sem pagamento (${consulta.status})`,
+    ciclosNovos: 0,
+  };
+}
+
+/**
  * Nome antigo, mesma porta. Retorno do checkout e tela de espera chamam por
  * aqui; o comportamento é inteiro o de `reconciliarCicloDeAssinatura`.
  */
@@ -1021,6 +1341,11 @@ async function papelDoPreapproval(
   assinatura: Assinatura | null,
   ctx: ContextoDeCiclo,
 ): Promise<Papel> {
+  // Renovação manual não tem contrato, e portanto não tem papel: quem chama
+  // por aqui sem preapproval está no caminho errado. Sem esta guarda, duas
+  // colunas nulas se comparariam iguais e uma cobrança Pix se declararia
+  // "atual" do contrato de cartão de outra pessoa.
+  if (!ctx.preapprovalId) return "novo";
   if (!assinatura?.externalPreapprovalId) return "novo";
   if (assinatura.externalPreapprovalId === ctx.preapprovalId) return "atual";
 
@@ -1040,20 +1365,24 @@ async function papelDoPreapproval(
 
 function dadosDaCobranca(
   ctx: ContextoDeCiclo,
-  fatura: FaturaDeAssinatura,
+  cobranca: CobrancaDoProvedor,
   subscriptionId: string | null,
 ) {
   return {
     userId: ctx.tentativa.userId,
     subscriptionId,
-    invoiceId: fatura.id,
+    invoiceId: cobranca.invoiceId,
     kind: "SUBSCRIPTION" as const,
     plan: ctx.plano.code,
-    amountCents: fatura.valorCents,
-    currency: fatura.moeda,
+    // Como esta cobrança renovava, no dia em que aconteceu. O painel separa
+    // renovação de cartão de renovação Pix por aqui, e não pelo estado atual
+    // da assinatura — que só conhece o hoje.
+    billingMode: ctx.billingMode,
+    amountCents: cobranca.valorCents,
+    currency: cobranca.moeda,
     provider: ctx.provedorNome,
-    externalId: fatura.pagamento!.id,
-    method: fatura.metodo,
+    externalId: cobranca.pagamentoId,
+    method: cobranca.metodo,
     attemptId: ctx.tentativa.id,
     isDemo: ctx.tentativa.isDemo,
   };
@@ -1091,21 +1420,40 @@ async function comConflitoIdempotente<T>(
 /** Devolve `true` se esta chamada concedeu (ou vinculou) um ciclo. */
 async function registrarCobrancaAprovada(
   ctx: ContextoDeCiclo,
-  fatura: FaturaDeAssinatura,
+  cobranca: CobrancaDoProvedor,
 ): Promise<boolean> {
-  return comConflitoIdempotente(fatura.pagamento!.id, ctx.provedorNome, false, () =>
-    db.$transaction((tx) => concederCiclo(tx, ctx, fatura)),
+  return comConflitoIdempotente(cobranca.pagamentoId, ctx.provedorNome, false, () =>
+    db.$transaction((tx) => concederCiclo(tx, ctx, cobranca)),
   );
 }
 
+/**
+ * A única porta que concede um ciclo — nos dois modos de renovação.
+ *
+ * Cartão e Pix entram aqui pela mesma função de propósito. As garantias que
+ * importam (o `Payment` criado antes de qualquer outra escrita, o índice
+ * `cycleIndex` que impede o mês em dobro, o período que nunca encurta, o
+ * direito estendido em vez de duplicado) valem uma vez, para os dois, e não
+ * podem divergir por alguém ter corrigido só metade.
+ *
+ * O que o modo muda, e só isto:
+ *
+ *   AUTO_RENEW    o papel do preapproval decide se é ativação, renovação ou
+ *                 cobrança de um contrato substituído; `graceUntil` é limpo,
+ *                 porque tolerância ali nasce de cobrança recusada.
+ *   MANUAL_RENEW  não há contrato nem papel; o início sai de `inicioDoCiclo`,
+ *                 que já conhece renovação antecipada, carência e volta
+ *                 tardia; `graceUntil` nasce com o ciclo, porque no Pix a
+ *                 carência é parte da regra, não sintoma de problema.
+ */
 async function concederCiclo(
   tx: Prisma.TransactionClient,
   ctx: ContextoDeCiclo,
-  fatura: FaturaDeAssinatura,
+  cobranca: CobrancaDoProvedor,
 ): Promise<boolean> {
   const { tentativa, plano, preapprovalId, opcoes } = ctx;
-  const pagamentoId = fatura.pagamento!.id;
-  const cobradoEm = fatura.dataDebito ?? new Date();
+  const manual = ctx.billingMode === "MANUAL_RENEW";
+  const { pagamentoId, cobradoEm } = cobranca;
 
   const assinatura =
     (await tx.subscription.findUnique({ where: { userId: tentativa.userId } })) ??
@@ -1113,69 +1461,90 @@ async function concederCiclo(
       data: { userId: tentativa.userId, plan: "FREE", status: "ACTIVE" },
     }));
 
-  const papel = await papelDoPreapproval(tx, assinatura, ctx);
-
-  if (papel === "antigo") {
-    // Dinheiro que entrou é receita e fica registrado — mas não é deste
-    // preapproval que o acesso depende, então não move data nenhuma.
-    await tx.payment.create({
-      data: { ...dadosDaCobranca(ctx, fatura, assinatura.id), status: "APPROVED" },
-    });
-    return false;
-  }
-
   const ultimo = await tx.payment.findFirst({
     where: { subscriptionId: assinatura.id, cycleIndex: { not: null } },
     orderBy: { cycleIndex: "desc" },
   });
   const cycleIndex = (ultimo?.cycleIndex ?? 0) + 1;
 
-  const legado =
-    papel === "atual" &&
-    !ultimo &&
-    PLANOS_PAGOS.includes(assinatura.plan) &&
-    assinatura.currentPeriodEnd !== null;
+  // O fim do ciclo anterior, venha ele do livro ou de uma assinatura antiga
+  // que nunca teve livro. É a única entrada que decide o início do próximo.
+  const fimAnterior =
+    ultimo?.periodEnd ??
+    (PLANOS_PAGOS.includes(assinatura.plan) ? assinatura.currentPeriodEnd : null);
 
-  if (legado) {
-    if (!opcoes.permitirVinculoLegado) throw new VinculoLegadoPendente();
-
-    // O ciclo 1 já foi concedido pelo caminho antigo. Vincular é só dizer qual
-    // cobrança o pagou: nenhuma data se move, nada de cancelamento muda.
-    await tx.payment.create({
-      data: {
-        ...dadosDaCobranca(ctx, fatura, assinatura.id),
-        status: "APPROVED",
-        cycleIndex,
-        periodStart: assinatura.currentPeriodStart ?? cobradoEm,
-        periodEnd: assinatura.currentPeriodEnd,
-      },
-    });
-    return true;
-  }
-
-  // Renovação encadeia no fim do ciclo anterior — não em "hoje" —, e é isso
-  // que torna o resultado igual em qualquer ordem de chegada. Assinatura nova
-  // começa na cobrança, sem apagar dias que a pessoa ainda tinha pagos.
+  let papel: Papel;
   let inicio: Date;
-  if (papel === "atual" && ultimo?.periodEnd) {
-    inicio = ultimo.periodEnd;
-  } else if (
-    assinatura.status === "ACTIVE" &&
-    PLANOS_PAGOS.includes(assinatura.plan) &&
-    assinatura.currentPeriodEnd &&
-    assinatura.currentPeriodEnd > cobradoEm
-  ) {
-    inicio = assinatura.currentPeriodEnd;
+
+  if (manual) {
+    // Só datas decidem. Condicionar a carência ao `status` faria um cron
+    // atrasado mudar quanto tempo alguém recebeu pelo que pagou.
+    inicio = inicioDoCiclo(fimAnterior, cobradoEm, CARENCIA_MANUAL_MS);
+    // Ciclo que nasce no próprio pagamento é começo de vida — assinar pela
+    // primeira vez ou voltar depois da carência. Encadeado é renovação.
+    papel = inicio.getTime() === cobradoEm.getTime() ? "novo" : "atual";
   } else {
-    inicio = cobradoEm;
+    papel = await papelDoPreapproval(tx, assinatura, ctx);
+
+    if (papel === "antigo") {
+      // Dinheiro que entrou é receita e fica registrado — mas não é deste
+      // preapproval que o acesso depende, então não move data nenhuma.
+      await tx.payment.create({
+        data: {
+          ...dadosDaCobranca(ctx, cobranca, assinatura.id),
+          status: "APPROVED",
+        },
+      });
+      return false;
+    }
+
+    const legado =
+      papel === "atual" &&
+      !ultimo &&
+      PLANOS_PAGOS.includes(assinatura.plan) &&
+      assinatura.currentPeriodEnd !== null;
+
+    if (legado) {
+      if (!opcoes.permitirVinculoLegado) throw new VinculoLegadoPendente();
+
+      // O ciclo 1 já foi concedido pelo caminho antigo. Vincular é só dizer
+      // qual cobrança o pagou: nenhuma data se move, nada de cancelamento muda.
+      await tx.payment.create({
+        data: {
+          ...dadosDaCobranca(ctx, cobranca, assinatura.id),
+          status: "APPROVED",
+          cycleIndex,
+          periodStart: assinatura.currentPeriodStart ?? cobradoEm,
+          periodEnd: assinatura.currentPeriodEnd,
+        },
+      });
+      return true;
+    }
+
+    // Renovação encadeia no fim do ciclo anterior — não em "hoje" —, e é isso
+    // que torna o resultado igual em qualquer ordem de chegada. Assinatura
+    // nova começa na cobrança, sem apagar dias que a pessoa ainda tinha pagos.
+    if (papel === "atual" && ultimo?.periodEnd) {
+      inicio = ultimo.periodEnd;
+    } else if (
+      assinatura.status === "ACTIVE" &&
+      PLANOS_PAGOS.includes(assinatura.plan) &&
+      assinatura.currentPeriodEnd &&
+      assinatura.currentPeriodEnd > cobradoEm
+    ) {
+      inicio = assinatura.currentPeriodEnd;
+    } else {
+      inicio = cobradoEm;
+    }
   }
+
   const fim = fimDoCiclo(plano, inicio);
 
   // Primeira escrita da transação, de propósito: se a unicidade disparar, nada
   // mais foi tocado.
   await tx.payment.create({
     data: {
-      ...dadosDaCobranca(ctx, fatura, assinatura.id),
+      ...dadosDaCobranca(ctx, cobranca, assinatura.id),
       status: "APPROVED",
       cycleIndex,
       periodStart: inicio,
@@ -1196,16 +1565,24 @@ async function concederCiclo(
       status: "ACTIVE",
       provider: ctx.provedorNome,
       priceCents: plano.precoCents,
+      billingMode: ctx.billingMode,
+      // No Pix vai a NULO de propósito. Quem veio do cartão deixaria para trás
+      // um preapproval que a varredura diária consultaria para sempre — e o
+      // histórico do contrato antigo continua em `PaymentAttempt` e
+      // `SubscriptionEvent`, que é onde ele pertence.
       externalPreapprovalId: preapprovalId,
       currentPeriodStart: inicio,
       currentPeriodEnd: fimVigente,
       failedCharges: 0,
-      graceUntil: null,
+      // No cartão, `graceUntil` é sintoma: só existe quando uma cobrança
+      // falhou, então um ciclo aprovado o apaga. No Pix é regra: o acesso vale
+      // até o vencimento mais a carência, e a data nasce junto com o ciclo.
+      graceUntil: manual ? fimDaCarencia(fimVigente, CARENCIA_MANUAL_MS) : null,
       // Só uma assinatura NOVA limpa um cancelamento. Cobrança do preapproval
       // vigente — atrasada, reentregue, retentativa — nunca desfaz o pedido
-      // de quem cancelou.
-      ...(papel === "novo"
-        ? { startedAt: inicio, cancelAtPeriodEnd: false, canceledAt: null }
+      // de quem cancelou. No Pix, pagar de novo **é** o pedido de continuar.
+      ...(papel === "novo" || manual
+        ? { startedAt: papel === "novo" ? inicio : assinatura.startedAt, cancelAtPeriodEnd: false, canceledAt: null }
         : {}),
     },
   });
@@ -1234,18 +1611,25 @@ async function concederCiclo(
       payload: {
         origem: opcoes.origem,
         paymentId: pagamentoId,
-        invoiceId: fatura.id,
+        invoiceId: cobranca.invoiceId,
         cycleIndex,
+        billingMode: ctx.billingMode,
+        periodStart: inicio.toISOString(),
       } as Prisma.InputJsonValue,
     },
   });
 
-  // A tentativa original só muda de status na ativação, e nunca de id: ela é
-  // o checkout que a pessoa fez, não a última cobrança do ciclo.
-  if (papel === "novo" && tentativa.status !== "APPROVED") {
+  // No cartão, a tentativa é o **checkout** e sobrevive a todos os ciclos que
+  // o contrato gerar: só muda de status na ativação. No Pix ela é a cobrança
+  // daquele mês e morre com ele, então cada uma fecha aprovada — é o que a
+  // tela de espera e o histórico leem.
+  if ((papel === "novo" || manual) && tentativa.status !== "APPROVED") {
     await tx.paymentAttempt.update({
       where: { id: tentativa.id },
-      data: { status: "APPROVED", rawStatus: "authorized" },
+      data: {
+        status: "APPROVED",
+        rawStatus: manual ? (cobranca.statusCru ?? "approved") : "authorized",
+      },
     });
   }
 
@@ -1262,35 +1646,39 @@ async function concederCiclo(
  */
 async function registrarCobrancaRecusada(
   ctx: ContextoDeCiclo,
-  fatura: FaturaDeAssinatura,
+  cobranca: CobrancaDoProvedor,
 ): Promise<boolean> {
-  return comConflitoIdempotente(fatura.pagamento!.id, ctx.provedorNome, false, () =>
+  return comConflitoIdempotente(cobranca.pagamentoId, ctx.provedorNome, false, () =>
     db.$transaction(async (tx) => {
-      const pagamento = fatura.pagamento!;
       const assinatura = await tx.subscription.findUnique({
         where: { userId: ctx.tentativa.userId },
       });
 
       await tx.payment.create({
         data: {
-          ...dadosDaCobranca(ctx, fatura, assinatura?.id ?? null),
+          ...dadosDaCobranca(ctx, cobranca, assinatura?.id ?? null),
           status: "FAILED",
-          failureCode: pagamento.detalheCru,
-          failureMessage: pagamento.statusCru,
+          failureCode: cobranca.detalheCru,
+          failureMessage: cobranca.statusCru,
         },
       });
 
       if (!assinatura) return true;
       if ((await papelDoPreapproval(tx, assinatura, ctx)) !== "atual") return true;
 
-      const faturaPaga = await tx.payment.findFirst({
-        where: { invoiceId: fatura.id, status: "APPROVED" },
-        select: { id: true },
-      });
+      // Sem fatura não há retentativa a reconhecer. O `where` precisa do
+      // guarda: `invoiceId: null` casaria com qualquer cobrança sem fatura, e
+      // uma recusa qualquer passaria a se achar já paga.
+      const faturaPaga = cobranca.invoiceId
+        ? await tx.payment.findFirst({
+            where: { invoiceId: cobranca.invoiceId, status: "APPROVED" },
+            select: { id: true },
+          })
+        : null;
       if (faturaPaga) return true;
 
       const base =
-        assinatura.currentPeriodEnd ?? fatura.dataDebito ?? new Date();
+        assinatura.currentPeriodEnd ?? cobranca.cobradoEm;
 
       // `increment` e não `falhas + 1`: duas recusas diferentes em paralelo
       // não podem virar uma só.
@@ -1314,9 +1702,9 @@ async function registrarCobrancaRecusada(
           periodEnd: assinatura.currentPeriodEnd,
           payload: {
             origem: ctx.opcoes.origem,
-            paymentId: pagamento.id,
-            invoiceId: fatura.id,
-            detalhe: pagamento.detalheCru,
+            paymentId: cobranca.pagamentoId,
+            invoiceId: cobranca.invoiceId,
+            detalhe: cobranca.detalheCru,
           } as Prisma.InputJsonValue,
         },
       });
@@ -1695,6 +2083,169 @@ export async function reconciliarAssinaturasPeriodicamente(
   return resumo;
 }
 
+// ------------------------------------------------- varredura do Pix mensal
+
+/**
+ * Por quanto tempo uma cobrança Pix continua sendo olhada depois de criada.
+ *
+ * O QR vale meia hora, mas o desfecho pode demorar mais que isso: pagamento em
+ * análise, banco lento, e o caso que realmente importa — o Pix pago no último
+ * segundo, cuja aprovação chega ao provedor **depois** de a nossa tentativa já
+ * constar expirada. Dois dias cobrem isso com folga e não fazem a varredura
+ * carregar o histórico inteiro todo dia.
+ */
+const JANELA_DO_PIX_MS = 2 * 86_400_000;
+
+export type ResumoDoPix = {
+  verificadas: number;
+  ciclosNovos: number;
+  encerradas: number;
+  falhas: number;
+};
+
+/**
+ * Descobre sozinha o que o webhook do Pix deveria ter contado.
+ *
+ * A reconciliação periódica de assinaturas parte de `externalPreapprovalId`, e
+ * uma assinatura por Pix não tem nenhum — ela ficaria fora da rede inteira. É
+ * esta varredura que a cobre, e ela existe pelo mesmo motivo que a outra:
+ * **o webhook pode não chegar**, e quem pagou não pode depender disso.
+ *
+ * Inclui de propósito as tentativas já marcadas EXPIRED dentro da janela. O
+ * Pix pago na virada do prazo é aprovado do lado deles com a nossa linha já
+ * fechada; sem olhá-la de novo, o dinheiro entraria e o acesso não.
+ * `reconciliarCicloManual` concede do mesmo jeito — a data do pagamento é que
+ * decide o ciclo, não o estado em que a tentativa estava.
+ */
+export async function reconciliarPixPendentes(
+  opcoes: { agora?: Date } = {},
+): Promise<ResumoDoPix> {
+  const agora = opcoes.agora ?? new Date();
+  const resumo: ResumoDoPix = {
+    verificadas: 0,
+    ciclosNovos: 0,
+    encerradas: 0,
+    falhas: 0,
+  };
+
+  let cursor: string | undefined;
+
+  for (;;) {
+    const lote = await db.paymentAttempt.findMany({
+      where: {
+        kind: "SUBSCRIPTION",
+        billingMode: "MANUAL_RENEW",
+        status: { in: ["CREATED", "PENDING", "EXPIRED"] },
+        externalId: { not: null },
+        createdAt: { gte: new Date(agora.getTime() - JANELA_DO_PIX_MS) },
+      },
+      orderBy: { id: "asc" },
+      take: 50,
+      ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
+      select: { id: true, userId: true, externalId: true },
+    });
+    if (lote.length === 0) break;
+
+    for (const t of lote) {
+      resumo.verificadas += 1;
+      try {
+        // A porta de sempre. Ela reconsulta o provedor, decide, e é idempotente
+        // — rodar junto com um webhook que chega agora converge no mesmo lugar.
+        const r = await reconciliarPagamento(t.externalId!);
+        // `reconciliarPagamento` devolve o resultado mais rico quando a
+        // cobrança é de ciclo — que é sempre o caso aqui.
+        resumo.ciclosNovos += (r as Partial<ResultadoDeCiclo>).ciclosNovos ?? 0;
+        if (r.status === "EXPIRED" || r.status === "CANCELED") {
+          resumo.encerradas += 1;
+        }
+      } catch (erro) {
+        resumo.falhas += 1;
+        await log.error({
+          channel: "PAYMENTS",
+          message: "Reconciliação de cobrança Pix falhou",
+          userId: t.userId,
+          context: { attemptId: t.id, provedor: sanitizarFalha(erro) },
+        });
+      }
+    }
+
+    cursor = lote[lote.length - 1]!.id;
+  }
+
+  return resumo;
+}
+
+/**
+ * Marca o vencimento de quem renova à mão — sem cortar nada.
+ *
+ * O acesso durante a carência já é garantido pelo `graceUntil` gravado no
+ * ciclo, e a expiração já o respeita. Isto aqui é o **fato datado**: a
+ * assinatura passa a PAST_DUE e nasce um `SubscriptionEvent`, que é o que
+ * permite dizer depois "quantas pessoas entraram em carência em outubro" e o
+ * que um aviso por e-mail leria para não avisar duas vezes.
+ *
+ * `updateMany` condicionado ao status torna a operação repetível: o cron
+ * rodando dez vezes grava um evento só.
+ */
+export async function marcarVencimentosManuais(
+  agora: Date = new Date(),
+): Promise<number> {
+  const vencidas = await db.subscription.findMany({
+    where: {
+      billingMode: "MANUAL_RENEW",
+      status: { in: ["ACTIVE", "TRIALING"] },
+      currentPeriodEnd: { not: null, lte: agora },
+    },
+    select: {
+      id: true,
+      userId: true,
+      status: true,
+      currentPeriodEnd: true,
+      graceUntil: true,
+    },
+  });
+
+  let marcadas = 0;
+
+  for (const a of vencidas) {
+    const mudou = await db.$transaction(async (tx) => {
+      const { count } = await tx.subscription.updateMany({
+        where: { id: a.id, status: a.status },
+        data: {
+          status: "PAST_DUE",
+          // Já deve existir, gravado quando o ciclo foi concedido. O `??` é
+          // para a linha que veio de antes desta fase e não tem nenhum.
+          graceUntil:
+            a.graceUntil ??
+            fimDaCarencia(a.currentPeriodEnd!, CARENCIA_MANUAL_MS),
+        },
+      });
+      if (count === 0) return false;
+
+      await tx.subscriptionEvent.create({
+        data: {
+          subscriptionId: a.id,
+          userId: a.userId,
+          type: "PAST_DUE",
+          fromStatus: a.status,
+          toStatus: "PAST_DUE",
+          periodEnd: a.currentPeriodEnd,
+          payload: {
+            origem: "cron",
+            motivo: "carencia-de-renovacao-manual",
+            billingMode: "MANUAL_RENEW",
+          } as Prisma.InputJsonValue,
+        },
+      });
+      return true;
+    });
+
+    if (mudou) marcadas += 1;
+  }
+
+  return marcadas;
+}
+
 async function aprovar(
   tx: Prisma.TransactionClient,
   tentativa: Tentativa,
@@ -1970,6 +2521,17 @@ export async function cancelarAssinaturaDoUsuario(
   const assinatura = await db.subscription.findUnique({ where: { userId } });
   if (!assinatura || assinatura.plan === "FREE") {
     throw new ErroDeCobranca("Não há assinatura ativa.", "sem-assinatura");
+  }
+
+  // Renovação manual não tem o que cancelar: ninguém vai cobrar de novo. Marcar
+  // `cancelAtPeriodEnd` aqui gravaria um fato falso — e a tela passaria a dizer
+  // "cancelada" para quem simplesmente tem um mês pago pela frente.
+  if (assinatura.billingMode === "MANUAL_RENEW") {
+    throw new ErroDeCobranca(
+      "Seu plano não cobra nada automaticamente: ele vale até o vencimento e " +
+        "só continua se você renovar. Não há o que cancelar.",
+      "renovacao-manual",
+    );
   }
 
   const externo = assinatura.externalPreapprovalId ?? assinatura.externalId;

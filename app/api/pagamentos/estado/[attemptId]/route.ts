@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import {
   reconciliarAssinatura,
   reconciliarCompra,
+  reconciliarPagamento,
 } from "@/lib/pagamentos/servico";
 
 /**
@@ -43,6 +44,7 @@ export async function GET(
       status: true,
       kind: true,
       plan: true,
+      billingMode: true,
       novelaId: true,
       externalId: true,
       externalPreferenceId: true,
@@ -51,6 +53,7 @@ export async function GET(
       method: true,
       checkoutUrl: true,
       pixQrCode: true,
+      pixQrCodeBase64: true,
       expiresAt: true,
       failureMessage: true,
       rawStatus: true,
@@ -68,26 +71,46 @@ export async function GET(
 
   let status = tentativa.status;
 
-  // Assinatura precisa do `preapproval`; compra pode partir da preferência ou
-  // do pedido, e é isso que permite recuperar quem fechou a aba do Mercado
-  // Pago sem nunca passar pela `back_url`.
-  const temPorOndeComecar =
-    tentativa.kind === "SUBSCRIPTION"
-      ? Boolean(tentativa.externalId)
-      : Boolean(
-          tentativa.externalId ??
-            tentativa.externalPreferenceId ??
-            tentativa.externalMerchantOrderId,
-        );
+  // Assinatura por cartão precisa do `preapproval`; assinatura por Pix e
+  // compra partem do pagamento — e a compra ainda aceita a preferência ou o
+  // pedido, que é o que permite recuperar quem fechou a aba do Mercado Pago
+  // sem nunca passar pela `back_url`.
+  const recorrente =
+    tentativa.kind === "SUBSCRIPTION" &&
+    tentativa.billingMode !== "MANUAL_RENEW";
 
-  if ((status === "PENDING" || status === "CREATED") && temPorOndeComecar) {
+  const temPorOndeComecar = recorrente
+    ? Boolean(tentativa.externalId)
+    : Boolean(
+        tentativa.externalId ??
+          tentativa.externalPreferenceId ??
+          tentativa.externalMerchantOrderId,
+      );
+
+  // EXPIRED entra na releitura só no Pix mensal, e por um motivo concreto: um
+  // Pix pago na virada do prazo é aprovado do lado deles com a nossa linha já
+  // fechada. Sem isto, a tela ficaria dizendo "expirou" a quem pagou — o cron
+  // consertaria em algumas horas, tarde demais para quem está olhando agora.
+  const pixManual =
+    tentativa.kind === "SUBSCRIPTION" &&
+    tentativa.billingMode === "MANUAL_RENEW";
+
+  const vaiReconsultar =
+    status === "PENDING" ||
+    status === "CREATED" ||
+    (pixManual && status === "EXPIRED");
+
+  if (vaiReconsultar && temPorOndeComecar) {
     try {
-      // Assinatura e compra são objetos diferentes no provedor. Mandar um id
-      // de `preapproval` — ou de preferência — para a consulta de pagamento
-      // devolvia 404, a rota não fazia nada, e a tela girava para sempre.
-      const resultado =
-        tentativa.kind === "SUBSCRIPTION"
-          ? await reconciliarAssinatura(tentativa.externalId as string)
+      // Contrato, cobrança de ciclo e compra são objetos diferentes no
+      // provedor. Mandar um id de `preapproval` — ou de preferência — para a
+      // consulta de pagamento devolvia 404, a rota não fazia nada, e a tela
+      // girava para sempre.
+      const resultado = recorrente
+        ? await reconciliarAssinatura(tentativa.externalId as string)
+        : tentativa.kind === "SUBSCRIPTION"
+          ? // Ciclo mensal por Pix: o `externalId` **é** o pagamento.
+            await reconciliarPagamento(tentativa.externalId as string)
           : await reconciliarCompra(tentativa.id);
       if (resultado.attemptId) {
         const atualizada = await db.paymentAttempt.findUnique({
@@ -103,18 +126,37 @@ export async function GET(
     }
   }
 
+  // "Seu Plantão está liberado até 11 de outubro" é a única coisa que a pessoa
+  // quer ler depois de pagar, e ela precisa vir do servidor: o cliente não tem
+  // como saber onde o ciclo terminou — quem renovou antes do vencimento ganhou
+  // dias encadeados, quem pagou na carência não ganhou nenhum.
+  const liberadoAte =
+    status === "APPROVED" && tentativa.kind === "SUBSCRIPTION"
+      ? (
+          await db.subscription.findUnique({
+            where: { userId: viewer.id },
+            select: { currentPeriodEnd: true },
+          })
+        )?.currentPeriodEnd ?? null
+      : null;
+
   return NextResponse.json(
     {
       id: tentativa.id,
       status,
       tipo: tentativa.kind,
       plano: tentativa.plan,
+      // Cartão ou Pix mudam o que a tela diz sobre o **próximo** mês; o
+      // benefício é o mesmo nos dois.
+      renovacao: tentativa.billingMode,
       novelaId: tentativa.novelaId,
       valorCents: tentativa.amountCents,
       metodo: tentativa.method,
       checkoutUrl: tentativa.checkoutUrl,
       pixQrCode: tentativa.pixQrCode,
+      pixQrCodeBase64: tentativa.pixQrCodeBase64,
       expiraEm: tentativa.expiresAt?.toISOString() ?? null,
+      liberadoAte: liberadoAte?.toISOString() ?? null,
       mensagem: tentativa.failureMessage,
       motivoCru: tentativa.rawStatus,
     },

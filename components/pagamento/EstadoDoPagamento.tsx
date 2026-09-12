@@ -33,11 +33,22 @@ type Cobranca = {
   id: string;
   status: Estado;
   tipo: "SUBSCRIPTION" | "PURCHASE";
+  /** `MANUAL_RENEW` é o mensal por Pix: um mês por vez, renovado à mão. */
+  renovacao?: "AUTO_RENEW" | "MANUAL_RENEW" | null;
   valorCents: number;
   metodo: string | null;
   checkoutUrl: string | null;
   pixQrCode: string | null;
+  pixQrCodeBase64: string | null;
   expiraEm: string | null;
+  /**
+   * Até quando o acesso vai valer, decidido pelo servidor.
+   *
+   * Nunca calculado aqui: quem renovou antes do vencimento recebeu dias
+   * encadeados, e quem pagou dentro da carência não recebeu nenhum. O cliente
+   * não tem como saber em qual dos dois casos está.
+   */
+  liberadoAte?: string | null;
   mensagem: string | null;
   /**
    * Como o provedor descreveu o estado, cru.
@@ -58,6 +69,21 @@ function reais(cents: number): string {
   });
 }
 
+/** "11 de outubro" — como esta fase fala de data para quem paga. */
+function porExtenso(iso: string): string {
+  return new Date(iso).toLocaleDateString("pt-BR", {
+    day: "numeric",
+    month: "long",
+  });
+}
+
+function horaCurta(iso: string): string {
+  return new Date(iso).toLocaleTimeString("pt-BR", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export function EstadoDoPagamento({
   inicial,
   destino,
@@ -72,8 +98,41 @@ export function EstadoDoPagamento({
   const { track } = useTelemetry();
   const [cobranca, setCobranca] = useState<Cobranca>(inicial);
   const [copiado, setCopiado] = useState(false);
+  const [gerando, setGerando] = useState(false);
   const tentativas = useRef(0);
   const avisado = useRef(false);
+
+  // Mensal por Pix: um Pix expirado não é um beco, é só um código velho. O
+  // botão de gerar outro só existe aqui porque só aqui há o que gerar — numa
+  // compra avulsa o caminho volta pela página da novela.
+  const mensalPorPix =
+    cobranca.tipo === "SUBSCRIPTION" && cobranca.renovacao === "MANUAL_RENEW";
+
+  async function gerarNovoPix() {
+    if (gerando) return;
+    setGerando(true);
+    try {
+      const resposta = await fetch("/api/pagamentos/checkout", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          tipo: "assinatura",
+          plano: "MONTHLY",
+          metodo: "PIX",
+        }),
+      });
+      const dados = await resposta.json();
+      if (!resposta.ok) {
+        setGerando(false);
+        return;
+      }
+      // Tentativa nova, endereço novo: a anterior fica no histórico, que é
+      // como se descobre depois quantos QR nunca viraram pagamento.
+      router.push(`/pagamento/${dados.attemptId}?tipo=assinatura`);
+    } catch {
+      setGerando(false);
+    }
+  }
 
   const finalizado =
     cobranca.status === "APPROVED" ||
@@ -153,8 +212,20 @@ export function EstadoDoPagamento({
         <p className="mt-2 text-[0.875rem] text-cream-400">
           {cobranca.tipo === "PURCHASE"
             ? `${nomeDoItem} é sua para sempre. Todos os episódios liberados, inclusive os que entrarem depois.`
-            : `${nomeDoItem} ativo. O catálogo inteiro está liberado.`}
+            : cobranca.liberadoAte
+              ? // A data é a informação, não um detalhe: é ela que responde
+                // "e agora, quanto tempo eu tenho?" antes de a pessoa
+                // precisar perguntar.
+                `Seu Plantão está liberado até ${porExtenso(cobranca.liberadoAte)}. O catálogo inteiro é seu.`
+              : `${nomeDoItem} ativo. O catálogo inteiro está liberado.`}
         </p>
+
+        {mensalPorPix ? (
+          <p className="mt-2 text-[0.75rem] leading-relaxed text-cream-600">
+            Nada será cobrado de novo sozinho. Perto do vencimento a gente
+            avisa, e renovar é um toque.
+          </p>
+        ) : null}
 
         <BotaoLink href={destino} tamanho="grande" largura="cheia" className="mt-7">
           Continuar assistindo
@@ -206,6 +277,40 @@ export function EstadoDoPagamento({
     // "cancelar" não pode ler "expirou": parece erro do sistema.
     const cancelou = /cancel/i.test(cobranca.motivoCru ?? "");
 
+    // Um Pix que venceu não é um problema, é um código velho. Nem ícone de
+    // alerta, nem explicação: uma frase e o botão que resolve.
+    if (mensalPorPix && !cancelou) {
+      return (
+        <Moldura>
+          <div className="grid size-16 place-items-center rounded-full bg-white/8 text-2xl">
+            ⏳
+          </div>
+          <h1 className="mt-5 text-[1.5rem] leading-tight">Esse Pix expirou</h1>
+          <p className="mt-2 text-[0.875rem] text-cream-400">
+            Nada foi cobrado. É só gerar outro — leva um instante.
+          </p>
+          <Botao
+            tamanho="grande"
+            largura="cheia"
+            className="mt-7"
+            disabled={gerando}
+            onClick={() => void gerarNovoPix()}
+          >
+            {gerando ? "Gerando…" : "Gerar novo Pix"}
+          </Botao>
+          <BotaoLink
+            href={destino}
+            variante="fantasma"
+            tamanho="medio"
+            largura="cheia"
+            className="mt-2"
+          >
+            Agora não
+          </BotaoLink>
+        </Moldura>
+      );
+    }
+
     return (
       <Moldura>
         <div className="grid size-16 place-items-center rounded-full bg-white/8 text-2xl">
@@ -256,21 +361,56 @@ export function EstadoDoPagamento({
       </h1>
       <p className="mt-2 text-[0.875rem] text-cream-400">
         {cobranca.pixQrCode
-          ? `Pague ${reais(cobranca.valorCents)} pelo código abaixo. A tela vira sozinha assim que o banco confirmar.`
+          ? `Pague ${reais(cobranca.valorCents)} no aplicativo do seu banco. Esta tela vira sozinha quando o pagamento cair.`
           : "Assim que o provedor confirmar, o acesso é liberado automaticamente. Pode deixar esta tela aberta."}
       </p>
 
       {cobranca.pixQrCode ? (
         <div className="mt-6 w-full">
-          <p className="mb-2 text-left text-[0.6875rem] uppercase tracking-wider text-cream-600">
-            Pix copia e cola
-          </p>
-          <p className="break-all rounded-xl border border-white/10 bg-black/25 p-3 text-left font-mono text-[0.6875rem] leading-relaxed text-cream-400">
-            {cobranca.pixQrCode}
-          </p>
-          <Botao largura="cheia" className="mt-3" onClick={copiarPix}>
-            {copiado ? "Código copiado" : "Copiar código"}
+          {/* O QR primeiro: quem paga em outro aparelho aponta a câmera e
+              pronto. Quem paga no mesmo celular usa o botão de copiar logo
+              abaixo — os dois caminhos à vista, nenhum escondido numa aba. */}
+          {cobranca.pixQrCodeBase64 ? (
+            <div className="mx-auto w-fit rounded-3xl bg-white p-3">
+              {/* `img` cru, e não `next/image`: é um data URI que já está na
+                  memória. Passá-lo pelo otimizador seria trabalho para não
+                  mudar um pixel. */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={`data:image/png;base64,${cobranca.pixQrCodeBase64}`}
+                alt="QR Code para pagar com Pix"
+                width={188}
+                height={188}
+                className="block size-[188px]"
+              />
+            </div>
+          ) : null}
+
+          <Botao
+            largura="cheia"
+            tamanho="grande"
+            variante={copiado ? "secundario" : "principal"}
+            className="mt-4"
+            onClick={copiarPix}
+          >
+            {copiado ? "Código copiado ✓" : "Copiar código Pix"}
           </Botao>
+
+          <details className="mt-3 text-left">
+            <summary className="tap cursor-pointer list-none text-center text-[0.75rem] text-cream-600 underline underline-offset-4">
+              Ver o código
+            </summary>
+            <p className="mt-2 break-all rounded-xl border border-white/10 bg-black/25 p-3 font-mono text-[0.6875rem] leading-relaxed text-cream-400">
+              {cobranca.pixQrCode}
+            </p>
+          </details>
+
+          {cobranca.expiraEm ? (
+            <p className="mt-3 text-center text-[0.75rem] text-cream-600">
+              Esse código vale até {horaCurta(cobranca.expiraEm)}. Depois disso
+              é só gerar outro.
+            </p>
+          ) : null}
         </div>
       ) : null}
 

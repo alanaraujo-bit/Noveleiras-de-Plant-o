@@ -7,6 +7,7 @@ import { ProvedorNaoConfigurado } from "@/lib/pagamentos";
 import {
   ErroDeCobranca,
   iniciarAssinatura,
+  iniciarAssinaturaPix,
   iniciarCompra,
 } from "@/lib/pagamentos/servico";
 import { ehPlanoVendavel } from "@/lib/pagamentos/planos";
@@ -68,18 +69,34 @@ export async function POST(request: Request) {
         );
       }
 
-      const resultado = await iniciarAssinatura({
-        userId: viewer.id,
-        plano: dados.plano,
-        metodo: dados.metodo,
-        urlRetorno: `${origem}/pagamento/retorno`,
-      });
+      // Pix no mensal não abre contrato de recorrência: abre a cobrança de um
+      // mês. Os dois caminhos entregam o mesmo benefício e se distinguem só em
+      // como o mês seguinte acontece — por isso a escolha cabe aqui, e não em
+      // dois endpoints que precisariam repetir sessão, plano e telemetria.
+      const resultado =
+        dados.metodo === "PIX"
+          ? await iniciarAssinaturaPix({
+              userId: viewer.id,
+              plano: dados.plano,
+            })
+          : await iniciarAssinatura({
+              userId: viewer.id,
+              plano: dados.plano,
+              metodo: dados.metodo,
+              urlRetorno: `${origem}/pagamento/retorno`,
+            });
 
       await track({
         type: "CHECKOUT_START",
         userId: viewer.id,
         sessionId: viewer.appSessionId,
-        payload: { tipo: "assinatura", plano: dados.plano },
+        payload: {
+          tipo: "assinatura",
+          plano: dados.plano,
+          // Distingue assinante de cartão de assinante de Pix desde o começo
+          // do funil — inclusive quem gerou o QR e nunca pagou.
+          renovacao: dados.metodo === "PIX" ? "MANUAL_RENEW" : "AUTO_RENEW",
+        },
       });
 
       return NextResponse.json(resultado, {

@@ -207,6 +207,45 @@ export default async function PaginaFinanceira({
           </Bloco>
         </div>
 
+        {/* A mesma mensalidade, dois comportamentos. Quem renova à mão não
+            "cancela" — só deixa de pagar, e sem esta separação isso ficaria
+            invisível até o MRR cair. */}
+        <Bloco
+          titulo="Por forma de renovação"
+          descricao="Cartão renova sozinho; Pix depende de a pessoa voltar"
+        >
+          <div className="grid gap-4 sm:grid-cols-2">
+            {resumo.porRenovacao.map((linha) => (
+              <div key={linha.modo}>
+                <p className="mb-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-[var(--p-fraco)]">
+                  {linha.rotulo}
+                </p>
+                <Razao>
+                  <LinhaRazao
+                    rotulo="Assinantes"
+                    valor={fmtNumero(linha.assinantes)}
+                  />
+                  <LinhaRazao rotulo="MRR" valor={fmtMoeda(linha.mrrCents)} />
+                  <LinhaRazao
+                    rotulo="Cobranças no período"
+                    valor={fmtNumero(linha.cobrancas)}
+                  />
+                  <LinhaRazao
+                    rotulo="Receita no período"
+                    valor={fmtMoeda(linha.receitaCents)}
+                  />
+                  {linha.modo === "MANUAL_RENEW" ? (
+                    <LinhaRazao
+                      rotulo="Pix gerados e não pagos"
+                      valor={fmtNumero(resumo.qrSemPagamento)}
+                    />
+                  ) : null}
+                </Razao>
+              </div>
+            ))}
+          </div>
+        </Bloco>
+
         <div className="grid items-start gap-5 xl:grid-cols-[1fr_21rem]">
           <Bloco
             titulo="Receita realizada"

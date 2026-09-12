@@ -54,6 +54,28 @@ export type CriarAssinaturaEntrada = {
   urlRetorno: string;
 };
 
+/**
+ * Uma cobrança Pix avulsa que paga **um** ciclo de assinatura.
+ *
+ * Não é `CriarAssinaturaEntrada` com outro método: ali nasce um preapproval,
+ * um objeto que o provedor passa a cobrar sozinho para sempre. Aqui nasce um
+ * pagamento e nada mais — o Pix não tem débito automático, e fingir que tem
+ * criaria uma assinatura que nunca renovaria. Duas coisas diferentes, dois
+ * métodos diferentes.
+ *
+ * Não existe `urlRetorno`: ninguém sai do aplicativo. A pessoa copia o código,
+ * paga no banco e volta — ou nem volta, e o acesso aparece do mesmo jeito.
+ */
+export type CriarCobrancaPixEntrada = {
+  usuario: UsuarioPagante;
+  plano: DefinicaoDePlano;
+  /** Nosso `PaymentAttempt.id`, devolvido pelo provedor nos webhooks. */
+  referenciaExterna: string;
+  idempotencyKey: string;
+  /** Quanto tempo o QR vale. Curto demais frustra; longo demais confunde. */
+  expiraEmMinutos: number;
+};
+
 export type CriarCompraEntrada = {
   usuario: UsuarioPagante;
   novela: { id: string; slug: string; titulo: string };
@@ -225,6 +247,18 @@ export interface ProvedorDePagamento {
 
   criarAssinatura(
     entrada: CriarAssinaturaEntrada,
+  ): Promise<RespostaCheckout>;
+
+  /**
+   * Abre a cobrança Pix de **um** ciclo mensal.
+   *
+   * O `externalId` que volta daqui é o de um pagamento de verdade — o mesmo
+   * que `consultarPagamento` aceita. É essa a diferença que faz a renovação
+   * manual funcionar: no preapproval, o id é de um contrato e o ciclo vem das
+   * faturas; aqui, o id **é** a cobrança que concede o ciclo.
+   */
+  criarAssinaturaPix(
+    entrada: CriarCobrancaPixEntrada,
   ): Promise<RespostaCheckout>;
 
   criarCompra(entrada: CriarCompraEntrada): Promise<RespostaCheckout>;

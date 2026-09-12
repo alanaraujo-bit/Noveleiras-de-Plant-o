@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { FaixaDeRenovacao, type Momento } from "@/components/pagamento/FaixaDeRenovacao";
 import { useTelemetry } from "@/components/sistema/TelemetryProvider";
 import { useToast } from "@/components/sistema/ToastProvider";
 import { IconeCheck } from "@/components/ui/icones";
@@ -35,8 +36,31 @@ type Pagamento = {
   status: string;
   metodo: string | null;
   plano: string | null;
+  renovacao: "AUTO_RENEW" | "MANUAL_RENEW" | null;
   reembolsadoCents: number;
 };
+
+type Aviso = {
+  momento: Momento;
+  titulo: string;
+  detalhe: string;
+  acao: string;
+};
+
+/**
+ * Como a cobrança aparece no extrato.
+ *
+ * `method` do provedor (`credit_card`, `pix`, `account_money`) é vocabulário
+ * de integração e não deve chegar a ninguém. Aqui fica o que a pessoa
+ * reconhece na própria fatura.
+ */
+function comoFoiPago(p: Pagamento): string {
+  if (p.renovacao === "MANUAL_RENEW") return "Pix";
+  if (p.metodo === "pix") return "Pix";
+  if (p.renovacao === "AUTO_RENEW") return "Cartão";
+  if (p.metodo?.includes("card")) return "Cartão";
+  return p.metodo ?? "";
+}
 
 const ROTULO_STATUS: Record<string, string> = {
   APPROVED: "Pago",
@@ -62,6 +86,9 @@ export function PainelAssinatura({
   renovaEm,
   canceladaNoFim,
   status,
+  manual,
+  renovarAte,
+  aviso,
   compras,
   pagamentos,
 }: {
@@ -71,6 +98,10 @@ export function PainelAssinatura({
   renovaEm: string | null;
   canceladaNoFim: boolean;
   status: string;
+  /** Renovação à mão: o plano vale até a data e só continua se ela pagar. */
+  manual: boolean;
+  renovarAte: string | null;
+  aviso: Aviso | null;
   compras: Compra[];
   pagamentos: Pagamento[];
 }) {
@@ -135,13 +166,43 @@ export function PainelAssinatura({
         <p className="eyebrow">{premium ? "Seu plano" : "Plano atual"}</p>
         <h2 className="mt-0.5 text-[1.375rem] leading-tight">{planoNome}</h2>
 
-        {premium ? (
+        {premium && renovaEm ? (
+          // Duas linhas rotuladas, e não um parágrafo: "como renova" e "até
+          // quando" são as duas perguntas que trazem alguém a esta tela, e ler
+          // um texto corrido para achá-las é trabalho desnecessário.
+          <dl className="mt-3.5 grid grid-cols-2 gap-3">
+            <div>
+              <dt className="text-[0.6875rem] uppercase tracking-wider text-cream-600">
+                Forma de renovação
+              </dt>
+              <dd className="mt-0.5 text-[0.875rem] font-semibold text-cream-50">
+                {manual ? "Pix" : "Cartão"}
+                <span className="ml-1 block text-[0.75rem] font-normal text-cream-400">
+                  {manual
+                    ? "você renova quando quiser"
+                    : canceladaNoFim
+                      ? "renovação cancelada"
+                      : "renovação automática"}
+                </span>
+              </dd>
+            </div>
+            <div>
+              <dt className="text-[0.6875rem] uppercase tracking-wider text-cream-600">
+                {manual || canceladaNoFim ? "Vale até" : "Próximo vencimento"}
+              </dt>
+              <dd className="mt-0.5 text-[0.875rem] font-semibold text-cream-50">
+                {formatDate(renovaEm)}
+                {manual && renovarAte ? (
+                  <span className="ml-1 block text-[0.75rem] font-normal text-cream-400">
+                    dá para renovar até {formatDate(renovarAte)}
+                  </span>
+                ) : null}
+              </dd>
+            </div>
+          </dl>
+        ) : premium ? (
           <p className="mt-2 text-[0.875rem] text-cream-400">
-            {canceladaNoFim
-              ? `Cancelada. Você continua assistindo até ${formatDate(renovaEm ?? "")} — o período já foi pago.`
-              : renovaEm
-                ? `Renova automaticamente em ${formatDate(renovaEm)}.`
-                : "Catálogo inteiro liberado."}
+            Catálogo inteiro liberado.
           </p>
         ) : (
           <p className="mt-2 text-[0.875rem] text-cream-400">
@@ -152,7 +213,24 @@ export function PainelAssinatura({
           </p>
         )}
 
-        {premium && !canceladaNoFim ? (
+        {manual ? (
+          // Nada a cancelar: o plano acaba sozinho se ela não renovar. O que
+          // cabe aqui é o caminho de continuar — e ele é o mesmo botão do
+          // aviso, para não haver duas maneiras de fazer a mesma coisa.
+          <div className="mt-5">
+            <FaixaDeRenovacao
+              compacta
+              mostrarEmDia
+              momento={aviso?.momento ?? "vencendo"}
+              titulo={aviso?.titulo ?? "Renove quando quiser"}
+              detalhe={
+                aviso?.detalhe ??
+                "O tempo que ainda falta não se perde: o mês novo entra no fim do atual."
+              }
+              acao={aviso?.acao ?? "Renovar com Pix"}
+            />
+          </div>
+        ) : premium && !canceladaNoFim ? (
           confirmando ? (
             <div className="mt-5 rounded-2xl border border-white/10 bg-black/25 p-4">
               <p className="text-[0.875rem] text-cream-200">
@@ -282,7 +360,7 @@ export function PainelAssinatura({
                     </p>
                     <p className="text-[0.75rem] text-cream-600">
                       {formatDate(pagamento.data)}
-                      {pagamento.metodo ? ` · ${pagamento.metodo}` : ""}
+                      {comoFoiPago(pagamento) ? ` · ${comoFoiPago(pagamento)}` : ""}
                     </p>
                   </div>
                   <span

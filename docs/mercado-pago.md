@@ -170,9 +170,50 @@ Mudar preço é mudar o código (revisão obrigatória) e rodar
 
 - **Compra avulsa**: cartão (Checkout Pro) ou Pix. O Pix devolve copia-e-cola
   e a tela vira sozinha quando o banco confirma.
-- **Assinatura**: **cartão apenas**. O Mercado Pago não faz débito automático
-  por Pix, então uma assinatura por Pix nunca renovaria. A tentativa é
-  recusada com mensagem clara em vez de criar algo quebrado.
+- **Assinatura anual**: **cartão apenas**, via `preapproval`.
+- **Assinatura mensal**: cartão **ou** Pix, e são dois desenhos diferentes —
+  não o mesmo fluxo com outro meio de pagamento.
+
+### Mensal no cartão — `AUTO_RENEW`
+
+`POST /preapproval`. O Mercado Pago cobra sozinho todo mês, e cada cobrança
+vira uma fatura (`authorized_payment`). `Subscription.externalPreapprovalId`
+guarda o contrato, `PaymentAttempt.externalId` também, e quem decide o ciclo é
+`reconciliarCicloDeAssinatura`, lendo as faturas.
+
+### Mensal no Pix — `MANUAL_RENEW`
+
+`POST /v1/payments` com `payment_method_id: "pix"`. **Não existe contrato**: o
+Mercado Pago não faz débito automático por Pix, então cada mês nasce de um
+pagamento que a pessoa faz de novo. `PaymentAttempt.externalId` guarda o
+**pagamento**, e a reconciliação é a de sempre (`reconciliarPagamento`), que
+desvia para `reconciliarCicloManual`.
+
+Trocar os dois caminhos devolve 404 — mandar um id de pagamento para
+`/preapproval`, ou um id de contrato para `/v1/payments`. É por isso que
+`billingMode` é uma coluna explícita e não algo inferido de `method`.
+
+O que a coluna governa, do lado de cá:
+
+| | `AUTO_RENEW` | `MANUAL_RENEW` |
+|---|---|---|
+| Quem cobra o mês seguinte | o provedor | a pessoa |
+| `externalPreapprovalId` | o contrato | `NULL` |
+| Tolerância | 3 dias, e só quando uma cobrança falha | 5 dias, sempre, a partir do vencimento |
+| Cancelar | `PUT /preapproval` | não existe: o plano acaba se ela não renovar |
+
+**A carência do Pix é prazo para pagar, não dia grátis.** Quem vence 11/10 e
+paga 14/10 recebe 11/10 → 11/11. A regra inteira mora em
+`lib/pagamentos/ciclo.ts`, decidida só por datas — nunca por `status`, que
+depende de o cron ter passado.
+
+**Se o webhook não chegar**, `reconciliarPixPendentes` (no cron diário) relê no
+provedor toda cobrança Pix dos últimos dois dias, inclusive as já marcadas
+expiradas: um Pix pago na virada do prazo é aprovado do lado deles com a nossa
+linha já fechada, e sem esse passo o dinheiro entraria e o acesso não.
+
+`date_of_expiration` é enviado com deslocamento explícito (`-03:00`, `+00:00`).
+Terminando em `Z`, o Mercado Pago responde 400.
 
 ---
 

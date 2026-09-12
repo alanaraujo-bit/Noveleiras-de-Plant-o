@@ -4,6 +4,10 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { motion } from "motion/react";
 
+import {
+  ComoPrefereModo,
+  type ModoDePagamento,
+} from "@/components/pagamento/ComoPrefereModo";
 import { useTelemetry } from "@/components/sistema/TelemetryProvider";
 import { useToast } from "@/components/sistema/ToastProvider";
 import { IconeCheck } from "@/components/ui/icones";
@@ -63,10 +67,29 @@ export function Planos({
   const { show } = useToast();
   const { track } = useTelemetry();
   const [processando, setProcessando] = useState<string | null>(null);
+  const [escolhendoModo, setEscolhendoModo] = useState<PlanoNaTela | null>(null);
+  const [modoEmCurso, setModoEmCurso] = useState<ModoDePagamento | null>(null);
 
+  /**
+   * Mensal pergunta como pagar; anual vai direto ao cartão.
+   *
+   * O Pix paga um ciclo por vez, e um ciclo anual pago de uma vez é uma decisão
+   * comercial que ninguém tomou. Perguntar no anual seria oferecer algo que o
+   * servidor recusa — pior que não oferecer.
+   */
   async function assinar(plano: PlanoNaTela) {
+    if (plano.intervalo === "MONTH") {
+      track("PAYWALL_CTA", { payload: { plano: plano.code, etapa: "modo" } });
+      setEscolhendoModo(plano);
+      return;
+    }
+    await abrirCobranca(plano, "CARD");
+  }
+
+  async function abrirCobranca(plano: PlanoNaTela, metodo: ModoDePagamento) {
     setProcessando(plano.code);
-    track("PAYWALL_CTA", { payload: { plano: plano.code } });
+    setModoEmCurso(metodo);
+    track("PAYWALL_CTA", { payload: { plano: plano.code, metodo } });
 
     try {
       const resposta = await fetch("/api/pagamentos/checkout", {
@@ -76,7 +99,7 @@ export function Planos({
         body: JSON.stringify({
           tipo: "assinatura",
           plano: plano.code,
-          metodo: "CARD",
+          metodo,
         }),
       });
 
@@ -85,14 +108,17 @@ export function Planos({
       if (!resposta.ok) {
         show(dados.erro ?? "Não foi possível continuar.", "ruim");
         setProcessando(null);
+        setModoEmCurso(null);
         return;
       }
 
+      setEscolhendoModo(null);
       const query = destino ? `&destino=${encodeURIComponent(destino)}` : "";
       router.push(`/pagamento/${dados.attemptId}?tipo=assinatura${query}`);
     } catch {
       show("Sem conexão com o servidor.", "ruim");
       setProcessando(null);
+      setModoEmCurso(null);
     }
   }
 
@@ -215,6 +241,22 @@ export function Planos({
         até o fim do período já pago. Novelas compradas avulso são suas para
         sempre, mesmo sem assinatura.
       </p>
+
+      <ComoPrefereModo
+        aberta={escolhendoModo !== null}
+        aoFechar={() => {
+          // Fechar no meio de uma abertura de cobrança deixaria a pessoa sem
+          // saber se a cobrança nasceu. Enquanto o servidor não responde, a
+          // folha fica.
+          if (processando) return;
+          setEscolhendoModo(null);
+        }}
+        precoCents={escolhendoModo?.precoCents ?? 0}
+        processando={modoEmCurso}
+        aoEscolher={(metodo) => {
+          if (escolhendoModo) void abrirCobranca(escolhendoModo, metodo);
+        }}
+      />
     </div>
   );
 }

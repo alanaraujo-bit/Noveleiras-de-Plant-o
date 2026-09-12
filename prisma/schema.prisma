@@ -118,6 +118,26 @@ enum SubscriptionStatus {
   EXPIRED
 }
 
+/**
+ * Como um ciclo vira o proximo.
+ *
+ * AUTO_RENEW    o provedor cobra sozinho no fim do ciclo (preapproval, no
+ *               cartao). Quem renova e ele; nos so registramos.
+ * MANUAL_RENEW  nao existe cobranca automatica: cada ciclo nasce de um
+ *               pagamento que a pessoa faz de novo, por vontade propria. E o
+ *               caso do Pix, que nao tem debito automatico.
+ *
+ * Deliberadamente **nao** e o meio de pagamento. Meio de pagamento ja mora em
+ * `Payment.method` e `PaymentAttempt.method`; o que muda aqui e a semantica da
+ * renovacao — quem tem a iniciativa, o que acontece no vencimento, e o que
+ * "cancelar" significa. Derivar isso de `method == "pix"` amarraria as duas
+ * coisas e quebraria no dia em que outro meio manual aparecer.
+ */
+enum BillingMode {
+  AUTO_RENEW
+  MANUAL_RENEW
+}
+
 model Subscription {
   id     String @id @default(cuid())
   userId String @unique
@@ -125,6 +145,10 @@ model Subscription {
 
   plan   SubscriptionPlan   @default(FREE)
   status SubscriptionStatus @default(ACTIVE)
+
+  // Toda assinatura gravada antes do Pix mensal renova sozinha no cartao, e o
+  // default diz isso: nenhuma linha existente muda de comportamento.
+  billingMode BillingMode @default(AUTO_RENEW)
 
   // Preparado para um provedor de pagamento real sem migracao adicional.
   provider           String?
@@ -160,6 +184,8 @@ model Subscription {
   @@index([plan, status])
   @@index([status, currentPeriodEnd])
   @@index([externalPreapprovalId])
+  // A varredura do Pix pergunta "quem renova a mao e esta perto de vencer?".
+  @@index([billingMode, status, currentPeriodEnd])
 }
 
 // ------------------------------------------------ sessoes e dispositivos
@@ -1143,6 +1169,15 @@ model Payment {
   // nulo: relatorio que depende de inferencia envelhece mal.
   kind PaymentKind @default(SUBSCRIPTION)
 
+  // Como esta cobranca renovava. Nulo em compra avulsa e nas cobrancas
+  // anteriores ao Pix mensal — que eram todas recorrentes por cartao.
+  //
+  // Existe para o relatorio: "quantas renovacoes Pix houve em setembro" nao se
+  // responde por `method`, porque um dia o Pix pode ser usado noutro fluxo, e
+  // nao se responde pelo estado atual da assinatura, porque ele so conhece o
+  // hoje. Receita e fato datado; o modo de cobranca do dia tambem.
+  billingMode BillingMode?
+
   amountCents Int
   currency    String        @default("BRL")
   status      PaymentStatus @default(APPROVED)
@@ -1451,6 +1486,17 @@ model PaymentAttempt {
   plan     SubscriptionPlan?
   novelaId String?
 
+  /**
+   * So em `kind = SUBSCRIPTION`: que tipo de assinatura este checkout abre.
+   *
+   * E o que decide para onde a reconciliacao manda o pagamento depois. Num
+   * AUTO_RENEW, `externalId` guarda o **preapproval** e quem decide o ciclo e
+   * o livro de faturas; num MANUAL_RENEW, `externalId` guarda o **pagamento**
+   * em si, e o ciclo nasce dele. Mandar um para o caminho do outro devolve 404
+   * — foi assim que a preferencia do Checkout Pro se perdeu uma vez.
+   */
+  billingMode BillingMode?
+
   subscriptionId String?
   subscription   Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
 
@@ -1495,7 +1541,15 @@ model PaymentAttempt {
   // Para onde mandar a pessoa (checkout hospedado, QR do Pix).
   checkoutUrl String?
   pixQrCode   String?
-  expiresAt   DateTime?
+  /**
+   * PNG do QR em base64, como o provedor o devolve.
+   *
+   * Gravado, e nao so devolvido na resposta do checkout, porque quem fecha o
+   * aplicativo e volta meia hora depois precisa reencontrar o mesmo QR. Gerar
+   * outro seria criar uma segunda cobranca para alguem que ja tem uma aberta.
+   */
+  pixQrCodeBase64 String?
+  expiresAt       DateTime?
 
   isDemo Boolean @default(false)
 
@@ -1511,6 +1565,8 @@ model PaymentAttempt {
   // que so trouxe `preference_id` precisa achar a tentativa por esses ids.
   @@index([externalPreferenceId])
   @@index([externalMerchantOrderId])
+  // A varredura do Pix procura tentativas de assinatura manual sem desfecho.
+  @@index([kind, billingMode, status, createdAt])
 }
 
 enum WebhookEventStatus {

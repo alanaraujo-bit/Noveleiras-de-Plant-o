@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import {
   reconciliarAssinatura,
   reconciliarCompra,
+  reconciliarPagamento,
 } from "@/lib/pagamentos/servico";
 
 export const metadata = { title: "Pagamento" };
@@ -66,7 +67,13 @@ export default async function RetornoPage({
   // Reconsulta autenticada. Falhar aqui não pode travar a tela: o webhook
   // ainda vai chegar, e a tela de estado consulta de novo sozinha.
   try {
-    if (tentativa.kind === "PURCHASE") {
+    if (tentativa.billingMode === "MANUAL_RENEW") {
+      // Ciclo mensal por Pix: o `externalId` é o próprio pagamento. Quem chega
+      // aqui nem costuma passar pelo provedor — paga no aplicativo do banco —,
+      // mas o endereço é público e alguém pode cair nele de qualquer jeito.
+      const pagamento = pagamentoId ?? tentativa.externalId;
+      if (pagamento) await reconciliarPagamento(pagamento);
+    } else if (tentativa.kind === "PURCHASE") {
       // `payment_id`/`collection_id` quando a MP os devolve; senão a compra se
       // resolve pela preferência, via merchant order. O que nunca acontece
       // mais é consultar `/v1/payments/<preferenceId>` e engolir o 404.
@@ -106,6 +113,7 @@ async function localizarTentativa(userId: string, pistas: Pistas) {
   const selecao = {
     id: true,
     kind: true,
+    billingMode: true,
     externalId: true,
     purchaseId: true,
   } as const;
