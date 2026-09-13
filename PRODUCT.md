@@ -13,7 +13,7 @@ web
 
 ## Product Purpose
 
-Noveleiras de Plantão é uma PWA mobile-first de streaming e comunidade para novelas verticais brasileiras. O painel administrativo transforma os fatos registrados pelo produto em decisões operacionais verificáveis. Sucesso significa uma experiência assistível para o público e uma operação capaz de investigar o que ocorreu, agir com autorização granular e reconstruir ações sensíveis.
+Noveleiras é uma PWA mobile-first de streaming e comunidade para novelas verticais brasileiras. O painel administrativo transforma os fatos registrados pelo produto em decisões operacionais verificáveis. Sucesso significa uma experiência assistível para o público e uma operação capaz de investigar o que ocorreu, agir com autorização granular e reconstruir ações sensíveis.
 
 ## Positioning
 
@@ -40,7 +40,8 @@ O produto une streaming seriado vertical, descoberta e conversa de fãs no mesmo
 
 ## Brand Commitments
 
-- Nome: Noveleiras de Plantão.
+- Nome: Noveleiras. Plantão permanece o nome da experiência de vídeo em `/plantao`.
+- Símbolo aprovado: flor com silhueta de balão de conversa, pétalas arredondadas em rosa e coral e centro pêssego. O volume 3D suave comunica uma identidade feminina e amigável; os ativos e suas exportações estão documentados em `docs/marca-noveleiras.md`.
 - Voz em português brasileiro, direta, humana e operacional; rótulos dizem o que aconteceu e o que fazer.
 - A identidade pública usa vinho, carmim e ouro. O painel preserva essa identidade numa temperatura mais fria e escura, como uma sala de controle ao lado de um teatro.
 

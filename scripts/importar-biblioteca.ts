@@ -19,6 +19,7 @@
  *
  *   npm run biblioteca:importar
  *   npm run biblioteca:importar -- --aplicar
+ *   npm run biblioteca:importar -- --aplicar --apenas-novas
  *   npm run biblioteca:importar -- --raiz="D:/Novelas" --aplicar
  */
 import { PrismaClient } from "@prisma/client";
@@ -33,6 +34,7 @@ import {
 } from "../lib/media/biblioteca.ts";
 import { classificarTemas, paraElenco } from "../lib/media/temas.ts";
 import { garantirGeneros, vincularGeneros } from "../lib/media/generos.ts";
+import { vincularElenco } from "../lib/media/pessoas.ts";
 import { isGeneratedArt } from "../lib/media/resolver.ts";
 import { sondar } from "../lib/media/inventario.ts";
 
@@ -44,6 +46,8 @@ function argumento(nome: string, padrao?: string): string | undefined {
 }
 
 const APLICAR = process.argv.includes("--aplicar");
+/** Retoma uma importação interrompida sem varrer episódios já gravados. */
+const APENAS_NOVAS = process.argv.includes("--apenas-novas");
 const RAIZ = argumento("raiz", process.env.BIBLIOTECA_RAIZ)!;
 
 function bytes(valor: number): string {
@@ -83,9 +87,11 @@ async function main() {
   let totalEpisodios = 0;
   let totalBytes = 0;
   let totalGeneros = 0;
+  let totalPessoas = 0;
   let novasNovelas = 0;
   let novosEpisodios = 0;
   let atualizados = 0;
+  let existentesIgnoradas = 0;
 
   for (const novela of novelas) {
     const slug = slugificar(novela.titulo);
@@ -99,8 +105,14 @@ async function main() {
         synopsis: true,
         tags: true,
         cast: true,
+        _count: { select: { genres: true } },
       },
     });
+
+    if (APENAS_NOVAS && existente) {
+      existentesIgnoradas += 1;
+      continue;
+    }
 
     totalEpisodios += novela.episodios.length;
     totalBytes += novela.episodios.reduce((s, e) => s + e.tamanhoBytes, 0);
@@ -221,14 +233,28 @@ async function main() {
       select: { id: true },
     });
 
+    // ---- o elenco ------------------------------------------------------
+    // Cada nome vira uma pessoa com endereço próprio, reaproveitada entre
+    // novelas. A pessoa nunca é apagada numa reimportação: é nela que mora a
+    // biografia escrita à mão.
+    if (classificacao.elenco.length > 0 && !elencoGravado.length) {
+      totalPessoas += await vincularElenco(db, gravada.id, classificacao.elenco);
+    }
+
     // ---- os gêneros ----------------------------------------------------
-    const ligados = await vincularGeneros(
-      db,
-      gravada.id,
-      classificacao.generos,
-      generoPorSlug,
-    );
-    if (ligados > 0) totalGeneros += ligados;
+    // Só quem ainda não tem gênero nenhum. Reimportar é reconciliar com o
+    // disco, e o gênero não mora no disco: pode ter sido corrigido à mão no
+    // painel, e regravar apagaria essa decisão sem avisar. Para refazer a
+    // classificação de propósito existe `catalogo:classificar
+    // --refazer-generos`, que é onde essa intenção fica explícita.
+    if ((existente?._count.genres ?? 0) === 0) {
+      totalGeneros += await vincularGeneros(
+        db,
+        gravada.id,
+        classificacao.generos,
+        generoPorSlug,
+      );
+    }
 
     // ---- a temporada ---------------------------------------------------
     // A biblioteca é plana, então existe uma temporada só. Ela é criada
@@ -305,6 +331,9 @@ async function main() {
   console.log(
     `\n  ${novelas.length} novelas · ${totalEpisodios} episódios · ${bytes(totalBytes)}`,
   );
+  if (APENAS_NOVAS) {
+    console.log(`  ${existentesIgnoradas} novela(s) já existente(s) foram puladas.`);
+  }
 
   if (!APLICAR) {
     console.log("\n  Nada foi gravado. Repita com --aplicar.\n");
@@ -314,7 +343,9 @@ async function main() {
   console.log(
     `  ${novasNovelas} novela(s) nova(s) · ${novosEpisodios} episódio(s) novo(s) · ${atualizados} atualizado(s)`,
   );
-  console.log(`  ${totalGeneros} vínculo(s) de gênero gravado(s)`);
+  console.log(
+    `  ${totalGeneros} vínculo(s) de gênero · ${totalPessoas} vínculo(s) de elenco`,
+  );
   console.log(
     "\n  Catálogo gravado. Falta o vídeo chegar ao espectador:" +
       "\n    1. npm run midia:inventariar -- --raiz=\"" + RAIZ + "\" --aplicar" +

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { IconeMarca } from "@/components/ui/icones";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -232,12 +233,7 @@ export function Casca({
 function MarcaPainel() {
   return (
     <span className="flex items-center gap-2.5">
-      <span
-        aria-hidden
-        className="grid h-7 w-7 place-items-center rounded-lg bg-[var(--color-rose-600)] text-[0.8125rem] font-bold text-white"
-      >
-        N
-      </span>
+      <IconeMarca tamanho={28} />
       <span className="leading-tight">
         <span className="block text-[0.8125rem] font-semibold text-[var(--p-texto)]">
           Noveleiras

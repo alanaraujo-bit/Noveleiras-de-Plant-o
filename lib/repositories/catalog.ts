@@ -1,4 +1,5 @@
 import "server-only";
+import { fotoDoElenco } from "@/lib/media/fotos-elenco";
 
 import { db } from "@/lib/db";
 import {
@@ -535,7 +536,17 @@ export type SeasonItem = {
 export type NovelaDetail = NovelaCard & {
   synopsis: string;
   tags: string[];
-  cast: { name: string; role: string }[];
+  /**
+   * O elenco, na ordem em que a origem listou. Cada pessoa tem página, e por
+   * isso carrega slug: o nome na ficha é um destino, não um rótulo.
+   */
+  cast: {
+    slug: string;
+    name: string;
+    role: string;
+    novelaCount: number;
+    fotoUrl: string | null;
+  }[];
   country: string;
   favoriteCount: number;
   seasons: SeasonItem[];
@@ -572,7 +583,20 @@ export async function getNovelaDetail(
       ...CARD_SELECT,
       synopsis: true,
       tags: true,
-      cast: true,
+      castLinks: {
+        orderBy: { sort: "asc" },
+        select: {
+          role: true,
+          person: {
+            select: {
+              slug: true,
+              name: true,
+              photoKey: true,
+              _count: { select: { novelas: true } },
+            },
+          },
+        },
+      },
       country: true,
       favoriteCount: true,
       trailerKey: true,
@@ -685,7 +709,13 @@ export async function getNovelaDetail(
     ...toCard(row),
     synopsis: row.synopsis,
     tags: row.tags,
-    cast: (row.cast as { name: string; role: string }[]) ?? [],
+    cast: row.castLinks.map((link) => ({
+      slug: link.person.slug,
+      name: link.person.name,
+      role: link.role,
+      novelaCount: link.person._count.novelas,
+      fotoUrl: fotoDoElenco(link.person.slug, link.person.photoKey),
+    })),
     country: row.country,
     favoriteCount: row.favoriteCount,
     seasons,

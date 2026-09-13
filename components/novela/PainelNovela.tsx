@@ -18,7 +18,40 @@ import {
   IconeVoltar,
 } from "@/components/ui/icones";
 import { STATUS_LABEL, formatClock, formatCount, formatRating } from "@/lib/format";
+import { initials } from "@/lib/text";
 import type { NovelaDetail } from "@/lib/repositories/catalog";
+
+/**
+ * O retrato de quem atua.
+ *
+ * Sem foto, o monograma sobre a cor que o próprio nome gera — o mesmo
+ * princípio do avatar de quem assiste. A fila de rostos não fica esperando
+ * uma imagem que a origem do catálogo não publica, e no dia em que a foto
+ * existir ela entra aqui sem mudar mais nada.
+ */
+function Retrato({ nome, fotoUrl }: { nome: string; fotoUrl: string | null }) {
+  const matiz =
+    [...nome].reduce((soma, letra) => soma + letra.charCodeAt(0), 0) % 360;
+
+  return (
+    <span
+      aria-hidden
+      className="grid size-[5.25rem] place-items-center overflow-hidden rounded-full font-display text-[1.25rem] font-semibold text-cream-50 transition-transform duration-300 ease-[var(--ease-out-soft)] group-hover:scale-105"
+      style={{
+        background: fotoUrl
+          ? undefined
+          : `linear-gradient(150deg, oklch(52% 0.13 ${matiz}), oklch(32% 0.09 ${matiz}))`,
+        boxShadow: "inset 0 0 0 1px rgb(255 255 255 / 0.16)",
+      }}
+    >
+      {fotoUrl ? (
+        <img src={fotoUrl} alt="" className="size-full object-cover" />
+      ) : (
+        initials(nome)
+      )}
+    </span>
+  );
+}
 
 /**
  * Página da novela: capa, ficha, temporadas e episódios.
@@ -256,24 +289,35 @@ export function PainelNovela({
       {/* Elenco ---------------------------------------------------------- */}
       {novela.cast.length > 0 ? (
         <section className="mt-7">
-          <p className="eyebrow mb-2.5 px-5">Elenco</p>
+          <p className="eyebrow mb-3 px-5">Elenco</p>
           <div className="rail no-scrollbar">
             {novela.cast.map((pessoa) => (
-              <div
-                key={pessoa.name}
-                className="rail-item w-[8.5rem] rounded-card border border-white/8 bg-white/[0.03] p-3"
+              <Link
+                key={pessoa.slug}
+                href={`/elenco/${pessoa.slug}`}
+                className="tap rail-item group flex w-[5.25rem] flex-col items-center text-center"
               >
-                <p className="text-[0.8125rem] font-semibold leading-snug text-cream-50">
+                <Retrato nome={pessoa.name} fotoUrl={pessoa.fotoUrl} />
+                <p className="mt-2 line-clamp-2 text-[0.8125rem] font-semibold leading-snug text-cream-50">
                   {pessoa.name}
                 </p>
-                {/* Sem papel, sem linha: a origem do catálogo importado dá o
-                    nome de quem atua, não o personagem. */}
+                {/*
+                  O papel, quando existe. No catálogo importado ele nunca
+                  existe — a origem dá o nome de quem atua, não o personagem —,
+                  e aí a linha diz o que a página do ator vai mostrar. Uma
+                  pessoa com uma novela só não ganha legenda: seria repetir a
+                  ficha que a pessoa está lendo.
+                */}
                 {pessoa.role ? (
-                  <p className="mt-0.5 text-[0.75rem] leading-snug text-cream-600">
+                  <p className="mt-0.5 line-clamp-1 text-[0.75rem] leading-snug text-cream-600">
                     {pessoa.role}
                   </p>
+                ) : pessoa.novelaCount > 1 ? (
+                  <p className="mt-0.5 text-[0.75rem] leading-snug text-cream-600">
+                    {pessoa.novelaCount} novelas
+                  </p>
                 ) : null}
-              </div>
+              </Link>
             ))}
             <span className="w-1 shrink-0" aria-hidden />
           </div>

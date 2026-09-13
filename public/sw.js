@@ -8,16 +8,19 @@
  * do navegador.
  */
 
-const VERSAO = "v2";
+const VERSAO = "v4-noveleiras-flor";
 const CACHE_CASCO = `plantao-casco-${VERSAO}`;
 const CACHE_ARTE = `plantao-arte-${VERSAO}`;
 
 const CASCO = [
   "/offline.html",
   "/manifest.webmanifest",
-  "/icones/icone.svg",
-  "/icones/icone-192.png",
-  "/icones/icone-512.png",
+  "/icones/noveleiras-192.png?v=flor-1",
+  "/icones/noveleiras-512.png?v=flor-1",
+  "/icones/noveleiras-maskable-512.png?v=flor-1",
+  "/icones/noveleiras-apple-180.png?v=flor-1",
+  "/icones/noveleiras-32.png?v=flor-1",
+  "/marca/noveleiras-simbolo.webp?v=flor-1",
 ];
 
 self.addEventListener("install", (evento) => {
@@ -48,6 +51,7 @@ function ehArte(url) {
   return (
     url.pathname.startsWith("/api/arte/") ||
     url.pathname.startsWith("/icones/") ||
+    url.pathname === "/marca/noveleiras-simbolo.webp" ||
     url.pathname.startsWith("/_next/static/")
   );
 }

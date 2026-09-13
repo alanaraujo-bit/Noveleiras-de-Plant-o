@@ -204,7 +204,7 @@ export default async function PerfilPage() {
       </div>
 
       <p className="mt-6 px-8 text-center text-[0.75rem] leading-relaxed text-cream-600">
-        Noveleiras de Plantão
+        Noveleiras
       </p>
     </div>
   );
