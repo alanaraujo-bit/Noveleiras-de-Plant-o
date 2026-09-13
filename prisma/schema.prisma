@@ -287,6 +287,9 @@ model Novela {
 
   featuredRank Int?
 
+  // Legado: o elenco virou relacao (`NovelaCast`), que tem pagina, foto e
+  // biografia. A coluna fica ate a proxima limpeza deliberada, porque foi
+  // dela que as pessoas foram extraidas e ela ainda e a prova disso.
   cast        Json     @default("[]")
   tags        String[] @default([])
   rating      Float    @default(0)
@@ -302,6 +305,7 @@ model Novela {
   updatedAt  DateTime @updatedAt
 
   genres    NovelaGenre[]
+  castLinks NovelaCast[]
   seasons   Season[]
   episodes  Episode[]
   favorites Favorite[]
@@ -314,6 +318,56 @@ model Novela {
   @@index([status, releasedAt])
   @@index([viewCount])
   @@index([isFeatured, featuredRank])
+}
+
+/**
+ * Uma pessoa do elenco.
+ *
+ * Existe como tabela, e nao como texto dentro da novela, por tres motivos que
+ * so aparecem quando alguem toca no nome: a pessoa precisa de endereco
+ * proprio, de um lugar para a biografia que alguem escreve, e de um lugar
+ * para a foto quando ela existir. Nenhum dos tres cabe num campo JSON.
+ *
+ * `bio` e `photoKey` nascem vazios de proposito. A origem do catalogo nao
+ * publica nem um nem outro, e inventar biografia seria mentir sobre gente
+ * real. A pagina simplesmente nao mostra o que nao existe.
+ */
+model Person {
+  id   String @id @default(cuid())
+  slug String @unique
+  name String
+
+  /** Escrita a mao no painel. Vazia ate alguem escrever. */
+  bio String @default("")
+
+  /** Chave opaca da foto, resolvida pela camada de midia. */
+  photoKey String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  novelas NovelaCast[]
+
+  @@index([name])
+}
+
+model NovelaCast {
+  novelaId String
+  personId String
+  novela   Novela @relation(fields: [novelaId], references: [id], onDelete: Cascade)
+  person   Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  /**
+   * O personagem que a pessoa faz. Vazio no catalogo importado: a origem da o
+   * nome de quem atua, nunca o papel. O seed de demonstracao preenche.
+   */
+  role String @default("")
+
+  /** Ordem em que a origem listou. Mantem o elenco estavel entre leituras. */
+  sort Int @default(0)
+
+  @@id([novelaId, personId])
+  @@index([personId])
 }
 
 model NovelaGenre {

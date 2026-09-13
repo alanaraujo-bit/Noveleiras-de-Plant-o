@@ -1,46 +1,47 @@
-/**
- * Gera os PNGs do ícone a partir de `public/icones/icone.svg`.
- *
- * O SVG é a fonte da verdade; os PNGs existem porque Android e iOS ainda
- * pedem bitmap no manifesto e na tela de início. A versão "máscara" tem folga
- * nas bordas para sobreviver ao recorte circular do Android.
- *
- * Uso: node scripts/gerar-icones.mjs
- */
+﻿/** Exportações da marca original. Uso: npm run icones. */
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { chromium } from "playwright";
-
-const PASTA = join(process.cwd(), "public", "icones");
-
-const SAIDAS = [
-  { arquivo: "icone-192.png", tamanho: 192, folga: 0 },
-  { arquivo: "icone-512.png", tamanho: 512, folga: 0 },
-  { arquivo: "apple-touch-icon.png", tamanho: 180, folga: 0 },
-  // Maskable: 20% de folga, como pede a especificação do Android.
-  { arquivo: "icone-mascara-512.png", tamanho: 512, folga: 0.2 },
-];
-
-const svg = await readFile(join(PASTA, "icone.svg"), "utf8");
-const navegador = await chromium.launch();
-
-for (const { arquivo, tamanho, folga } of SAIDAS) {
-  const pagina = await navegador.newPage({
-    viewport: { width: tamanho, height: tamanho },
-    deviceScaleFactor: 1,
-  });
-
-  const escala = 1 - folga;
-  await pagina.setContent(
-    `<!doctype html><html><body style="margin:0;width:${tamanho}px;height:${tamanho}px;background:#130810;display:grid;place-items:center;overflow:hidden">
-      <div style="width:${Math.round(tamanho * escala)}px;height:${Math.round(tamanho * escala)}px">${svg}</div>
-    </body></html>`,
-  );
-  const captura = await pagina.screenshot({ omitBackground: false });
-  await writeFile(join(PASTA, arquivo), captura);
-  console.log(`  ${arquivo} (${tamanho}px)`);
-  await pagina.close();
+import sharp from "sharp";
+const pasta = join(process.cwd(), "public", "icones");
+const original = join(process.cwd(), "public", "marca", "noveleiras-original.png");
+const fundo = "#21101b";
+for (const [arquivo, tamanho, escala] of [
+ ["noveleiras-192.png", 192, 0.9], ["noveleiras-512.png", 512, 0.9],
+ ["noveleiras-apple-180.png", 180, 0.9], ["noveleiras-maskable-512.png", 512, 0.76],
+ ["noveleiras-32.png", 32, 0.9],
+]) {
+ const lado = Math.round(tamanho * escala);
+ const simbolo = await sharp(original).resize(lado, lado).png().toBuffer();
+ const composto = await sharp({ create: { width: tamanho, height: tamanho, channels: 4, background: fundo } })
+  .composite([{ input: simbolo, gravity: "centre" }])
+  .png().toBuffer();
+ await sharp(composto).flatten({ background: fundo }).png().toFile(join(pasta, arquivo));
+ console.log(arquivo + ": " + tamanho);
 }
-
-await navegador.close();
-console.log("Ícones gerados.");
+await sharp(original).resize(256, 256).webp({ quality: 92 })
+ .toFile(join(process.cwd(), "public", "marca", "noveleiras-simbolo.webp"));
+// ICO multirresolução reconhecido pela convenção do Next.
+const imagens = await Promise.all([16, 32, 48].map((lado) =>
+ sharp(join(pasta, "noveleiras-512.png")).resize(lado, lado).ensureAlpha().png().toBuffer()));
+const cabecalho = Buffer.alloc(6 + imagens.length * 16);
+cabecalho.writeUInt16LE(1, 2);
+cabecalho.writeUInt16LE(imagens.length, 4);
+let offset = cabecalho.length;
+imagens.forEach((dados, i) => {
+ const entrada = 6 + i * 16;
+ cabecalho[entrada] = cabecalho[entrada + 1] = [16, 32, 48][i];
+ cabecalho.writeUInt16LE(1, entrada + 4);
+ cabecalho.writeUInt16LE(32, entrada + 6);
+ cabecalho.writeUInt32LE(dados.length, entrada + 8);
+ cabecalho.writeUInt32LE(offset, entrada + 12);
+ offset += dados.length;
+});
+await writeFile(join(process.cwd(), "app", "favicon.ico"), Buffer.concat([cabecalho, ...imagens]));
+// Compatibilidade com links antigos, sem manter duas identidades.
+for (const [antigo, novo] of Object.entries({
+ "icone-192.png": "noveleiras-192.png", "icone-512.png": "noveleiras-512.png",
+ "icone-mascara-512.png": "noveleiras-maskable-512.png",
+ "apple-touch-icon.png": "noveleiras-apple-180.png",
+})) await writeFile(join(pasta, antigo), await readFile(join(pasta, novo)));
+const png = (await readFile(join(pasta, "noveleiras-512.png"))).toString("base64");
+await writeFile(join(pasta, "icone.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><image width="512" height="512" href="data:image/png;base64,' + png + '"/></svg>\n');

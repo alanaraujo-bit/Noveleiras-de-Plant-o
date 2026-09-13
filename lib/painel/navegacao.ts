@@ -95,6 +95,13 @@ export const NAVEGACAO: GrupoDeNavegacao[] = [
         descricao: "Novelas, temporadas e episódios",
       },
       {
+        href: "/painel/elenco",
+        rotulo: "Elenco",
+        permissao: "catalogo.ver",
+        icone: "usuarios",
+        descricao: "Atores, fotos, biografias e novelas relacionadas",
+      },
+      {
         href: "/painel/midia",
         rotulo: "Mídia",
         permissao: "midia.ver",

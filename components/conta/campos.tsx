@@ -48,7 +48,7 @@ export function MolduraConta({
           <IconeMarca tamanho={24} />
         </span>
         <span className="font-display text-[0.875rem] font-semibold leading-tight text-cream-200">
-          Noveleiras de Plantão
+          Noveleiras
         </span>
       </div>
 

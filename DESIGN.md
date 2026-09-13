@@ -1,5 +1,5 @@
 ---
-name: "Noveleiras de Plantão — Painel"
+name: "Noveleiras — Painel"
 description: "Sala de controle fria e escura para operar fatos do streaming sem abandonar o vinho, o carmim e o ouro do produto."
 colors:
   control-room-bg: "#0f0a10"
@@ -96,13 +96,13 @@ components:
     padding: "0.25rem 0.625rem"
 ---
 
-# Design System: Noveleiras de Plantão — Painel
+# Design System: Noveleiras — Painel
 
 ## Overview
 
 **Creative North Star: "A Sala de Controle ao Lado do Teatro"**
 
-Este documento governa a superfície administrativa marcada por `[data-superficie="painel"]`. O painel vive no mesmo mundo de Noveleiras de Plantão, mas muda a temperatura: a noite vinho fica mais fria e escura, o carmim vira sinal operacional e o ouro aparece como atenção, não ornamento. A sensação é de bastidor técnico ao lado do palco — sóbrio, preciso e inequivocamente parte do mesmo produto.
+Este documento governa a superfície administrativa marcada por `[data-superficie="painel"]`. O painel vive no mesmo mundo de Noveleiras, mas muda a temperatura: a noite vinho fica mais fria e escura, o carmim vira sinal operacional e o ouro aparece como atenção, não ornamento. A sensação é de bastidor técnico ao lado do palco — sóbrio, preciso e inequivocamente parte do mesmo produto.
 
 O modo é **Operate**. Densidade, comparação e rastreabilidade vêm antes da exibição; o ritmo visual nasce de cabeçalhos persistentes, superfícies tonais, gráficos SVG com leitura exata, livros-razão e tabelas que conduzem ao próximo nível. A hierarquia impede que cada número finja ter a mesma importância.
 
@@ -199,6 +199,14 @@ O painel usa retângulos suavemente arredondados, nunca cápsulas indiscriminada
 Bordas são hairlines translúcidas. O contorno forte pertence a controles que precisam separar-se do fundo e a superfícies flutuantes. Tabelas preservam a geometria retangular interna mesmo quando o contêiner externo é arredondado.
 
 ## Components
+
+### Marca compartilhada: Noveleiras
+
+A assinatura usa o nome Noveleiras e o símbolo aprovado de uma flor com silhueta de balão de conversa. Pétalas arredondadas em rosa e coral envolvem um centro pêssego; o volume 3D suave dá à marca uma expressão feminina e amigável, associando romance e conversa de fãs. `IconeMarca`, em `components/ui/icones.tsx`, incorpora a exportação WebP transparente de 256px no enquadramento natural de 32 × 32 unidades, sem ampliar ou recortar a imagem. A imagem é decorativa quando acompanha o nome; o controle que a contém deve fornecer seu próprio nome acessível.
+
+Os ícones de instalação e favicon usam o mesmo original sobre fundo vinho (`#21101b`). Esse fundo pertence ao ativo de marca: a paleta quente da aplicação pública e os tokens administrativos acima conservam seus papéis. O relevo e os reflexos das pétalas pertencem ao símbolo; os componentes do painel seguem as regras de elevação deste documento. Plantão continua a nomear a experiência de vídeo, enquanto a identidade do aplicativo é Noveleiras.
+
+Fontes, arquivos, exportação e evidências de revisão: [Marca Noveleiras](docs/marca-noveleiras.md).
 
 ### Buttons
 

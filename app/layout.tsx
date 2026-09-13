@@ -19,7 +19,7 @@ const manrope = Manrope({
   display: "swap",
 });
 
-const APP_NAME = "Noveleiras de Plantão";
+const APP_NAME = "Noveleiras";
 
 export const metadata: Metadata = {
   title: {
@@ -37,8 +37,11 @@ export const metadata: Metadata = {
   },
   formatDetection: { telephone: false, address: false, email: false },
   icons: {
-    icon: [{ url: "/icones/icone.svg", type: "image/svg+xml" }],
-    apple: [{ url: "/icones/apple-touch-icon.png", sizes: "180x180" }],
+    icon: [
+      { url: "/icones/noveleiras-32.png?v=flor-1", type: "image/png", sizes: "32x32" },
+      { url: "/icones/noveleiras-192.png?v=flor-1", type: "image/png", sizes: "192x192" },
+    ],
+    apple: [{ url: "/icones/noveleiras-apple-180.png?v=flor-1", sizes: "180x180" }],
   },
   openGraph: {
     type: "website",

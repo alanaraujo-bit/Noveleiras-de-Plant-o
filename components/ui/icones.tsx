@@ -292,12 +292,6 @@ export const IconeMarca = ({ tamanho = 28, ...p }: Props) => (
     focusable="false"
     {...p}
   >
-    <path
-      d="M6 26V6.8c0-.6.7-.9 1.2-.5l14.4 12.4V6.6a1 1 0 0 1 2 0V26"
-      stroke="currentColor"
-      strokeWidth={2.6}
-      strokeLinecap="round"
-    />
-    <circle cx="24.6" cy="8.4" r="2.6" fill="currentColor" />
+    <image href="/marca/noveleiras-simbolo.webp?v=flor-1" width="32" height="32" />
   </svg>
 );

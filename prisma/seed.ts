@@ -14,7 +14,7 @@ import {
   DEMO_MEMBERS,
   DEMO_POSTS,
 } from "../data/catalog.ts";
-import { normalizeText } from "../lib/text.ts";
+import { normalizeText, slugify } from "../lib/text.ts";
 
 const db = new PrismaClient();
 
@@ -85,6 +85,27 @@ async function seedCatalog() {
       create: { slug: novela.slug, ...data },
       update: data,
     });
+
+    // O elenco de demonstração vira gente de verdade na tabela, com o papel
+    // que o catálogo escreveu. É o mesmo caminho do catálogo importado — lá o
+    // papel é que não existe.
+    await db.novelaCast.deleteMany({ where: { novelaId: record.id } });
+    for (const [ordem, pessoa] of novela.cast.entries()) {
+      const gravada = await db.person.upsert({
+        where: { slug: slugify(pessoa.name) },
+        create: { slug: slugify(pessoa.name), name: pessoa.name },
+        update: {},
+        select: { id: true },
+      });
+      await db.novelaCast.create({
+        data: {
+          novelaId: record.id,
+          personId: gravada.id,
+          role: pessoa.role,
+          sort: ordem,
+        },
+      });
+    }
 
     await db.novelaGenre.deleteMany({ where: { novelaId: record.id } });
     await db.novelaGenre.createMany({

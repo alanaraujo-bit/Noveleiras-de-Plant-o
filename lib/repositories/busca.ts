@@ -57,7 +57,7 @@ export async function searchCatalog(rawTerm: string): Promise<SearchOutcome> {
         openAccess: true,
         status: true,
         rating: true,
-        cast: true,
+        castLinks: { select: { person: { select: { name: true } } } },
         _count: { select: { episodes: true } },
       },
     });
@@ -65,7 +65,7 @@ export async function searchCatalog(rawTerm: string): Promise<SearchOutcome> {
   const hits: SearchHit[] = rows.map((row) => {
     const titleNorm = normalizeText(row.title);
     const castNorm = normalizeText(
-      ((row.cast as { name: string }[]) ?? []).map((p) => p.name).join(" "),
+      row.castLinks.map((link) => link.person.name).join(" "),
     );
     const matchedOn = tokens.every((t) => titleNorm.includes(t))
       ? "titulo"

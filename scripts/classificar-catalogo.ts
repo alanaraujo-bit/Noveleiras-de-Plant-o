@@ -25,6 +25,7 @@ import {
   type TemaDaOrigem,
 } from "../lib/media/temas.ts";
 import { garantirGeneros, vincularGeneros } from "../lib/media/generos.ts";
+import { vincularElenco } from "../lib/media/pessoas.ts";
 
 const db = new PrismaClient();
 
@@ -79,6 +80,7 @@ async function main() {
   let comElenco = 0;
   let atualizadas = 0;
   let vinculos = 0;
+  let pessoas = 0;
   const foraDoCatalogo: string[] = [];
   const porGenero = new Map<string, number>();
 
@@ -141,6 +143,8 @@ async function main() {
           classificacao.tags.join(" "),
           classificacao.elenco.join(" "),
         ),
+        // A coluna JSON continua sendo escrita enquanto ela for a prova de
+        // onde as pessoas saíram. Quem a tela lê é a relação, logo abaixo.
         ...(escreveElenco ? { cast: paraElenco(classificacao.elenco) } : {}),
         ...(classificacao.pais ? { country: classificacao.pais } : {}),
         ...(classificacao.classificacao
@@ -149,6 +153,13 @@ async function main() {
       },
     });
     atualizadas += 1;
+
+    // O elenco é relação: cada nome vira uma pessoa com endereço próprio,
+    // reaproveitada entre novelas. Regravar o vínculo não apaga a pessoa, e
+    // por isso a biografia escrita à mão sobrevive a uma reclassificação.
+    if (classificacao.elenco.length > 0) {
+      pessoas += await vincularElenco(db, novela.id, classificacao.elenco);
+    }
 
     // Sem `--refazer-generos`, uma novela que já tem gênero fica como está: o
     // vínculo pode ter sido feito à mão no painel, e regravar apagaria isso.
@@ -185,7 +196,7 @@ async function main() {
     return;
   }
   console.log(
-    `\n  ${atualizadas} novela(s) atualizada(s) · ${vinculos} vínculo(s) de gênero\n`,
+    `\n  ${atualizadas} novela(s) atualizada(s) · ${vinculos} vínculo(s) de gênero · ${pessoas} vínculo(s) de elenco\n`,
   );
 }
 

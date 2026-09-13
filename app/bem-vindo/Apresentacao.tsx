@@ -86,8 +86,6 @@ export function Apresentacao() {
           </span>
           <span className="font-display text-[0.9375rem] font-semibold leading-tight">
             Noveleiras
-            <br />
-            de Plantão
           </span>
         </div>
         {!ultimo ? (
