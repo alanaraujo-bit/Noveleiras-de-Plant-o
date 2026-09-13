@@ -46,6 +46,9 @@ export const PERMISSOES = {
   "alertas.ver": "Ver alertas e incidentes",
   "alertas.gerenciar": "Reconhecer e resolver alertas",
 
+  "notificacoes.ver": "Ver as notificações do Discord e o histórico de envios",
+  "notificacoes.gerenciar": "Configurar o webhook, o que é enviado e quando",
+
   "admins.ver": "Ver administradores e suas permissões",
   "admins.gerenciar": "Conceder e revogar acesso administrativo",
 } as const;
@@ -86,6 +89,10 @@ export const GRUPOS_DE_PERMISSAO: {
   { titulo: "Descoberta", permissoes: ["busca.ver"] },
   { titulo: "Observabilidade", permissoes: ["logs.ver", "auditoria.ver"] },
   { titulo: "Alertas", permissoes: ["alertas.ver", "alertas.gerenciar"] },
+  {
+    titulo: "Notificações",
+    permissoes: ["notificacoes.ver", "notificacoes.gerenciar"],
+  },
   { titulo: "Administração", permissoes: ["admins.ver", "admins.gerenciar"] },
 ];
 

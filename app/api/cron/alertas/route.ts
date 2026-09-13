@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { reconciliarAlertas } from "@/lib/painel/alertas";
+import { despacharNotificacoes } from "@/lib/painel/discord/envio";
 import { log } from "@/lib/painel/log";
 
 /**
@@ -55,5 +56,18 @@ export async function GET(requisicao: Request) {
     });
   }
 
-  return NextResponse.json(resultado);
+  // Rede de segurança das notificações do Discord: se o agente parou, é esta
+  // passagem diária que garante o relatório.
+  let notificacoes: unknown = null;
+  try {
+    notificacoes = await despacharNotificacoes();
+  } catch (erro) {
+    void log.error({
+      channel: "INTEGRATIONS",
+      message: "Falha ao despachar notificações do Discord pelo cron",
+      erro,
+    });
+  }
+
+  return NextResponse.json({ ...resultado, notificacoes });
 }

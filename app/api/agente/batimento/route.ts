@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { db } from "@/lib/db";
 import { reconciliarAlertas } from "@/lib/painel/alertas";
+import { notificarEmSegundoPlano } from "@/lib/painel/discord/envio";
 import { log } from "@/lib/painel/log";
 import {
   CABECALHO_DO_SEGREDO,
@@ -136,6 +137,11 @@ export async function POST(requisicao: Request) {
       entityId: servidor.id,
     });
   }
+
+  // O batimento é o relógio fino das notificações: o cron da Vercel só roda
+  // uma vez por dia no plano atual. Depois da resposta, para não atrasar o
+  // agente; o envio é idempotente, então passar a cada minuto não repete nada.
+  notificarEmSegundoPlano("batimento");
 
   return NextResponse.json({ ok: true, recebidoEm: agora.toISOString() });
 }

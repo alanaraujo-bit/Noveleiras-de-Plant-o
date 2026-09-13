@@ -1773,3 +1773,68 @@ model SubscriptionEvent {
   @@index([subscriptionId, createdAt])
   @@index([type, createdAt])
 }
+
+// ----------------------------------------------------- notificacoes (Discord)
+//
+// O painel empurra para um canal do Discord o que a operacao precisa saber
+// sem abrir o painel: quem chegou, quem assinou, quem saiu, e um relatorio
+// periodico. Duas tabelas, pela mesma razao que separa Alert de AppLog: uma e
+// configuracao (o que se quer receber), a outra e fato (o que foi enviado).
+
+/**
+ * Configuracao do canal. Uma linha so (`id = "principal"`): a operacao tem um
+ * canal, e uma tabela de canais seria complexidade sem ninguem pedindo.
+ *
+ * A URL do webhook e segredo — quem a tem posta no canal. Nunca sai do
+ * servidor; o painel so mostra a versao mascarada.
+ */
+model DiscordConfig {
+  id         String  @id @default("principal")
+  webhookUrl String?
+  // Desligado por padrao: salvar a URL nao pode, por si so, comecar a postar.
+  ativo      Boolean @default(false)
+
+  // Chaves de `TIPOS_DE_EVENTO` em `lib/painel/discord/mensagens.ts`.
+  eventos String[] @default([])
+
+  relatorioAtivo     Boolean @default(false)
+  // Chave de `INTERVALOS` em `lib/painel/discord/janelas.ts`.
+  relatorioIntervalo String  @default("diario")
+  // Hora (0-23, Brasilia) em que a janela do relatorio vira.
+  relatorioHora      Int     @default(8)
+
+  // Fato anterior a isto nunca vira notificacao individual. E o que impede que
+  // ligar o canal despeje o historico inteiro de cadastros de uma vez.
+  eventosDesde DateTime @default(now())
+
+  atualizadoPor String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+/**
+ * Registro de cada envio. `chave` e a trava contra repeticao: o mesmo cadastro
+ * ou a mesma janela de relatorio tem sempre a mesma chave, e a constraint
+ * unica faz o segundo processo (cron e batimento ao mesmo tempo) desistir em
+ * vez de postar de novo. Reserva-se a linha antes de enviar, nunca depois.
+ */
+model DiscordEntrega {
+  id    String @id @default(cuid())
+  // ex.: "cadastro:<userId>", "relatorio:diario:2026-09-14T08"
+  chave String @unique
+  tipo  String
+
+  // ENVIANDO -> ENVIADO | FALHOU. FALHOU volta a ser tentado ate o limite.
+  estado     String    @default("ENVIANDO")
+  tentativas Int       @default(1)
+  erro       String?
+  // Uma linha legivel para o historico do painel.
+  resumo     String?
+  teste      Boolean   @default(false)
+
+  createdAt DateTime  @default(now())
+  enviadoEm DateTime?
+
+  @@index([createdAt])
+  @@index([estado, createdAt])
+}

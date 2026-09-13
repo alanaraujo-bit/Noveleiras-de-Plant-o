@@ -10,7 +10,13 @@ import {
 import { useToast } from "@/components/sistema/ToastProvider";
 import { Avatar } from "@/components/ui/primitivos";
 import { IconeCamera } from "@/components/ui/icones";
-import { prepararFotoPerfil } from "@/components/perfil/prepararFoto";
+import { EditorRecorteFoto } from "@/components/perfil/EditorRecorteFoto";
+import {
+  CampoDeHandle,
+  handleProntoParaSalvar,
+  type EstadoDoHandle,
+} from "@/components/perfil/CampoDeHandle";
+import { normalizarHandle } from "@/lib/auth/identidade";
 
 /**
  * Preferências.
@@ -71,27 +77,31 @@ export function PainelPreferencias({
   perfil,
 }: {
   inicial: Preferencias;
-  perfil: { nome: string; avatarSeed: string; avatarUrl: string | null };
+  perfil: { nome: string; handle: string; avatarSeed: string; avatarUrl: string | null };
 }) {
   const { show } = useToast();
   const router = useRouter();
   const [valores, setValores] = useState(inicial);
   const [nome, setNome] = useState(perfil.nome);
+  const [handle, setHandle] = useState(perfil.handle);
+  const [handleSalvo, setHandleSalvo] = useState(perfil.handle);
+  const [estadoHandle, setEstadoHandle] = useState<EstadoDoHandle>("seu");
+  const [salvandoPerfil, setSalvandoPerfil] = useState(false);
   const [avatarSeed, setAvatarSeed] = useState(perfil.avatarSeed);
   const [fotoUrl, setFotoUrl] = useState(perfil.avatarUrl);
   const [enviandoFoto, setEnviandoFoto] = useState(false);
   const [erroFoto, setErroFoto] = useState<string | null>(null);
   const inputFoto = useRef<HTMLInputElement>(null);
+  const [arquivoSelecionado, setArquivoSelecionado] = useState<File | null>(null);
   const [, iniciar] = useTransition();
 
-  const enviarFoto = async (file: File) => {
+  const enviarFoto = async (foto: File) => {
     const anterior = fotoUrl;
     let previa: string | null = null;
     setErroFoto(null);
     setEnviandoFoto(true);
 
     try {
-      const foto = await prepararFotoPerfil(file);
       previa = URL.createObjectURL(foto);
       setFotoUrl(previa);
 
@@ -125,6 +135,7 @@ export function PainelPreferencias({
       if (previa) URL.revokeObjectURL(previa);
       setEnviandoFoto(false);
       if (inputFoto.current) inputFoto.current.value = "";
+      setArquivoSelecionado(null);
     }
   };
 
@@ -177,19 +188,27 @@ export function PainelPreferencias({
   };
 
   const salvarIdentidade = () => {
+    setSalvandoPerfil(true);
     iniciar(async () => {
-      const resultado = await salvarPerfil({ nome: nome.trim(), avatarSeed });
-      show(
-        resultado.ok ? "Perfil atualizado" : "Confira o nome e tente de novo.",
-        resultado.ok ? "bom" : "ruim",
-      );
+      try {
+        const resultado = await salvarPerfil({ nome: nome.trim(), handle, avatarSeed });
+        if (resultado.ok) {
+          setHandleSalvo(normalizarHandle(handle));
+          show("Perfil atualizado", "bom");
+          router.refresh();
+        } else {
+          show(resultado.erro, "ruim");
+        }
+      } finally {
+        setSalvandoPerfil(false);
+      }
     });
   };
 
   return (
     <div className="space-y-8 pb-4">
       {/* Identidade -------------------------------------------------------- */}
-      <section className="px-5">
+      <section id="seu-perfil" className="scroll-mt-4 px-5">
         <p className="eyebrow mb-2.5">Seu perfil</p>
         <div className="surface-card rounded-panel p-4">
           <div className="flex items-start gap-3.5">
@@ -218,7 +237,7 @@ export function PainelPreferencias({
                 className="sr-only"
                 onChange={(event) => {
                   const file = event.target.files?.[0];
-                  if (file) void enviarFoto(file);
+                  if (file) setArquivoSelecionado(file);
                 }}
               />
             </div>
@@ -234,7 +253,22 @@ export function PainelPreferencias({
                 value={nome}
                 onChange={(evento) => setNome(evento.target.value)}
                 maxLength={60}
+                autoComplete="name"
                 className="h-11 w-full rounded-xl border border-white/12 bg-white/[0.04] px-3 text-[0.9375rem] text-cream-50 outline-none focus:border-rose-500/60"
+              />
+
+              <label
+                htmlFor="pref-handle"
+                className="mt-3 mb-1.5 block text-[0.75rem] font-semibold text-cream-400"
+              >
+                Nome de usuário
+              </label>
+              <CampoDeHandle
+                id="pref-handle"
+                valor={handle}
+                atual={handleSalvo}
+                aoMudar={setHandle}
+                aoEstado={setEstadoHandle}
               />
 
               <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
@@ -300,13 +334,23 @@ export function PainelPreferencias({
           <button
             type="button"
             onClick={salvarIdentidade}
-            disabled={nome.trim().length < 2}
+            disabled={
+              salvandoPerfil ||
+              nome.trim().length < 2 ||
+              !handleProntoParaSalvar(estadoHandle)
+            }
             className="tap mt-4 flex h-11 w-full items-center justify-center rounded-xl bg-white/8 text-[0.875rem] font-semibold text-cream-50 disabled:opacity-45"
           >
-            Salvar perfil
+            {salvandoPerfil ? "Salvando…" : "Salvar perfil"}
           </button>
         </div>
       </section>
+
+      <EditorRecorteFoto
+        arquivo={arquivoSelecionado}
+        aoCancelar={() => { setArquivoSelecionado(null); if (inputFoto.current) inputFoto.current.value = ""; }}
+        aoSalvar={enviarFoto}
+      />
 
       {/* Interruptores ------------------------------------------------------ */}
       <section className="px-5">

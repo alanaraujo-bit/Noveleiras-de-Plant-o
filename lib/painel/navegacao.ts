@@ -17,6 +17,7 @@ export type ItemDeNavegacao = {
   icone:
     | "painel"
     | "alertas"
+    | "notificacoes"
     | "usuarios"
     | "streaming"
     | "busca"
@@ -55,6 +56,13 @@ export const NAVEGACAO: GrupoDeNavegacao[] = [
         permissao: "alertas.ver",
         icone: "alertas",
         descricao: "Incidentes abertos e o que exige atenção",
+      },
+      {
+        href: "/painel/notificacoes",
+        rotulo: "Notificações",
+        permissao: "notificacoes.ver",
+        icone: "notificacoes",
+        descricao: "Cadastros, assinaturas e relatório no Discord",
       },
     ],
   },

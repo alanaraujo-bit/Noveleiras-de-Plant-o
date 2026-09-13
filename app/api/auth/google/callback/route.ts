@@ -13,8 +13,11 @@ import {
   decodificarFluxoGoogle,
   retornoGoogle,
 } from "@/lib/auth/google";
-import { handleFromName, hashPassword } from "@/lib/auth/password";
+import { sugerirHandle } from "@/lib/auth/handles";
+import { limparNome } from "@/lib/auth/identidade";
+import { hashPassword } from "@/lib/auth/password";
 import { issueSessionCookie } from "@/lib/auth/session";
+import { notificarEmSegundoPlano } from "@/lib/painel/discord/envio";
 
 export const dynamic = "force-dynamic";
 const CHAVES_GOOGLE = createRemoteJWKSet(
@@ -31,16 +34,6 @@ function voltarComErro(
   url.searchParams.set("destino", destino);
   url.searchParams.set("google", erro);
   return NextResponse.redirect(url);
-}
-
-async function handleDisponivel(nome: string) {
-  for (let tentativa = 0; tentativa < 8; tentativa += 1) {
-    const handle = handleFromName(nome);
-    if (!(await db.user.findUnique({ where: { handle }, select: { id: true } }))) {
-      return handle;
-    }
-  }
-  return `noveleira${randomBytes(6).toString("hex")}`;
 }
 
 export async function GET(request: Request) {
@@ -95,12 +88,11 @@ export async function GET(request: Request) {
 
     const email = payload.email.toLowerCase();
     const nome =
-      typeof payload.name === "string" && payload.name.trim()
-        ? payload.name.trim().slice(0, 60)
-        : email.split("@")[0];
+      limparNome(typeof payload.name === "string" ? payload.name : "") ||
+      email.split("@")[0];
     let user = await db.user.findFirst({
       where: { OR: [{ googleSubject: payload.sub }, { email }] },
-      select: { id: true, status: true, googleSubject: true },
+      select: { id: true, status: true, googleSubject: true, onboardedAt: true },
     });
     const contaNova = !user;
     if (user?.googleSubject && user.googleSubject !== payload.sub) {
@@ -111,15 +103,17 @@ export async function GET(request: Request) {
         data: {
           email,
           name: nome,
-          handle: await handleDisponivel(nome),
+          handle: await sugerirHandle(nome),
           passwordHash: await hashPassword(randomBytes(32).toString("base64url")),
           googleSubject: payload.sub,
-          onboardedAt: new Date(),
+          // Sem onboarding concluído: a conta nova passa por /bem-vindo para
+          // confirmar nome e @ antes de entrar.
+          onboardedAt: null,
           lastSeenAt: new Date(),
           preference: { create: {} },
           subscription: { create: { plan: "FREE", status: "ACTIVE" } },
         },
-        select: { id: true, status: true, googleSubject: true },
+        select: { id: true, status: true, googleSubject: true, onboardedAt: true },
       });
     } else {
       if (user.status !== "ACTIVE") {
@@ -127,7 +121,7 @@ export async function GET(request: Request) {
       }
       await db.user.update({
         where: { id: user.id },
-        data: { googleSubject: payload.sub, lastSeenAt: new Date(), onboardedAt: new Date() },
+        data: { googleSubject: payload.sub, lastSeenAt: new Date() },
       });
     }
 
@@ -139,6 +133,15 @@ export async function GET(request: Request) {
       sessionId,
       payload: { metodo: "google" },
     });
+    if (contaNova) notificarEmSegundoPlano("cadastro google");
+
+    // Quem ainda não escolheu como aparecer (conta nova, ou quem fechou a
+    // tela no meio da última vez) passa por lá e depois segue para o destino.
+    if (!user.onboardedAt) {
+      const passo = new URL("/bem-vindo", entrada.origin);
+      passo.searchParams.set("destino", destino);
+      return NextResponse.redirect(passo);
+    }
     return NextResponse.redirect(new URL(destino, entrada.origin));
   } catch (erro) {
     console.error("[auth/google] retorno inválido", erro);

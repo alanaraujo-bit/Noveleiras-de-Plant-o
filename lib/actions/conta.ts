@@ -2,10 +2,13 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
-import { hashPassword, verifyPassword, handleFromName } from "@/lib/auth/password";
+import { hashPassword, verifyPassword } from "@/lib/auth/password";
+import { handleLivre, sugerirHandle } from "@/lib/auth/handles";
+import { validarHandle, validarNome } from "@/lib/auth/identidade";
 import {
   clearSessionCookie,
   getViewer,
@@ -14,6 +17,7 @@ import {
 import { track } from "@/lib/analytics/track";
 import { abrirSessaoDoApp } from "@/lib/auth/app-session";
 import { destinoSeguro, ROTA_INICIAL } from "@/lib/auth/destino";
+import { notificarEmSegundoPlano } from "@/lib/painel/discord/envio";
 
 export type FormState = { erro?: string; campo?: string } | null;
 
@@ -67,15 +71,7 @@ export async function criarConta(
     };
   }
 
-  let handle = handleFromName(nome);
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const taken = await db.user.findUnique({
-      where: { handle },
-      select: { id: true },
-    });
-    if (!taken) break;
-    handle = handleFromName(nome);
-  }
+  const handle = await sugerirHandle(nome);
 
   const user = await db.user.create({
     data: {
@@ -94,6 +90,8 @@ export async function criarConta(
   const sessionId = await abrirSessaoDoApp(user.id);
   await issueSessionCookie(user.id, sessionId);
   await track({ type: "SIGN_UP", userId: user.id, sessionId });
+  // Antes do redirect: ele lança, e nada depois dele roda.
+  notificarEmSegundoPlano("cadastro");
 
   redirect(destinoSeguro(formData.get("destino")) ?? ROTA_INICIAL);
 }
@@ -160,24 +158,67 @@ export async function sair() {
   redirect("/entrar");
 }
 
-export async function concluirOnboarding() {
+const HANDLE_OCUPADO = "Esse @ acabou de ser escolhido por outra pessoa. Tente outra variação.";
+
+function ehHandleDuplicado(erro: unknown): boolean {
+  return (
+    erro instanceof Prisma.PrismaClientKnownRequestError &&
+    erro.code === "P2002" &&
+    JSON.stringify(erro.meta ?? {}).includes("handle")
+  );
+}
+
+/** Para o campo do @: responde enquanto a pessoa digita. */
+export async function verificarHandle(
+  entrada: string,
+): Promise<{ disponivel: boolean; erro?: string }> {
+  const viewer = await getViewer();
+  if (!viewer) return { disponivel: false, erro: "Entre na sua conta para escolher um @." };
+  const regra = validarHandle(entrada);
+  if (!regra.ok) return { disponivel: false, erro: regra.erro };
+  return { disponivel: await handleLivre(regra.handle, viewer.id) };
+}
+
+/**
+ * Último passo de quem entrou pelo Google: confirma nome e @ e segue para
+ * onde ia. Só devolve algo quando precisa de ajuste — dar certo é redirecionar.
+ */
+export async function concluirOnboarding(entrada: {
+  nome: string;
+  handle: string;
+  destino?: string | null;
+}): Promise<{ erro: string; campo?: "nome" | "handle" } | undefined> {
   const viewer = await getViewer();
   if (!viewer) redirect("/entrar");
 
-  await db.user.update({
-    where: { id: viewer.id },
-    data: { onboardedAt: new Date() },
-  });
+  const nome = validarNome(entrada.nome);
+  if (!nome.ok) return { erro: nome.erro, campo: "nome" };
+  const handle = validarHandle(entrada.handle);
+  if (!handle.ok) return { erro: handle.erro, campo: "handle" };
+  if (!(await handleLivre(handle.handle, viewer.id))) {
+    return { erro: HANDLE_OCUPADO, campo: "handle" };
+  }
+
+  try {
+    await db.user.update({
+      where: { id: viewer.id },
+      data: { name: nome.nome, handle: handle.handle, onboardedAt: new Date() },
+    });
+  } catch (erro) {
+    // Duas pessoas no mesmo segundo com o mesmo @: o banco decide.
+    if (ehHandleDuplicado(erro)) return { erro: HANDLE_OCUPADO, campo: "handle" };
+    throw erro;
+  }
 
   await track({
     type: "ONBOARDING_COMPLETE",
     userId: viewer.id,
     sessionId: viewer.appSessionId,
-    payload: {},
+    payload: { trocouNome: nome.nome !== viewer.name, trocouHandle: handle.handle !== viewer.handle },
   });
 
-  revalidatePath("/explorar");
-  redirect(ROTA_INICIAL);
+  revalidatePath("/", "layout");
+  redirect(destinoSeguro(entrada.destino) ?? ROTA_INICIAL);
 }
 
 const preferenciasSchema = z.object({
@@ -216,20 +257,39 @@ export async function salvarPreferencias(
   return { ok: true as const };
 }
 
-export async function salvarPerfil(input: { nome: string; avatarSeed: string }) {
+export async function salvarPerfil(input: {
+  nome: string;
+  handle?: string;
+  avatarSeed: string;
+}): Promise<{ ok: true } | { ok: false; erro: string; campo?: "nome" | "handle" }> {
   const viewer = await getViewer();
-  if (!viewer) return { ok: false as const };
-  const parsed = z
-    .object({ nome: z.string().trim().min(2).max(60), avatarSeed: z.string().max(2) })
-    .safeParse(input);
-  if (!parsed.success) return { ok: false as const };
+  if (!viewer) return { ok: false, erro: "Entre na sua conta de novo." };
 
-  await db.user.update({
-    where: { id: viewer.id },
-    data: { name: parsed.data.nome, avatarSeed: parsed.data.avatarSeed },
-  });
-  revalidatePath("/perfil");
-  return { ok: true as const };
+  const nome = validarNome(input.nome);
+  if (!nome.ok) return { ok: false, erro: nome.erro, campo: "nome" };
+  if (!/^[1-9]$/.test(input.avatarSeed)) return { ok: false, erro: "Escolha uma cor." };
+
+  let handle = viewer.handle;
+  if (input.handle !== undefined) {
+    const regra = validarHandle(input.handle);
+    if (!regra.ok) return { ok: false, erro: regra.erro, campo: "handle" };
+    if (!(await handleLivre(regra.handle, viewer.id))) {
+      return { ok: false, erro: HANDLE_OCUPADO, campo: "handle" };
+    }
+    handle = regra.handle;
+  }
+
+  try {
+    await db.user.update({
+      where: { id: viewer.id },
+      data: { name: nome.nome, handle, avatarSeed: input.avatarSeed },
+    });
+  } catch (erro) {
+    if (ehHandleDuplicado(erro)) return { ok: false, erro: HANDLE_OCUPADO, campo: "handle" };
+    throw erro;
+  }
+  revalidatePath("/perfil", "layout");
+  return { ok: true };
 }
 
 /**

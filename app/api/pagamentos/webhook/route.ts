@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { provedorDePagamento } from "@/lib/pagamentos";
 import { receberWebhook } from "@/lib/pagamentos/webhook";
+import { notificarEmSegundoPlano } from "@/lib/painel/discord/envio";
 
 /**
  * Recepção de webhooks do provedor de pagamento.
@@ -36,6 +37,9 @@ export async function POST(request: Request) {
     request.headers,
     new URL(request.url),
   );
+
+  // Assinatura, renovação e recusa nascem aqui: avisa o Discord na hora.
+  if (status < 300) notificarEmSegundoPlano("pagamento");
 
   return NextResponse.json(corpo, {
     status,

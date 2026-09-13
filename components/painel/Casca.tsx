@@ -18,6 +18,7 @@ import {
   IconeLogs,
   IconeMenu,
   IconeMidia,
+  IconeNotificacoes,
   IconePainel,
   IconeSaida,
   IconeServidor,
@@ -37,6 +38,7 @@ import {
 const ICONES = {
   painel: IconePainel,
   alertas: IconeAlertas,
+  notificacoes: IconeNotificacoes,
   usuarios: IconeUsuarios,
   streaming: IconeStreaming,
   busca: IconeBuscaPainel,

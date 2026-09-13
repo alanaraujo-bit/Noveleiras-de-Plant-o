@@ -34,6 +34,7 @@ export default async function PreferenciasPage() {
         inicial={viewer.preferences}
         perfil={{
           nome: viewer.name,
+          handle: viewer.handle,
           avatarSeed: viewer.avatarSeed,
           avatarUrl: viewer.avatarUrl,
         }}

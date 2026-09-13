@@ -1,9 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { prepararFotoPerfil } from "@/components/perfil/prepararFoto";
+import { EditorRecorteFoto } from "@/components/perfil/EditorRecorteFoto";
 import { useToast } from "@/components/sistema/ToastProvider";
 import { IconeCamera } from "@/components/ui/icones";
 import { Avatar } from "@/components/ui/primitivos";
@@ -24,15 +25,15 @@ export function EditorFotoCabecalho({
   const input = useRef<HTMLInputElement>(null);
   const [fotoUrl, setFotoUrl] = useState(avatarUrl);
   const [enviando, setEnviando] = useState(false);
+  const [arquivoSelecionado, setArquivoSelecionado] = useState<File | null>(null);
 
   useEffect(() => setFotoUrl(avatarUrl), [avatarUrl]);
 
-  const enviar = async (original: File) => {
+  const enviar = async (foto: File) => {
     const anterior = fotoUrl;
     let previa: string | null = null;
     setEnviando(true);
     try {
-      const foto = await prepararFotoPerfil(original);
       previa = URL.createObjectURL(foto);
       setFotoUrl(previa);
 
@@ -66,6 +67,7 @@ export function EditorFotoCabecalho({
       if (previa) URL.revokeObjectURL(previa);
       setEnviando(false);
       if (input.current) input.current.value = "";
+      setArquivoSelecionado(null);
     }
   };
 
@@ -100,21 +102,34 @@ export function EditorFotoCabecalho({
         className="sr-only"
         onChange={(event) => {
           const file = event.target.files?.[0];
-          if (file) void enviar(file);
+          if (file) setArquivoSelecionado(file);
         }}
       />
       <div className="min-w-0 flex-1">
         <h1 className="truncate text-[1.625rem] leading-tight">{nome}</h1>
         <p className="truncate text-[0.875rem] text-cream-600">@{handle}</p>
-        <button
-          type="button"
-          onClick={() => input.current?.click()}
-          disabled={enviando}
-          className="tap mt-1 text-[0.8125rem] font-semibold text-rose-300 disabled:opacity-60"
-        >
-          {enviando ? "Preparando foto…" : fotoUrl ? "Trocar foto" : "Adicionar foto"}
-        </button>
+        <div className="mt-1 flex flex-wrap items-center gap-x-3.5">
+          <Link
+            href="/perfil/preferencias#seu-perfil"
+            className="tap text-[0.8125rem] font-semibold text-rose-300"
+          >
+            Editar nome e @
+          </Link>
+          <button
+            type="button"
+            onClick={() => input.current?.click()}
+            disabled={enviando}
+            className="tap text-[0.8125rem] font-semibold text-cream-400 disabled:opacity-60"
+          >
+            {enviando ? "Preparando foto…" : fotoUrl ? "Trocar foto" : "Adicionar foto"}
+          </button>
+        </div>
       </div>
+      <EditorRecorteFoto
+        arquivo={arquivoSelecionado}
+        aoCancelar={() => { setArquivoSelecionado(null); if (input.current) input.current.value = ""; }}
+        aoSalvar={enviar}
+      />
     </div>
   );
 }

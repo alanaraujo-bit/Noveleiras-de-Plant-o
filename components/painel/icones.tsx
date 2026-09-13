@@ -130,6 +130,13 @@ export const IconeAlertas = (p: Props) => (
   </Base>
 );
 
+export const IconeNotificacoes = (p: Props) => (
+  <Base {...p}>
+    <path d="M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 1.8H5z" />
+    <path d="M10 20.5a2.2 2.2 0 0 0 4 0" />
+  </Base>
+);
+
 export const IconeAdmin = (p: Props) => (
   <Base {...p}>
     <circle cx="12" cy="12" r="2.8" />
