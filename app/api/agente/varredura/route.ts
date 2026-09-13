@@ -112,7 +112,9 @@ const entregarSchema = z.object({
               valor: z.string().max(120),
             }),
           )
-          .max(30)
+          // A origem mistura elenco, gênero e país na mesma lista — uma novela
+          // real já passa de 50. O teto só barra lixo, não elenco grande.
+          .max(300)
           .default([]),
         fonte: z.string().max(40).nullable().default(null),
         totalDuracaoSeg: z.number().nonnegative().nullable().default(null),
